@@ -2,27 +2,33 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Modern dark theme */
+/* Modern dark theme - blue/black/grey */
 :root {
-  --background: 224 36% 6%; /* near-slate */
-  --foreground: 210 40% 98%;
-  --card: 222 36% 8%;
+  /* Base surfaces */
+  --background: 220 15% 5%; /* near black */
+  --foreground: 210 40% 98%; /* near white */
+  --card: 220 16% 8%; /* dark grey */
   --card-foreground: 210 40% 98%;
-  --popover: 222 36% 8%;
+  --popover: 220 16% 8%;
   --popover-foreground: 210 40% 98%;
-  --primary: 262 83% 62%; /* violet */
+
+  /* Brand accents */
+  --primary: 213 90% 56%; /* blue */
   --primary-foreground: 210 40% 98%;
-  --secondary: 217 33% 18%;
-  --secondary-foreground: 210 40% 98%;
-  --muted: 215 25% 22%;
-  --muted-foreground: 215 20% 72%;
-  --accent: 262 83% 62%;
+  --accent: 213 90% 56%; /* blue (match primary) */
   --accent-foreground: 210 40% 98%;
+
+  /* UI accents */
+  --secondary: 220 14% 20%; /* grey */
+  --secondary-foreground: 210 40% 98%;
+  --muted: 220 12% 22%;
+  --muted-foreground: 215 20% 72%;
   --destructive: 0 84% 62%;
   --destructive-foreground: 210 40% 98%;
-  --border: 220 25% 20%;
-  --input: 220 25% 20%;
-  --ring: 262 83% 62%;
+  --border: 220 14% 20%;
+  --input: 220 14% 20%;
+  --ring: 213 90% 56%; /* match primary (blue) */
+
   --radius: 0.6rem;
 }
 
@@ -37,4 +43,30 @@ body {
 /* Subtle card & element transitions */
 @layer components {
   .card-transition { @apply transition-colors duration-200; }
+}
+
+/* Minimal scrollbars: transparent track, no buttons, visible thumb only */
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: hsl(var(--muted-foreground) / 0.35) transparent;
+}
+/* WebKit */
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: hsl(var(--muted-foreground) / 0.35);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+*::-webkit-scrollbar-button {
+  display: none;
+  width: 0;
+  height: 0;
 }

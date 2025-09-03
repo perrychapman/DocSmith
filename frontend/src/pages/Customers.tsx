@@ -3,8 +3,9 @@ import { Card } from "../components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "../components/ui/input";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "../components/ui/breadcrumb";
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "../components/ui/alert-dialog";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { Icon } from "../components/icons";
+import WorkspaceChat from "../components/WorkspaceChat";
 import { toast } from "sonner";
 
 type Customer = { id: number; name: string; createdAt: string };
@@ -174,84 +175,99 @@ export function CustomersPage() {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <Card className="p-4 md:col-span-1">
-          <div className="font-medium mb-2">Customers</div>
-          {loadingCustomers ? (
-            <div className="text-muted-foreground text-sm">Loading.</div>
-          ) : customers.length ? (
-            <ul className="space-y-1">
-              {customers.map((c) => (
-                <li key={c.id} className="flex items-center gap-2">
-                  <button
-                    className={
-                      "flex-1 text-left px-3 py-2 rounded-md border hover:bg-accent/40 transition " +
-                      (selectedId === c.id ? "bg-accent text-accent-foreground" : "")
-                    }
-                    onClick={() => setSelectedId(c.id)}
-                    title={new Date(c.createdAt).toLocaleString()}
-                  >
-                    <span className="font-medium">{c.name}</span>
-                  </button>
-                  <Button size="sm" variant="outline" onClick={() => startDelete(c)} title="Delete customer">
-                    <Icon.Trash className="h-4 w-4" />
-                  </Button>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <div className="text-muted-foreground text-sm">No customers yet.</div>
-          )}
-        </Card>
-
-        <Card className="p-4 md:col-span-2">
-          <div className="flex items-end justify-between gap-3 mb-3">
-            <div>
-              <div className="font-medium">Documents</div>
-              <div className="text-xs text-muted-foreground">
-                {selectedId ? (
-                  <>For {customers.find((x) => x.id === selectedId)?.name || "selected customer"}</>
+      <div className="grid grid-cols-12 gap-2 min-h-0">
+        {/* Left: Customers list full-height */}
+        <div className="col-span-12 md:col-span-4">
+          <div className="sticky top-0">
+            <Card className="h-[calc(100vh-160px)] overflow-hidden p-0">
+              <div className="h-full p-4 space-y-3 overflow-y-auto">
+                {loadingCustomers ? (
+                  <div className="text-muted-foreground text-sm">Loading.</div>
+                ) : customers.length ? (
+                  <ul className="space-y-1">
+                    {customers.map((c) => (
+                      <li key={c.id} className="flex items-center gap-2">
+                        <button
+                          className={
+                            "flex-1 text-left px-3 py-2 rounded-md border hover:bg-accent/40 transition " +
+                            (selectedId === c.id ? "bg-accent text-accent-foreground" : "")
+                          }
+                          onClick={() => setSelectedId(c.id)}
+                          title={new Date(c.createdAt).toLocaleString()}
+                        >
+                          <span className="font-medium">{c.name}</span>
+                        </button>
+                        <Button size="sm" variant="outline" onClick={() => startDelete(c)} title="Delete customer">
+                          <Icon.Trash className="h-4 w-4" />
+                        </Button>
+                      </li>
+                    ))}
+                  </ul>
                 ) : (
-                  <>Select a customer to view documents</>
+                  <div className="text-muted-foreground text-sm">No customers yet.</div>
                 )}
               </div>
-            </div>
-            <div className="flex items-center gap-2">
-              <Input placeholder="Document type (e.g. Proposal)" value={docType} onChange={(e) => setDocType(e.target.value)} />
-              <Button disabled={!selectedId} onClick={addDoc}><Icon.Plus className="h-4 w-4 mr-2"/>Add</Button>
-              <Button
-                variant="secondary"
-                disabled={!wsSlug || wsLoading}
-                onClick={() => { if (wsSlug) location.hash = `#workspaces/${encodeURIComponent(wsSlug)}`; }}
-                title={wsSlug ? "Open AI chat" : (wsLoading ? "Resolving workspace..." : "No workspace found")}
-              >
-                <Icon.Folder className="h-4 w-4 mr-2" />
-                AI Chat
-              </Button>
-            </div>
+            </Card>
           </div>
+        </div>
 
+        {/* Right: Chat on top, Documents below */}
+        <div className="col-span-12 md:col-span-8 grid grid-rows-[minmax(0,2fr)_minmax(0,1fr)] gap-2 h-[calc(100vh-160px)] min-h-0">
+          {/* AI Chat */}
           {!selectedId ? (
-            <div className="text-muted-foreground text-sm">Select a customer to view documents.</div>
-          ) : loadingDocs ? (
-            <div className="text-muted-foreground text-sm">Loading documents…</div>
-          ) : docs.length ? (
-            <ul className="space-y-2">
-              {docs.map((d) => (
-                <li key={d.id} className="border rounded-md px-3 py-2 flex items-center justify-between">
-                  <div>
-                    <div className="font-medium">{d.type}</div>
-                    <div className="text-xs text-muted-foreground">{d.filePath || "(no file)"}</div>
-                  </div>
-                  <div className="text-xs text-muted-foreground">{new Date(d.createdAt).toLocaleString()}</div>
-                </li>
-              ))}
-            </ul>
+            <Card className="p-4 text-sm text-muted-foreground h-full">Select a customer to open chat.</Card>
+          ) : wsLoading ? (
+            <Card className="p-4 text-sm text-muted-foreground h-full">Resolving workspace…</Card>
+          ) : wsSlug ? (
+            <WorkspaceChat slug={wsSlug} className="h-full" />
           ) : (
-            <div className="text-muted-foreground text-sm">No documents yet for this customer.</div>
+            <Card className="p-4 text-sm text-muted-foreground h-full">No workspace found for this customer.</Card>
           )}
-        </Card>
+
+          {/* Documents */}
+          <Card className="p-4 h-full flex flex-col">
+            <div className="flex items-end justify-between gap-3 mb-3 shrink-0">
+              <div>
+                <div className="font-medium">Documents</div>
+                <div className="text-xs text-muted-foreground">
+                  {selectedId ? (
+                    <>For {customers.find((x) => x.id === selectedId)?.name || "selected customer"}</>
+                  ) : (
+                    <>Select a customer to view documents</>
+                  )}
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Input placeholder="Document type (e.g. Proposal)" value={docType} onChange={(e) => setDocType(e.target.value)} />
+                <Button disabled={!selectedId} onClick={addDoc}><Icon.Plus className="h-4 w-4 mr-2"/>Add</Button>
+              </div>
+            </div>
+
+            <div className="flex-1 min-h-0 overflow-y-auto">
+              {!selectedId ? (
+                <div className="text-muted-foreground text-sm">Select a customer to view documents.</div>
+              ) : loadingDocs ? (
+                <div className="text-muted-foreground text-sm">Loading documents.</div>
+              ) : docs.length ? (
+                <ul className="space-y-2">
+                  {docs.map((d) => (
+                    <li key={d.id} className="border rounded-md px-3 py-2 flex items-center justify-between">
+                      <div>
+                        <div className="font-medium">{d.type}</div>
+                        <div className="text-xs text-muted-foreground">{d.filePath || "(no file)"}</div>
+                      </div>
+                      <div className="text-xs text-muted-foreground">{new Date(d.createdAt).toLocaleString()}</div>
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <div className="text-muted-foreground text-sm">No documents yet for this customer.</div>
+              )}
+            </div>
+          </Card>
+        </div>
       </div>
+
       {/* Delete Customer Confirm */}
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <AlertDialogContent>

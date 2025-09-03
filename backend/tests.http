@@ -239,6 +239,67 @@ Content-Type: application/json
 DELETE http://localhost:4000/api/anythingllm/embed/embed-uuid-1
 Accept: application/json
 
+### ---- AnythingLLM Documents & Deletions ----
+
+### List ALL AnythingLLM documents (global index)
+GET http://localhost:4000/api/anythingllm/documents
+Accept: application/json
+
+### Get a single document by name (copy a name from the list above)
+GET http://localhost:4000/api/anythingllm/document/custom-documents/REPLACE_ME.json
+Accept: application/json
+
+### Remove documents from a workspace's embeddings (replace slug and names)
+POST http://localhost:4000/api/anythingllm/workspace/REPLACE_WORKSPACE_SLUG/update-embeddings
+Accept: application/json
+Content-Type: application/json
+
+{
+  "deletes": [
+    "custom-documents/REPLACE_ME.json"
+  ]
+}
+
+### Permanently remove documents from system store (use same names)
+DELETE http://localhost:4000/api/anythingllm/system/remove-documents
+Accept: application/json
+Content-Type: application/json
+
+{
+  "names": [
+    "custom-documents/REPLACE_ME.json"
+  ]
+}
+
+### ---- DocSmith Uploads (per-customer) ----
+
+### Resolve workspace slug for a customer (replace ID)
+GET http://localhost:4000/api/customers/1/workspace
+Accept: application/json
+
+### List uploaded files for a customer (replace ID)
+GET http://localhost:4000/api/uploads/1
+Accept: application/json
+
+### Upload a file for a customer (replace ID)
+# Note: In VS Code REST Client, to test multipart you can use 'rest-client.allowMultipleFileUpload': true
+# and provide a form below. Alternatively, test with curl:
+# curl -F "file=@/absolute/path/to/file.pdf" http://localhost:4000/api/uploads/1
+POST http://localhost:4000/api/uploads/1
+Accept: application/json
+Content-Type: multipart/form-data; boundary=------------------------bndry
+
+--------------------------bndry
+Content-Disposition: form-data; name="file"; filename="REPLACE_FILENAME.ext"
+Content-Type: application/octet-stream
+
+< ./REPLACE_LOCAL_PATH/REPLACE_FILENAME.ext
+--------------------------bndry--
+
+### Delete a single uploaded file for a customer (per-file delete; replace ID and name)
+DELETE http://localhost:4000/api/uploads/1?name=REPLACE_FILENAME.ext
+Accept: application/json
+
 ### ---- Testing utilities ----
 
 ### Reset database and clear library folders

@@ -46,6 +46,18 @@ export function ensureDocumentsDir(id: number, name?: string, createdAt?: Date |
   return documentsDir
 }
 
+// Path to the uploads directory
+export function uploadsDirForCustomer(id: number, name?: string, createdAt?: Date | string) {
+  return resolveCustomerPaths(id, name, createdAt).uploadsDir
+}
+
+// Ensure uploads directory exists
+export function ensureUploadsDir(id: number, name?: string, createdAt?: Date | string) {
+  const { uploadsDir } = resolveCustomerPaths(id, name, createdAt)
+  fs.mkdirSync(uploadsDir, { recursive: true })
+  return uploadsDir
+}
+
 // Compute a new file path inside the customer's documents dir
 export function newDocumentPath(
   id: number,
@@ -64,6 +76,20 @@ export function newDocumentPath(
 // List files in the customer's documents directory (flat list)
 export function listDocumentFiles(id: number, name: string, createdAt: Date | string) {
   const dir = documentsDirForCustomer(id, name, createdAt)
+  try {
+    if (!fs.existsSync(dir)) return [] as string[]
+    return fs
+      .readdirSync(dir, { withFileTypes: true })
+      .filter((e) => e.isFile())
+      .map((e) => path.join(dir, e.name))
+  } catch {
+    return [] as string[]
+  }
+}
+
+// List files in the customer's uploads directory (flat list)
+export function listUploadFiles(id: number, name: string, createdAt: Date | string) {
+  const dir = uploadsDirForCustomer(id, name, createdAt)
   try {
     if (!fs.existsSync(dir)) return [] as string[]
     return fs

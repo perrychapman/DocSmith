@@ -45,11 +45,13 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className }: Pr
       setThreadSlug(tslug);
       if (tslug) {
         const data = await A.threadChats(slug, tslug);
-        const items = Array.isArray(data?.history) ? data.history : (Array.isArray(data) ? data : []);
+        const raw = Array.isArray(data?.history) ? data.history : (Array.isArray(data) ? data : []);
+        const items = sortOldestFirst(raw);
         setHistory(items);
       } else {
-        const data = await A.workspaceChats(slug, 50, 'desc');
-        const items = Array.isArray(data?.history) ? data.history : (Array.isArray(data?.chats) ? data.chats : (Array.isArray(data) ? data : []));
+        const data = await A.workspaceChats(slug, 50, 'asc');
+        const raw = Array.isArray(data?.history) ? data.history : (Array.isArray(data?.chats) ? data.chats : (Array.isArray(data) ? data : []));
+        const items = sortOldestFirst(raw);
         setHistory(items);
       }
     } catch {
@@ -59,6 +61,23 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className }: Pr
 
   React.useEffect(() => { loadThreadsAndChats(); }, [slug]);
   React.useEffect(() => { if (atBottom) scrollToBottom(); }, [history, atBottom, scrollToBottom]);
+
+  function sortOldestFirst(arr: any[]): any[] {
+    if (!Array.isArray(arr) || arr.length <= 1) return arr || [];
+    const toMs = (m: any) => {
+      const v = m?.createdAt ?? m?.created_at ?? m?.sentAt ?? m?.timestamp ?? m?.date;
+      const n = v ? new Date(v).getTime() : NaN;
+      return Number.isFinite(n) ? n : undefined;
+    };
+    const withT = arr.map((m, i) => ({ m, i, t: toMs(m) }));
+    const hasAny = withT.some(x => typeof x.t === 'number');
+    if (!hasAny) return arr.slice();
+    const a = withT[0].t ?? withT[0].i;
+    const b = withT[withT.length - 1].t ?? withT[withT.length - 1].i;
+    const isDesc = typeof a === 'number' && typeof b === 'number' ? (a > b) : false;
+    if (isDesc) return arr.slice().reverse();
+    return arr.slice();
+  }
 
   async function send() {
     const t = msg.trim(); if (!t) return;

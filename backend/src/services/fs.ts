@@ -40,15 +40,17 @@ export function customerPaths(id: number, name?: string, createdAt?: Date) {
   const inputsDir = path.join(customerDir, "inputs")
   const promptsDir = path.join(customerDir, "prompts")
   const documentsDir = path.join(customerDir, "documents")
-  return { root, customerDir, inputsDir, promptsDir, documentsDir }
+  const uploadsDir = path.join(customerDir, "uploads")
+  return { root, customerDir, inputsDir, promptsDir, documentsDir, uploadsDir }
 }
 
 // Ensure customer tree exists (id + display name + createdAt for folder stamp)
 export function ensureCustomerTree(id: number, name?: string, createdAt?: Date) {
-  const { customerDir, inputsDir, promptsDir, documentsDir } = customerPaths(id, name, createdAt)
+  const { customerDir, inputsDir, promptsDir, documentsDir, uploadsDir } = customerPaths(id, name, createdAt)
   fs.mkdirSync(inputsDir, { recursive: true })
   fs.mkdirSync(promptsDir, { recursive: true })
   fs.mkdirSync(documentsDir, { recursive: true })
+  fs.mkdirSync(uploadsDir, { recursive: true })
   return { customerDir, inputsDir, promptsDir, documentsDir }
 }
 

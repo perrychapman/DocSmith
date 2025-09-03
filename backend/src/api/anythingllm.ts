@@ -1,6 +1,8 @@
 // backend/src/api/anythingllm.ts
 import { Router } from "express";
 import { anythingllmRequest } from "../services/anythingllm";
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const multer = require("multer");
 
 const router = Router();
 
@@ -775,6 +777,106 @@ router.delete("/embed/:embedUuid", async (req, res) => {
 
     res.status(502).json({ message: msg });
   }
+});
+
+/**
+ * DOCUMENTS: List all locally stored documents
+ * Proxies: GET /api/v1/documents
+ */
+router.get("/documents", async (_req, res) => {
+  try {
+    const data = await anythingllmRequest<any>("/documents", "GET");
+    res.json(data);
+  } catch (err: any) {
+    const msg = String(err?.message || "Documents list failed");
+    const isForbidden = /\b403\b/i.test(msg) || /forbidden/i.test(msg);
+    res.status(isForbidden ? 403 : 502).json({
+      message: isForbidden ? "Invalid API Key" : msg,
+    });
+  }
+});
+
+/**
+ * DOCUMENTS: Get single document by AnythingLLM name
+ * Proxies: GET /api/v1/document/:docName
+ */
+router.get("/document/:docName", async (req, res) => {
+  const { docName } = req.params;
+  try {
+    const data = await anythingllmRequest<any>(
+      `/document/${encodeURIComponent(docName)}`,
+      "GET"
+    );
+    res.json(data);
+  } catch (err: any) {
+    const msg = String(err?.message || "Document fetch failed");
+    const isForbidden = /\b403\b/i.test(msg) || /forbidden/i.test(msg);
+    const isNotFound = /\b404\b/i.test(msg) || /not\s*found/i.test(msg);
+    if (isForbidden) return res.status(403).json({ message: "Invalid API Key" });
+    if (isNotFound) return res.status(404).send("Not Found");
+    res.status(502).json({ message: msg });
+  }
+});
+
+/**
+ * SYSTEM: Remove documents permanently
+ * Proxies: DELETE /api/v1/system/remove-documents
+ * Body: { names: string[] }
+ */
+router.delete("/system/remove-documents", async (req, res) => {
+  try {
+    const body = req.body ?? {};
+    const data = await anythingllmRequest<{ success: boolean; message?: string }>(
+      "/system/remove-documents",
+      "DELETE",
+      body
+    );
+    res.json(data);
+  } catch (err: any) {
+    const msg = String(err?.message || "Remove documents failed");
+    const isForbidden = /\b403\b/i.test(msg) || /forbidden/i.test(msg);
+    res.status(isForbidden ? 403 : 502).json({
+      message: isForbidden ? "Invalid API Key" : msg,
+    });
+  }
+});
+
+
+/**
+ * DOCUMENTS: Upload and optionally embed into workspaces
+ * Proxies: POST /api/v1/document/upload
+ * multipart/form-data fields:
+ *   - file: binary
+ *   - addToWorkspaces: comma-separated slugs
+ */
+router.post("/document/upload", (req, res) => {
+  const upload = multer({ storage: multer.memoryStorage() });
+  upload.single("file")(req, res, async (err: any) => {
+    if (err) return res.status(400).json({ message: String(err?.message || err) });
+    try {
+      const f = (req as any).file as undefined | { originalname: string; buffer: Buffer; mimetype?: string };
+      const addToWorkspaces = String((req.body?.addToWorkspaces ?? "")).trim();
+      if (!f || !f.buffer) return res.status(400).json({ message: "Missing file" });
+
+      // Build FormData for upstream
+      const fd = new FormData();
+      const type = f.mimetype || "application/octet-stream";
+      const uint = new Uint8Array(f.buffer);
+      // @ts-ignore File is available in Node 18+
+      const fileObj = new File([uint], f.originalname, { type });
+      fd.append("file", fileObj);
+      if (addToWorkspaces) fd.append("addToWorkspaces", addToWorkspaces);
+
+      const data = await anythingllmRequest<any>("/document/upload", "POST", fd);
+      return res.json(data);
+    } catch (e: any) {
+      const msg = String(e?.message || e);
+      const isForbidden = /\b403\b/i.test(msg) || /forbidden/i.test(msg);
+      return res.status(isForbidden ? 403 : 502).json({
+        message: isForbidden ? "Invalid API Key" : msg,
+      });
+    }
+  });
 });
 
 

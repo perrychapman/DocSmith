@@ -4,27 +4,36 @@ import { Button } from "@/components/ui/button";
 import { Input } from "../components/ui/input";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "../components/ui/breadcrumb";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "../components/ui/dialog";
 import { Icon } from "../components/icons";
+import { A } from "../lib/api";
 import WorkspaceChat from "../components/WorkspaceChat";
 import { toast } from "sonner";
 
 type Customer = { id: number; name: string; createdAt: string };
-type DocRow = { id: number; customerId: number; type: string; filePath?: string; createdAt: string };
+type UploadItem = { name: string; path: string; size: number; modifiedAt: string };
 
 export function CustomersPage() {
   const [customers, setCustomers] = React.useState<Customer[]>([]);
   const [loadingCustomers, setLoadingCustomers] = React.useState(true);
   const [name, setName] = React.useState("");
   const [selectedId, setSelectedId] = React.useState<number | null>(null);
-  const [docs, setDocs] = React.useState<DocRow[]>([]);
-  const [loadingDocs, setLoadingDocs] = React.useState(false);
-  const [docType, setDocType] = React.useState("");
+  const [uploads, setUploads] = React.useState<UploadItem[]>([]);
+  const [loadingUploads, setLoadingUploads] = React.useState(false);
+  const [file, setFile] = React.useState<File | null>(null);
+  const [uploading, setUploading] = React.useState(false);
+  const [embeddingMsg, setEmbeddingMsg] = React.useState<string>("");
+  const [deleting, setDeleting] = React.useState<string | null>(null);
   const [wsSlug, setWsSlug] = React.useState<string | null>(null);
   const [wsLoading, setWsLoading] = React.useState(false);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
   const [deleteId, setDeleteId] = React.useState<number | null>(null);
   const [deleteName, setDeleteName] = React.useState<string>("");
   const [alsoDeleteWorkspace, setAlsoDeleteWorkspace] = React.useState<boolean>(false);
+  const [uploadOpen, setUploadOpen] = React.useState(false);
+  const fileInputRef = React.useRef<HTMLInputElement | null>(null);
+  const [counts, setCounts] = React.useState<Record<number, { docs?: number; chats?: number }>>({});
+  const [countsLoading, setCountsLoading] = React.useState(false);
 
   React.useEffect(() => {
     let ignore = false;
@@ -42,6 +51,73 @@ export function CustomersPage() {
     })();
     return () => { ignore = true };
   }, [selectedId]);
+
+  // Fetch per-customer counts (documents, chats) for list (one-shot)
+  React.useEffect(() => {
+    let ignore = false;
+    async function loadCounts() {
+      if (!customers.length) { setCounts({}); return; }
+      setCountsLoading(true);
+      try {
+        const r = await fetch(`/api/customers/metrics`);
+        if (!r.ok) throw new Error(String(r.status));
+        const data = await r.json().catch(() => ({}));
+        const metrics: Array<{ id: number; docs: number; chats: number }> = Array.isArray(data?.metrics) ? data.metrics : [];
+        const map: Record<number, { docs?: number; chats?: number }> = {};
+        for (const m of metrics) map[m.id] = { docs: m.docs, chats: m.chats };
+        if (!ignore) setCounts(map);
+      } catch {
+        // Fallback per-customer (limited to first 10 to reduce load)
+        const list = customers.slice(0, 10);
+        const next: Record<number, { docs?: number; chats?: number }> = {};
+        await Promise.allSettled(list.map(async (c) => {
+          try {
+            const r = await fetch(`/api/uploads/${c.id}`);
+            const items: UploadItem[] = await r.json().catch(() => []);
+            next[c.id] = { ...(next[c.id]||{}), docs: Array.isArray(items) ? items.length : 0 };
+          } catch { next[c.id] = { ...(next[c.id]||{}), docs: 0 } }
+          try {
+            const ws = await fetch(`/api/customers/${c.id}/workspace`).then((r) => r.ok ? r.json() : Promise.reject()).catch(() => null);
+            const slug = ws?.slug as string | undefined;
+            if (slug) {
+              const data = await A.workspaceChats(slug, 200, 'desc').catch(() => null);
+              const arr = Array.isArray((data as any)?.history) ? (data as any).history : (Array.isArray((data as any)?.chats) ? (data as any).chats : (Array.isArray(data) ? (data as any) : []));
+              next[c.id] = { ...(next[c.id]||{}), chats: Array.isArray(arr) ? arr.length : 0 };
+            } else { next[c.id] = { ...(next[c.id]||{}), chats: 0 } }
+          } catch { next[c.id] = { ...(next[c.id]||{}), chats: 0 } }
+        }))
+        if (!ignore) setCounts((prev) => ({ ...prev, ...next }));
+      } finally {
+        if (!ignore) setCountsLoading(false);
+      }
+    }
+    loadCounts();
+    return () => { ignore = true; };
+  }, [customers]);
+
+  // Keep docs count in sync with selected customer's uploads list
+  React.useEffect(() => {
+    if (!selectedId) return;
+    setCounts((prev) => ({ ...prev, [selectedId]: { ...(prev[selectedId] || {}), docs: uploads.length } }));
+  }, [uploads, selectedId]);
+
+  // Live refresh chat count only for selected customer's workspace
+  React.useEffect(() => {
+    if (!selectedId || !wsSlug) return;
+    let ignore = false;
+    let timer: any;
+    async function refreshChats() {
+      try {
+        const data = await A.workspaceChats(wsSlug!, 200, 'desc').catch(() => null);
+        const arr = Array.isArray((data as any)?.history) ? (data as any).history : (Array.isArray((data as any)?.chats) ? (data as any).chats : (Array.isArray(data) ? (data as any) : []));
+        const count = Array.isArray(arr) ? arr.length : 0;
+        if (!ignore) setCounts((prev) => ({ ...prev, [selectedId]: { ...(prev[selectedId] || {}), chats: count } }));
+      } catch {}
+      if (!ignore) timer = setTimeout(refreshChats, 15000);
+    }
+    refreshChats();
+    return () => { ignore = true; if (timer) clearTimeout(timer); };
+  }, [selectedId, wsSlug]);
 
   // Resolve AnythingLLM workspace for selected customer
   React.useEffect(() => {
@@ -66,22 +142,40 @@ export function CustomersPage() {
 
   React.useEffect(() => {
     let ignore = false;
-    async function loadDocs(cid: number) {
-      setLoadingDocs(true);
+    async function loadUploads(cid: number) {
+      setLoadingUploads(true);
       try {
-        const r = await fetch(`/api/documents/${cid}`);
+        const r = await fetch(`/api/uploads/${cid}`);
         if (!r.ok) throw new Error(String(r.status));
-        const data: DocRow[] = await r.json();
-        if (!ignore) setDocs(Array.isArray(data) ? data : []);
+        const data: UploadItem[] = await r.json();
+        if (!ignore) setUploads(Array.isArray(data) ? data : []);
       } catch {
-        if (!ignore) setDocs([]);
+        if (!ignore) setUploads([]);
       } finally {
-        if (!ignore) setLoadingDocs(false);
+        if (!ignore) setLoadingUploads(false);
       }
     }
-    if (selectedId) loadDocs(selectedId);
-    else setDocs([]);
+    if (selectedId) loadUploads(selectedId);
+    else setUploads([]);
     return () => { ignore = true };
+  }, [selectedId]);
+
+  // Live refresh uploads list for the selected customer
+  React.useEffect(() => {
+    if (!selectedId) return;
+    let ignore = false;
+    let timer: any;
+    async function refresh() {
+      try {
+        const r = await fetch(`/api/uploads/${selectedId}`);
+        if (!r.ok) throw new Error(String(r.status));
+        const data: UploadItem[] = await r.json();
+        if (!ignore) setUploads(Array.isArray(data) ? data : []);
+      } catch {}
+      if (!ignore) timer = setTimeout(refresh, 15000);
+    }
+    refresh();
+    return () => { ignore = true; if (timer) clearTimeout(timer); };
   }, [selectedId]);
 
   async function add() {
@@ -98,25 +192,60 @@ export function CustomersPage() {
     } catch { toast.error("Failed to add customer") }
   }
 
-  async function addDoc() {
-    const type = docType.trim();
+  async function uploadFile() {
     if (!selectedId) { toast.error("Select a customer first"); return; }
-    if (!type) { toast.error("Document type is required"); return; }
+    if (!file) { toast.error("Choose a file to upload"); return; }
     try {
-      const r = await fetch(`/api/documents`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ customerId: selectedId, type })
-      });
+      setUploading(true);
+      setEmbeddingMsg("Uploading and embedding...");
+      const toastId = (toast as any).loading ? (toast as any).loading("Uploading and embedding...") : undefined;
+      const fd = new FormData();
+      fd.append("file", file);
+      const r = await fetch(`/api/uploads/${selectedId}`, { method: "POST", body: fd });
+      const json = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(String(r.status));
-      setDocType("");
-      // refresh docs
-      const r2 = await fetch(`/api/documents/${selectedId}`);
-      const d2: DocRow[] = await r2.json();
-      setDocs(d2);
-      toast.success("Document created");
+      // refresh list
+      const r2 = await fetch(`/api/uploads/${selectedId}`);
+      const d2: UploadItem[] = await r2.json();
+      setUploads(d2);
+      setFile(null);
+      if ((json as any)?.embeddingWarning) {
+        toast.warning?.((json as any).embeddingWarning) ?? toast.success("Uploaded; embedding may still be processing");
+      } else {
+        // Treat completion of the request as embed completion signal
+        if (toastId && toast.success) (toast as any).success("Embedding completed", { id: toastId });
+        else toast.success("Embedding completed");
+      }
+      setUploadOpen(false);
     } catch {
-      toast.error("Failed to create document");
+      toast.error("Upload or embedding failed");
+    } finally {
+      setUploading(false);
+      setEmbeddingMsg("");
+    }
+  }
+
+  async function deleteUpload(name: string) {
+    if (!selectedId) return;
+    try {
+      setDeleting(name);
+      const loadingId = (toast as any).loading ? (toast as any).loading("Removing from workspace...") : undefined;
+      const r = await fetch(`/api/uploads/${selectedId}?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+      const json = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(String(r.status));
+      // refresh list
+      const r2 = await fetch(`/api/uploads/${selectedId}`);
+      const d2: UploadItem[] = await r2.json();
+      setUploads(d2);
+      const removed = Array.isArray((json as any)?.removedNames) ? (json as any).removedNames : [];
+      if (removed.length) toast.success(`Removed ${removed.length} document${removed.length>1?'s':''}`);
+      if ((json as any)?.documentsWarning) toast.warning?.((json as any).documentsWarning);
+      if (loadingId && (toast as any).success) (toast as any).success("Removed", { id: loadingId });
+      else toast.success("Removed");
+    } catch {
+      toast.error("Failed to delete");
+    } finally {
+      setDeleting(null);
     }
   }
 
@@ -131,9 +260,14 @@ export function CustomersPage() {
     if (!deleteId) return;
     try {
       const url = `/api/customers/${deleteId}?deleteWorkspace=${alsoDeleteWorkspace ? "true" : "false"}`;
+      const loadingId = (toast as any).loading ? (toast as any).loading("Deleting customer and workspace docs...") : undefined;
       const r = await fetch(url, { method: "DELETE" });
+      const body = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(String(r.status));
-      toast.success("Customer deleted");
+      if ((body as any)?.documentsWarning) toast.warning?.((body as any).documentsWarning);
+      if ((body as any)?.workspaceWarning) toast.warning?.((body as any).workspaceWarning);
+      if (loadingId && (toast as any).success) (toast as any).success("Customer deleted", { id: loadingId });
+      else toast.success("Customer deleted");
       setDeleteOpen(false);
       // refresh customers
       const rr = await fetch(`/api/customers`);
@@ -169,18 +303,33 @@ export function CustomersPage() {
           <h1 className="text-xl font-semibold">Customers</h1>
           <p className="text-sm text-muted-foreground">Manage your customers and their documents</p>
         </div>
-        <div className="flex items-center gap-2">
-          <Input placeholder="Customer name" value={name} onChange={(e) => setName(e.target.value)} />
-          <Button onClick={add}><Icon.Plus className="h-4 w-4 mr-2"/>Add</Button>
-        </div>
+        {/* Header add removed; add form moved to customers panel */}
       </div>
 
+      {(!loadingCustomers && customers.length === 0) ? (
+        <Card className="p-10 flex flex-col items-center justify-center text-center space-y-3">
+          <Icon.Folder className="h-10 w-10 text-muted-foreground" />
+          <div className="text-lg font-semibold">Add your first customer</div>
+          <div className="text-sm text-muted-foreground">Create a customer to start chatting and uploading documents.</div>
+          <div className="flex items-center gap-2 w-full max-w-md">
+            <Input placeholder="Customer name" value={name} onChange={(e) => setName(e.target.value)} />
+            <Button onClick={add}><Icon.Plus className="h-4 w-4 mr-2"/>Add</Button>
+          </div>
+        </Card>
+      ) : (
       <div className="grid grid-cols-12 gap-2 min-h-0">
         {/* Left: Customers list full-height */}
         <div className="col-span-12 md:col-span-4">
           <div className="sticky top-0">
             <Card className="h-[calc(100vh-160px)] overflow-hidden p-0">
               <div className="h-full p-4 space-y-3 overflow-y-auto">
+                {/* Add form in panel */}
+                {customers.length > 0 && (
+                  <div className="flex items-center gap-2">
+                    <Input placeholder="Customer name" value={name} onChange={(e) => setName(e.target.value)} />
+                    <Button onClick={add}><Icon.Plus className="h-4 w-4 mr-2"/>Add</Button>
+                  </div>
+                )}
                 {loadingCustomers ? (
                   <div className="text-muted-foreground text-sm">Loading.</div>
                 ) : customers.length ? (
@@ -195,7 +344,23 @@ export function CustomersPage() {
                           onClick={() => setSelectedId(c.id)}
                           title={new Date(c.createdAt).toLocaleString()}
                         >
-                          <span className="font-medium">{c.name}</span>
+                          <div className="font-medium">{c.name}</div>
+                          {counts[c.id]?.docs == null && counts[c.id]?.chats == null ? (
+                            <div className="flex items-center gap-2 mt-0.5">
+                              <div className="h-2 w-16 rounded bg-muted animate-pulse" />
+                              <div className="h-2 w-16 rounded bg-muted animate-pulse" />
+                            </div>
+                          ) : (
+                            <div className="text-xs text-muted-foreground">
+                              {(() => {
+                                const d = counts[c.id]?.docs;
+                                const cm = counts[c.id]?.chats;
+                                const dText = (d == null) ? '… docs' : `${d} doc${d===1?'':'s'}`;
+                                const cText = (cm == null) ? '… chats' : `${cm} chat${cm===1?'':'s'}`;
+                                return `${dText} • ${cText}`;
+                              })()}
+                            </div>
+                          )}
                         </button>
                         <Button size="sm" variant="outline" onClick={() => startDelete(c)} title="Delete customer">
                           <Icon.Trash className="h-4 w-4" />
@@ -238,25 +403,76 @@ export function CustomersPage() {
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <Input placeholder="Document type (e.g. Proposal)" value={docType} onChange={(e) => setDocType(e.target.value)} />
-                <Button disabled={!selectedId} onClick={addDoc}><Icon.Plus className="h-4 w-4 mr-2"/>Add</Button>
+                <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
+                  <DialogTrigger asChild>
+                    <Button disabled={!selectedId}>
+                      <Icon.Upload className="h-4 w-4 mr-2" />Upload
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Upload Document</DialogTitle>
+                    </DialogHeader>
+                    <div className="space-y-3">
+                      <div className="text-sm text-muted-foreground">Click the area below to attach a file, or drag and drop.</div>
+                      <input
+                        ref={fileInputRef}
+                        type="file"
+                        className="hidden"
+                        disabled={uploading}
+                        onChange={(e) => setFile(e.target.files?.[0] || null)}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => fileInputRef.current?.click()}
+                        onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                        onDrop={(e) => {
+                          e.preventDefault(); e.stopPropagation();
+                          const f = e.dataTransfer?.files?.[0];
+                          if (f) setFile(f);
+                        }}
+                        disabled={uploading}
+                        className="w-full rounded-md border border-dashed p-6 text-center hover:bg-accent/40 transition flex flex-col items-center justify-center text-muted-foreground"
+                      >
+                        <Icon.Upload className="h-6 w-6 mb-1" />
+                        <div className="font-medium">{file ? 'Change selected file' : 'Click to select a file'}</div>
+                        <div className="text-xs mt-1 max-w-full truncate">{file ? file.name : 'or drag and drop here'}</div>
+                      </button>
+                      {uploading && (
+                        <div className="text-xs text-muted-foreground">{embeddingMsg || "Processing..."}</div>
+                      )}
+                    </div>
+                    <DialogFooter>
+                      <Button variant="secondary" onClick={() => setUploadOpen(false)} disabled={uploading}>Cancel</Button>
+                      <Button onClick={uploadFile} disabled={!selectedId || !file || uploading}>
+                        {uploading ? "Uploading..." : (<><Icon.Upload className="h-4 w-4 mr-2"/>Upload</>)}
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
               </div>
             </div>
 
             <div className="flex-1 min-h-0 overflow-y-auto">
               {!selectedId ? (
                 <div className="text-muted-foreground text-sm">Select a customer to view documents.</div>
-              ) : loadingDocs ? (
+              ) : loadingUploads ? (
                 <div className="text-muted-foreground text-sm">Loading documents.</div>
-              ) : docs.length ? (
+              ) : uploads.length ? (
                 <ul className="space-y-2">
-                  {docs.map((d) => (
-                    <li key={d.id} className="border rounded-md px-3 py-2 flex items-center justify-between">
-                      <div>
-                        <div className="font-medium">{d.type}</div>
-                        <div className="text-xs text-muted-foreground">{d.filePath || "(no file)"}</div>
+                  {uploads.map((u, idx) => (
+                    <li key={idx} className="border rounded-md px-3 py-2 flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Icon.File className="h-4 w-4 text-muted-foreground" />
+                        <div className="font-medium">{u.name}</div>
+                        <div className="text-xs text-muted-foreground">{u.size} bytes</div>
                       </div>
-                      <div className="text-xs text-muted-foreground">{new Date(d.createdAt).toLocaleString()}</div>
+                      <div className="flex items-center gap-2">
+                        <div className="text-xs text-muted-foreground">{new Date(u.modifiedAt).toLocaleString()}</div>
+                        <Button size="sm" variant="outline" disabled={uploading || deleting === u.name} onClick={() => deleteUpload(u.name)} title="Delete file">
+                          {deleting === u.name ? 'Deleting...' : <Icon.Trash className="h-4 w-4" />}
+                        </Button>
+                      </div>
                     </li>
                   ))}
                 </ul>
@@ -267,6 +483,7 @@ export function CustomersPage() {
           </Card>
         </div>
       </div>
+      )}
 
       {/* Delete Customer Confirm */}
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>

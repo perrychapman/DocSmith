@@ -1,10 +1,14 @@
 // backend/src/api/customers.ts
 import { Router } from "express"
+import fs from "fs"
+import path from "path"
 import { getDB } from "../services/storage"
 import { rmrf } from "../services/fs"
 import { ensureCustomerLibrary, resolveCustomerPaths, folderNameForCustomer } from "../services/customerLibrary"
 import { ensureCustomersWorkspaceSlugColumn } from "../services/storage"
 import { anythingllmRequest } from "../services/anythingllm"
+import { listFlattenedDocs, documentExists, qualifiedNamesForShort } from "../services/anythingllmDocs"
+import { removeUploadAndAnythingLLM } from "../services/anythingllmDelete"
 
 const router = Router()
 
@@ -24,6 +28,52 @@ router.get("/", (_req, res) => {
     (err, rows) => {
       if (err) return res.status(500).json({ error: err.message })
       res.json(rows)
+    }
+  )
+})
+
+// GET /api/customers/metrics - per-customer counts (docs, chats)
+router.get("/metrics", (_req, res) => {
+  const db = getDB()
+  db.all<CustomerRow[]>(
+    "SELECT id, name, workspaceSlug, createdAt FROM customers",
+    [],
+    async (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message })
+      try {
+        const list: CustomerRow[] = Array.isArray(rows) ? (rows as unknown as CustomerRow[]) : []
+        const results = await Promise.all(list.map(async (row: CustomerRow) => {
+          // Count local uploaded documents (exclude sidecars)
+          let docs = 0
+          try {
+            const { uploadsDir } = resolveCustomerPaths(row.id, row.name, new Date(row.createdAt))
+            try { fs.mkdirSync(uploadsDir, { recursive: true }) } catch {}
+            try {
+              const items = fs.readdirSync(uploadsDir, { withFileTypes: true })
+              docs = items.filter((e) => e.isFile() && !e.name.toLowerCase().endsWith('.allm.json')).length
+            } catch { docs = 0 }
+          } catch { docs = 0 }
+
+          // Count chats by fetching recent workspace chats (best-effort)
+          let chats = 0
+          try {
+            const slug = row.workspaceSlug
+            if (slug) {
+              const q = new URLSearchParams()
+              q.set('limit', '200')
+              q.set('orderBy', 'desc')
+              const data = await anythingllmRequest<any>(`/workspace/${encodeURIComponent(String(slug))}/chats?${q.toString()}`, 'GET')
+              const arr = Array.isArray(data?.history) ? data.history : (Array.isArray((data as any)?.chats) ? (data as any).chats : (Array.isArray(data) ? data : []))
+              chats = Array.isArray(arr) ? arr.length : 0
+            }
+          } catch { chats = 0 }
+
+          return { id: row.id, docs, chats }
+        }))
+        return res.json({ metrics: results })
+      } catch (e) {
+        return res.status(500).json({ error: (e as Error).message })
+      }
     }
   )
 })
@@ -116,7 +166,7 @@ router.delete("/:id", (req, res) => {
       if (!row) return res.status(404).json({ error: "Customer not found" })
 
       const createdAtDate = new Date(row.createdAt)
-      const { customerDir } = resolveCustomerPaths(id, row.name, createdAtDate)
+      const { customerDir, uploadsDir } = resolveCustomerPaths(id, row.name, createdAtDate)
       const folderName = folderNameForCustomer(id, row.name, createdAtDate)
 
       // 2) Delete DB rows in a transaction
@@ -153,30 +203,54 @@ router.delete("/:id", (req, res) => {
                     warning = `Deleted from DB, but failed to remove folder: ${(e as Error).message}`
                   }
 
-                  // 4) Optionally remove the AnythingLLM workspace with the same folderName
+                  // 4) Remove documents from the workspace, then permanently remove them; optionally delete the workspace
                   let workspaceWarning: string | undefined
-                  if (shouldDeleteWorkspace) {
-                    try {
-                      const slug = (row as any)?.workspaceSlug
-                      if (slug) {
-                        await anythingllmRequest(`/workspace/${encodeURIComponent(slug)}`, "DELETE")
-                      } else {
-                        // Fallback: find by name
-                        const list = await anythingllmRequest<{ workspaces: Array<{ name: string; slug: string }> }>(
-                          "/workspaces",
-                          "GET"
-                        )
-                        const ws = Array.isArray((list as any)?.workspaces) ? (list as any).workspaces : Array.isArray(list) ? (list as any) : []
-                        const match = ws.find((w: any) => (w?.name || "") === folderName)
-                        if (match?.slug) await anythingllmRequest(`/workspace/${encodeURIComponent(match.slug)}`, "DELETE")
-                        else workspaceWarning = `No AnythingLLM workspace named '${folderName}' found`
-                      }
-                    } catch (e) {
-                      workspaceWarning = `Failed to delete AnythingLLM workspace: ${(e as Error).message}`
+                  let documentsWarning: string | undefined
+                  try {
+                    const slug = (row as any)?.workspaceSlug
+                    let resolvedSlug: string | undefined = slug || undefined
+                    if (!resolvedSlug) {
+                      const list = await anythingllmRequest<{ workspaces: Array<{ name: string; slug: string }> }>(
+                        "/workspaces",
+                        "GET"
+                      )
+                      const ws = Array.isArray((list as any)?.workspaces) ? (list as any).workspaces : Array.isArray(list) ? (list as any) : []
+                      resolvedSlug = ws.find((w: any) => (w?.name || "") === folderName)?.slug
                     }
+
+                    if (resolvedSlug) {
+                      try {
+                        // Delete uploaded documents one by one using the same logic as per-file deletion
+                        if (fs.existsSync(uploadsDir)) {
+                          const entries = fs.readdirSync(uploadsDir, { withFileTypes: true })
+                          for (const ent of entries) {
+                            if (!ent.isFile()) continue
+                            const fname = ent.name
+                            if (fname.toLowerCase().endsWith('.allm.json')) continue // skip sidecars
+                            try {
+                              await removeUploadAndAnythingLLM({ id, name: row.name, createdAt: row.createdAt, workspaceSlug: resolvedSlug }, fname)
+                            } catch {}
+                          }
+                        }
+                      } catch (e) {
+                        documentsWarning = `Failed to remove AnythingLLM documents: ${(e as Error).message}`
+                      }
+
+                      if (shouldDeleteWorkspace) {
+                        try {
+                          await anythingllmRequest(`/workspace/${encodeURIComponent(resolvedSlug)}`, "DELETE")
+                        } catch (e) {
+                          workspaceWarning = `Failed to delete AnythingLLM workspace: ${(e as Error).message}`
+                        }
+                      }
+                    } else if (shouldDeleteWorkspace) {
+                      workspaceWarning = `No AnythingLLM workspace named '${folderName}' found`
+                    }
+                  } catch (e) {
+                    workspaceWarning = `Failed to contact AnythingLLM: ${(e as Error).message}`
                   }
 
-                  return res.json({ ok: true, id, ...(warning ? { warning } : {}), ...(workspaceWarning ? { workspaceWarning } : {}) })
+                  return res.json({ ok: true, id, ...(warning ? { warning } : {}), ...(documentsWarning ? { documentsWarning } : {}), ...(workspaceWarning ? { workspaceWarning } : {}) })
                 })
               })
             })

@@ -9,6 +9,7 @@ import { logInfo } from "./utils/logger";
 import customersRouter from "./api/customers";
 import promptsRouter from "./api/prompts";
 import documentsRouter from "./api/documents";
+import uploadsRouter from "./api/uploads";
 import testRouter from "./api/test";
 
 // CommonJS-safe import for AnythingLLM router
@@ -56,6 +57,7 @@ if (fs.existsSync(FRONTEND_DIR)) {
 app.use("/api/customers", customersRouter);
 app.use("/api/prompts", promptsRouter);
 app.use("/api/documents", documentsRouter);
+app.use("/api/uploads", uploadsRouter);
 app.use("/api/test", testRouter);
 app.use("/api/anythingllm", anythingllmRouter);
 

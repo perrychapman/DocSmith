@@ -5,13 +5,13 @@
         "backend",
         "frontend"
     ],
-  "scripts": {
-    "dev:backend": "nodemon --watch backend/src --ext ts,js --exec ts-node backend/src/server.ts",
-    "build:backend": "tsc -p backend/tsconfig.json",
-    "start:backend": "node backend/dist/server.js",
-    "dev": "concurrently -n backend,frontend -c yellow,cyan \"npm:dev:backend\" \"npm --workspace frontend run dev\"",
-    "build": "npm run build:backend && npm --workspace frontend run build"
-  },
+    "scripts": {
+        "dev:backend": "nodemon --watch backend/src --ext ts,js --exec ts-node backend/src/server.ts",
+        "build:backend": "tsc -p backend/tsconfig.json",
+        "start:backend": "node backend/dist/server.js",
+        "dev": "concurrently -n backend,frontend -c yellow,cyan \"npm:dev:backend\" \"npm --workspace frontend run dev\"",
+        "build": "npm run build:backend && npm --workspace frontend run build"
+    },
     "devDependencies": {
         "@types/cors": "^2.8.19",
         "@types/express": "^5.0.3",
@@ -27,6 +27,7 @@
         "cors": "^2.8.5",
         "dotenv": "^17.2.1",
         "express": "^5.1.0",
+        "multer": "^2.0.2",
         "sqlite3": "^5.1.7"
     }
 }

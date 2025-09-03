@@ -2,6 +2,8 @@ import * as React from "react";
 import CustomersPage from "./pages/Customers";
 import WorkspacesPage from "./pages/Workspaces";
 import WorkspaceDetailPage from "./pages/WorkspaceDetail";
+import TemplatesPage from "./pages/Templates";
+import SettingsPage from "./pages/Settings";
 import { Separator } from "./components/ui/separator";
 
 function useHashRoute() {
@@ -18,6 +20,8 @@ export default function App() {
     const slug = decodeURIComponent(parts[1] || '');
     content = <WorkspaceDetailPage slug={slug} />;
   } else if (hash === '#workspaces') content = <WorkspacesPage />;
+  else if (hash === '#templates') content = <TemplatesPage />;
+  else if (hash === '#settings') content = <SettingsPage />;
   else content = <CustomersPage />;
 
   return (
@@ -29,6 +33,10 @@ export default function App() {
              href="#customers">Customers</a>
           <a className={"px-3 py-2 rounded-md hover:bg-accent/40 transition " + (hash.startsWith("#workspaces")?"bg-accent text-accent-foreground":"text-muted-foreground")}
              href="#workspaces">Workspaces</a>
+          <a className={"px-3 py-2 rounded-md hover:bg-accent/40 transition " + (hash==="#templates"?"bg-accent text-accent-foreground":"text-muted-foreground")}
+             href="#templates">Templates</a>
+          <a className={"px-3 py-2 rounded-md hover:bg-accent/40 transition " + (hash==="#settings"?"bg-accent text-accent-foreground":"text-muted-foreground")}
+             href="#settings">Settings</a>
         </nav>
       </aside>
       <main className="p-6 overflow-hidden">

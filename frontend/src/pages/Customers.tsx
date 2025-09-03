@@ -34,6 +34,11 @@ export function CustomersPage() {
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
   const [counts, setCounts] = React.useState<Record<number, { docs?: number; chats?: number }>>({});
   const [countsLoading, setCountsLoading] = React.useState(false);
+  const [generateOpen, setGenerateOpen] = React.useState(false);
+  const [templates, setTemplates] = React.useState<Array<{ slug: string; name: string }>>([]);
+  const [loadingTemplates, setLoadingTemplates] = React.useState(false);
+  const [selectedTemplate, setSelectedTemplate] = React.useState<string>("");
+  const [generating, setGenerating] = React.useState(false);
 
   React.useEffect(() => {
     let ignore = false;
@@ -159,6 +164,47 @@ export function CustomersPage() {
     else setUploads([]);
     return () => { ignore = true };
   }, [selectedId]);
+
+  // Load templates once when opening generate modal
+  React.useEffect(() => {
+    if (!generateOpen) return;
+    let ignore = false;
+    (async () => {
+      setLoadingTemplates(true);
+      try {
+        const r = await fetch(`/api/templates`);
+        const data = await r.json().catch(() => ({}));
+        const list: Array<{ slug: string; name: string }> = Array.isArray(data?.templates) ? data.templates : [];
+        if (!ignore) setTemplates(list);
+        if (!ignore && list.length && !selectedTemplate) setSelectedTemplate(list[0].slug);
+      } catch {
+      } finally { if (!ignore) setLoadingTemplates(false) }
+    })();
+    return () => { ignore = true };
+  }, [generateOpen]);
+
+  async function generateDocument() {
+    if (!selectedId) { toast.error("Select a customer first"); return; }
+    if (!selectedTemplate) { toast.error("Choose a template"); return; }
+    try {
+      setGenerating(true);
+      const loadingId = (toast as any).loading ? (toast as any).loading("Generating document...") : undefined;
+      const r = await fetch(`/api/generate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ customerId: selectedId, template: selectedTemplate }) });
+      const json = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(String(r.status));
+      // Force refresh uploads/documents list after generation
+      try {
+        const r2 = await fetch(`/api/uploads/${selectedId}`);
+        const d2: UploadItem[] = await r2.json();
+        setUploads(Array.isArray(d2) ? d2 : []);
+      } catch {}
+      if (loadingId && (toast as any).success) (toast as any).success("Document generated", { id: loadingId });
+      else toast.success("Document generated");
+      setGenerateOpen(false);
+    } catch (e) {
+      toast.error("Generation failed");
+    } finally { setGenerating(false) }
+  }
 
   // Live refresh uploads list for the selected customer
   React.useEffect(() => {
@@ -391,17 +437,17 @@ export function CustomersPage() {
 
           {/* Documents */}
           <Card className="p-4 h-full flex flex-col">
-            <div className="flex items-end justify-between gap-3 mb-3 shrink-0">
-              <div>
-                <div className="font-medium">Documents</div>
-                <div className="text-xs text-muted-foreground">
-                  {selectedId ? (
-                    <>For {customers.find((x) => x.id === selectedId)?.name || "selected customer"}</>
-                  ) : (
-                    <>Select a customer to view documents</>
-                  )}
+              <div className="flex items-end justify-between gap-3 mb-3 shrink-0">
+                <div>
+                  <div className="font-medium">Documents</div>
+                  <div className="text-xs text-muted-foreground">
+                    {selectedId ? (
+                      <>For {customers.find((x) => x.id === selectedId)?.name || "selected customer"}</>
+                    ) : (
+                      <>Select a customer to view documents</>
+                    )}
+                  </div>
                 </div>
-              </div>
               <div className="flex items-center gap-2">
                 <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
                   <DialogTrigger asChild>
@@ -446,6 +492,37 @@ export function CustomersPage() {
                       <Button variant="secondary" onClick={() => setUploadOpen(false)} disabled={uploading}>Cancel</Button>
                       <Button onClick={uploadFile} disabled={!selectedId || !file || uploading}>
                         {uploading ? "Uploading..." : (<><Icon.Upload className="h-4 w-4 mr-2"/>Upload</>)}
+                      </Button>
+                    </DialogFooter>
+                  </DialogContent>
+                </Dialog>
+                <Dialog open={generateOpen} onOpenChange={setGenerateOpen}>
+                  <DialogTrigger asChild>
+                    <Button variant="secondary" disabled={!selectedId}>
+                      <Icon.Plus className="h-4 w-4 mr-2"/>Generate
+                    </Button>
+                  </DialogTrigger>
+                  <DialogContent>
+                    <DialogHeader>
+                      <DialogTitle>Generate Document</DialogTitle>
+                    </DialogHeader>
+                    <div className="space-y-3">
+                      <div className="text-sm text-muted-foreground">Choose a template to generate a document using this customer's knowledge.</div>
+                      <div>
+                        <label className="text-sm">Template</label>
+                        <select className="mt-1 w-full border rounded-md h-9 px-2 bg-background" value={selectedTemplate} onChange={(e) => setSelectedTemplate(e.target.value)} disabled={loadingTemplates}>
+                          {loadingTemplates ? <option>Loading templates...</option> : (
+                            templates.length ? templates.map((t) => (
+                              <option key={t.slug} value={t.slug}>{t.name || t.slug}</option>
+                            )) : <option value="">No templates found</option>
+                          )}
+                        </select>
+                      </div>
+                    </div>
+                    <DialogFooter>
+                      <Button variant="secondary" onClick={() => setGenerateOpen(false)} disabled={generating}>Cancel</Button>
+                      <Button onClick={generateDocument} disabled={!selectedId || !selectedTemplate || generating}>
+                        {generating ? 'Generating...' : 'Generate'}
                       </Button>
                     </DialogFooter>
                   </DialogContent>

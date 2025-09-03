@@ -11,6 +11,9 @@ import promptsRouter from "./api/prompts";
 import documentsRouter from "./api/documents";
 import uploadsRouter from "./api/uploads";
 import testRouter from "./api/test";
+import templatesRouter from "./api/templates";
+import generateRouter from "./api/generate";
+import settingsRouter from "./api/settings";
 
 // CommonJS-safe import for AnythingLLM router
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -58,6 +61,9 @@ app.use("/api/customers", customersRouter);
 app.use("/api/prompts", promptsRouter);
 app.use("/api/documents", documentsRouter);
 app.use("/api/uploads", uploadsRouter);
+app.use("/api/templates", templatesRouter);
+app.use("/api/generate", generateRouter);
+app.use("/api/settings", settingsRouter);
 app.use("/api/test", testRouter);
 app.use("/api/anythingllm", anythingllmRouter);
 

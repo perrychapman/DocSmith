@@ -15,6 +15,63 @@ Content-Type: application/json
 ### List customers
 GET http://localhost:4000/api/customers
 
+### ---- Templates ----
+
+### List templates
+GET http://localhost:4000/api/templates
+
+### Upload a template (multipart)
+# @name uploadTemplate
+POST http://localhost:4000/api/templates/upload
+Content-Type: multipart/form-data; boundary=MyBoundary
+
+--MyBoundary
+Content-Disposition: form-data; name="name"
+
+Sample Template
+--MyBoundary
+Content-Disposition: form-data; name="slug"
+
+sample-ai
+--MyBoundary
+Content-Disposition: form-data; name="file"; filename="template.md"
+Content-Type: text/markdown
+
+# Proposal for {{customer.name}}
+
+Date: {{now}}
+
+--MyBoundary--
+
+### Compile a template with AI
+POST http://localhost:4000/api/templates/sample-ai/compile
+
+### Generate a document
+POST http://localhost:4000/api/generate
+Content-Type: application/json
+
+{
+  "customerId": 1,
+  "template": "sample",
+  "data": { "project": "Acme Revamp" }
+}
+
+### Compile a DOCX template (no AI transform, ensures meta)
+POST http://localhost:4000/api/templates/my-docx/compile
+
+### Generate from DOCX template
+POST http://localhost:4000/api/generate
+Content-Type: application/json
+
+{
+  "customerId": 1,
+  "template": "my-docx",
+  "data": { "project": "Acme Revamp", "owner": "Jane" }
+}
+
+### Delete a template
+DELETE http://localhost:4000/api/templates/sample-ai
+
 
 ### ---- Prompts ----
 

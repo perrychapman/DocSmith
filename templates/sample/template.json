@@ -1,0 +1,5 @@
+{
+  "name": "Sample Template",
+  "output": { "format": "md", "filenamePattern": "sample-{{ts}}" },
+  "schema": { "fields": [] }
+}

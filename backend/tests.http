@@ -1,0 +1,250 @@
+### ---- Customers ----
+
+### Create customer
+POST http://localhost:4000/api/customers
+Content-Type: application/json
+
+{ "name": "Acme Corp" }
+
+### Create another customer
+POST http://localhost:4000/api/customers
+Content-Type: application/json
+
+{ "name": "Beta Industries" }
+
+### List customers
+GET http://localhost:4000/api/customers
+
+
+### ---- Prompts ----
+
+### Add prompt for customer 1
+POST http://localhost:4000/api/prompts
+Content-Type: application/json
+
+{
+  "customerId": 1,
+  "userInput": "Highlight risks and summarize",
+  "customerInput": "Transcript or pasted email thread here..."
+}
+
+### List prompts for customer 1
+GET http://localhost:4000/api/prompts/1
+
+
+### ---- Documents ----
+
+### Create document (stub)
+POST http://localhost:4000/api/documents
+Content-Type: application/json
+
+{ "customerId": 1, "type": "discovery" }
+
+### List documents for customer 1
+GET http://localhost:4000/api/documents/1
+
+
+### ---- AnythingLLM integration ----
+
+### Check token validity
+GET http://localhost:4000/api/anythingllm/system/check-token
+
+### Check AnythingLLM mount
+GET http://localhost:4000/api/anythingllm/debug
+
+### Ping AnythingLLM system
+GET http://localhost:4000/api/anythingllm/ping
+Accept: application/json
+
+### Create New Workspace
+POST http://localhost:4000/api/anythingllm/workspace/new
+Accept: application/json
+Content-Type: application/json
+
+{
+  "name": "My New DocSmith Workspace",
+  "similarityThreshold": 0.7,
+  "openAiTemp": 0.7,
+  "openAiHistory": 20,
+  "openAiPrompt": "Custom prompt for responses",
+  "queryRefusalResponse": "Custom refusal message",
+  "chatMode": "chat",
+  "topN": 4
+}
+
+### Get all Workspaces
+GET http://localhost:4000/api/anythingllm/workspaces
+
+### Get Workspace by Slug
+GET http://localhost:4000/api/anythingllm/workspace/amerihealth
+Accept: application/json
+
+### Delete Workspace by Slug
+DELETE http://localhost:4000/api/anythingllm/workspace/my-new-docsmith-workspace
+Accept: application/json
+
+### Update Workspace by Slug
+POST http://localhost:4000/api/anythingllm/workspace/my-new-docsmith-workspace/update
+Accept: application/json
+Content-Type: application/json
+
+{
+  "name": "Updated Workspace Name",
+  "openAiTemp": 0.2,
+  "openAiHistory": 20,
+  "openAiPrompt": "Respond to all inquiries in binary only."
+}
+
+### Get Workspace Chats (all)
+GET http://localhost:4000/api/anythingllm/workspace/my-workspace-123/chats
+Accept: application/json
+
+### Get Workspace Chats (limit + order)
+GET http://localhost:4000/api/anythingllm/workspace/my-new-docsmith-workspace/chats?limit=50&orderBy=desc
+Accept: application/json
+
+### Get Workspace Chats (filter by apiSessionId)
+GET http://localhost:4000/api/anythingllm/workspace/my-workspace-123/chats?apiSessionId=abc123-session
+Accept: application/json
+
+### Chat with Workspace (query mode)
+POST http://localhost:4000/api/anythingllm/workspace/my-new-docsmith-workspace/chat
+Accept: application/json
+Content-Type: application/json
+
+{
+  "message": "What is AnythingLLM?",
+  "mode": "query"
+}
+
+### Chat with Workspace (chat mode + session + reset)
+POST http://localhost:4000/api/anythingllm/workspace/my-new-doscsmith-workspace/chat
+Accept: application/json
+Content-Type: application/json
+
+{
+  "message": "Summarize the latest results.",
+  "mode": "chat",
+  "sessionId": "docsmith-session-001",
+  "reset": false
+}
+
+### Chat with Workspace (chat mode)
+POST http://localhost:4000/api/anythingllm/workspace/my-new-docsmith-workspace/chat
+Accept: application/json
+Content-Type: application/json
+
+{
+  "message": "What is AnythingLLM?",
+  "mode": "chat",
+  "sessionId": "docsmith-session-001"
+}
+
+### Create Workspace Thread
+POST http://localhost:4000/api/anythingllm/workspace/my-new-docsmith-workspace/thread/new
+Accept: application/json
+Content-Type: application/json
+
+{
+  "userId": 1,
+  "name": "Customer Intake Thread",
+  "slug": "intake-thread-001"
+}
+
+### Update Workspace Thread Name
+POST http://localhost:4000/api/anythingllm/workspace/my-new-docsmith-workspace/thread/intake-thread-001/update
+Accept: application/json
+Content-Type: application/json
+
+{
+  "name": "Customer Intake Thread 1"
+}
+
+### Get Thread Chats
+GET http://localhost:4000/api/anythingllm/workspace/my-new-docsmith-workspace/thread/intake-thread-001/chats
+Accept: application/json
+
+### Chat with Workspace Thread (chat mode)
+POST http://localhost:4000/api/anythingllm/workspace/my-new-docsmith-workspace/thread/intake-thread-001/chat
+Accept: application/json
+Content-Type: application/json
+
+{
+  "message": "Do you have access to any embedded documents?",
+  "mode": "chat",
+  "userId": 1,
+  "reset": false
+}
+
+### Stream Chat with Workspace Thread
+POST http://localhost:4000/api/anythingllm/workspace/my-new-docsmith-workspace/thread/intake-thread-001/stream-chat
+Accept: text/event-stream
+Content-Type: application/json
+
+{
+  "message": "Stream this response.",
+  "mode": "chat",
+  "reset": false
+}
+
+### Delete Workspace Thread
+DELETE http://localhost:4000/api/anythingllm/workspace/my-new-docsmith-workspace/thread/intake-thread-001
+Accept: application/json
+
+### List Active Embeds
+GET http://localhost:4000/api/anythingllm/embed
+Accept: application/json
+
+### Get Embed Chats
+GET http://localhost:4000/api/anythingllm/embed/embed-uuid-1/chats
+Accept: application/json
+
+### Get Embed Chats for Session
+GET http://localhost:4000/api/anythingllm/embed/embed-uuid-1/chats/session-uuid-1
+Accept: application/json
+
+### Create New Embed
+POST http://localhost:4000/api/anythingllm/embed/new
+Accept: application/json
+Content-Type: application/json
+
+{
+  "workspace_slug": "my-new-docsmith-workspace",
+  "chat_mode": "chat",
+  "allowlist_domains": ["example.com"],
+  "allow_model_override": false,
+  "allow_temperature_override": false,
+  "allow_prompt_override": false,
+  "max_chats_per_day": 100,
+  "max_chats_per_session": 10
+}
+
+### Update Embed
+POST http://localhost:4000/api/anythingllm/embed/embed-uuid-1
+Accept: application/json
+Content-Type: application/json
+
+{
+  "enabled": true,
+  "chat_mode": "chat",
+  "allowlist_domains": ["example.com"],
+  "allow_model_override": false,
+  "allow_temperature_override": false,
+  "allow_prompt_override": false,
+  "max_chats_per_day": 100,
+  "max_chats_per_session": 10
+}
+
+### Delete Embed
+DELETE http://localhost:4000/api/anythingllm/embed/embed-uuid-1
+Accept: application/json
+
+### ---- Testing utilities ----
+
+### Reset database and clear library folders
+POST http://localhost:4000/api/test/reset
+Content-Type: application/json
+
+### Health Check
+GET http://localhost:4000/healthz
+

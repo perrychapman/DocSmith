@@ -1,10 +1,8 @@
 import { APP_CONFIG } from "../utils/config";
 
-const ANYTHINGLLM_API_URL = APP_CONFIG.anythingLLMUrl.replace(/\/+$/, "");
-const ANYTHINGLLM_API_KEY = APP_CONFIG.anythingLLMKey;
-
-if (!ANYTHINGLLM_API_URL) throw new Error("ANYTHINGLLM_API_URL is not set in .env");
-if (!ANYTHINGLLM_API_KEY) throw new Error("ANYTHINGLLM_API_KEY is not set in .env");
+const RAW_URL = (APP_CONFIG.anythingLLMUrl || "").trim();
+const ANYTHINGLLM_API_URL = RAW_URL ? RAW_URL.replace(/\/+$/, "") : "";
+const ANYTHINGLLM_API_KEY = (APP_CONFIG.anythingLLMKey || "").trim();
 
 type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
@@ -14,6 +12,11 @@ export async function anythingllmRequest<T>(
   body?: any,
   extraHeaders: Record<string, string> = {}
 ): Promise<T> {
+  if (!ANYTHINGLLM_API_URL || !ANYTHINGLLM_API_KEY) {
+    throw new Error(
+      `AnythingLLM not configured: missing ${!ANYTHINGLLM_API_URL ? "ANYTHINGLLM_API_URL" : ""}${!ANYTHINGLLM_API_URL && !ANYTHINGLLM_API_KEY ? " and " : ""}${!ANYTHINGLLM_API_KEY ? "ANYTHINGLLM_API_KEY" : ""}`
+    );
+  }
   // Every call goes through /api/v1
   const url = `${ANYTHINGLLM_API_URL}/api/v1${path}`;
 

@@ -9,6 +9,7 @@ import { Icon } from "../components/icons";
 import { A } from "../lib/api";
 import WorkspaceChat from "../components/WorkspaceChat";
 import { toast } from "sonner";
+import { Progress } from "../components/ui/progress";
 
 type Customer = { id: number; name: string; createdAt: string };
 type UploadItem = { name: string; path: string; size: number; modifiedAt: string };
@@ -518,6 +519,9 @@ export function CustomersPage() {
                           )}
                         </select>
                       </div>
+                      {generating ? (
+                        <div className="pt-2"><Progress indeterminate /></div>
+                      ) : null}
                     </div>
                     <DialogFooter>
                       <Button variant="secondary" onClick={() => setGenerateOpen(false)} disabled={generating}>Cancel</Button>

@@ -12,7 +12,21 @@ export type LoadedTemplate =
 export type TemplateMeta = {
   name?: string
   schema?: { fields?: Array<{ key: string; label?: string; type?: string; hint?: string }> }
-  output?: { format?: "md" | "html" | "txt"; filenamePattern?: string }
+  output?: { format?: "md" | "html" | "txt" | "docx"; filenamePattern?: string }
+  // New: support dynamic compilation outputs
+  dynamic?: {
+    mode?: "dynamic" | "strict"
+    // High-level plan of how to fill data from a workspace (best-effort, optional)
+    plan?: Array<{
+      key: string
+      description?: string
+      strategy?: "list" | "single"
+      prompt?: string
+      schema?: any
+    }>
+    partials?: Record<string, string>
+    notes?: string
+  }
 }
 
 export function loadTemplate(slug: string, baseDir: string): LoadedTemplate | null {

@@ -69,6 +69,18 @@ Content-Type: application/json
   "data": { "project": "Acme Revamp", "owner": "Jane" }
 }
 
+### Generate using per-template script and workspace
+POST http://localhost:4000/api/generate
+Content-Type: application/json
+
+{
+  "customerId": 1,
+  "template": "sample-ai"
+}
+
+### Inspect a template
+GET http://localhost:4000/api/templates/sample-ai/inspect
+
 ### Delete a template
 DELETE http://localhost:4000/api/templates/sample-ai
 

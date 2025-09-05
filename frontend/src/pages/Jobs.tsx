@@ -114,10 +114,11 @@ export default function JobsPage() {
       <Separator />
       {error ? (<div className="text-sm text-red-600">Failed to load jobs: {error}</div>) : null}
 
-      <Card className="p-4">
-        <div className="grid grid-cols-12 gap-4 h-[55vh]">
-          <div className="col-span-12 md:col-span-5 flex flex-col min-h-0 h-full">
-          <div className="flex items-center gap-2 mb-2">
+      <Card className="h-[calc(100vh-160px)] overflow-hidden p-0">
+        <div className="h-full p-4 space-y-3 overflow-y-auto">
+          <div className="grid grid-cols-12 gap-2 h-full min-h-0">
+          <div className="col-span-12 md:col-span-4 h-full min-h-0 flex flex-col">
+          <div className="flex items-center gap-2 mb-2 shrink-0">
             <Select value={(statusFilter || 'all')} onValueChange={(v)=>setStatusFilter(v === 'all' ? '' : v)}>
               <SelectTrigger className="w-[170px]">
                 <SelectValue placeholder="All statuses" />
@@ -133,8 +134,8 @@ export default function JobsPage() {
             <Input placeholder="Search template or customer" value={q} onChange={(e)=>setQ(e.target.value)} />
             <Button variant="outline" className="ml-auto" onClick={()=> setClearOpen(true)}>Clear All</Button>
           </div>
-          <div className="border rounded-md p-2 min-h-0 flex-1 overflow-hidden">
-            <ScrollArea className="h-full">
+          <div className="border rounded-md p-2 min-h-0 flex-1 overflow-hidden flex flex-col">
+            <ScrollArea className="flex-1 min-h-0">
               <ul className="text-sm space-y-1 pr-2">
                 {filtered.map(j => (
                   <li key={j.id} className={"flex items-center gap-2 justify-between rounded px-2 py-1 cursor-pointer " + (activeId===j.id?"bg-accent":"hover:bg-accent/40")} onClick={()=>openJob(j.id)}>
@@ -151,7 +152,7 @@ export default function JobsPage() {
           </div>
         </div>
 
-        <div className="col-span-12 md:col-span-7 min-h-0 flex flex-col h-full">
+        <div className="col-span-12 md:col-span-8 grid grid-rows-[auto_minmax(0,1fr)_minmax(0,1fr)] gap-3 h-full min-h-0">
           <div className="border rounded-md p-3 min-h-0 flex-1 overflow-hidden">
             {!active ? (
               <div className="text-muted-foreground text-sm">Select a job to view details.</div>
@@ -238,6 +239,7 @@ export default function JobsPage() {
           </div>
         </div>
       </div>
+      </div>
       </Card>
       {/* Clear All Jobs */}
       <AlertDialog open={clearOpen} onOpenChange={setClearOpen}>
@@ -269,6 +271,16 @@ export default function JobsPage() {
     </div>
   );
 }
+
+
+
+
+
+
+
+
+
+
 
 
 

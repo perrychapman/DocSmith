@@ -2,7 +2,7 @@ import * as React from "react";
 import { Card } from "../components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "../components/ui/input";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "../components/ui/dialog";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, DialogDescription, DialogClose } from "../components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "../components/ui/breadcrumb";
 import { Icon } from "../components/icons";
@@ -33,6 +33,11 @@ export default function TemplatesPage() {
   const [controls, setControls] = React.useState<Array<{ tag?: string; alias?: string; type?: string }>>([]);
   // cleaned: no separate code state; use modal
   const [codeModal, setCodeModal] = React.useState<{ title: string; code: string } | null>(null);
+  const [compLogs, setCompLogs] = React.useState<string[] | null>(null);
+  const [compSteps, setCompSteps] = React.useState<Record<string, 'start'|'ok'>>({});
+  const [compProgress, setCompProgress] = React.useState<number | null>(null);
+  const [compJobId, setCompJobId] = React.useState<string | null>(null);
+  const compEsRef = React.useRef<EventSource | null>(null);
 
   async function load() {
     setLoading(true);
@@ -96,14 +101,44 @@ export default function TemplatesPage() {
     } catch (e:any) { toast.error(e?.message ? String(e.message) : 'Failed to load full generator') }
   }
 
-  // Rebuild Full Generator only
+  // Rebuild Full Generator removed; compile consolidates this flow
 
-  async function rebuildFullGen(sl: string) {
+  async function compile(sl: string) {
     try {
-      const r = await fetch(`/api/templates/${encodeURIComponent(sl)}/fullgen/rebuild`, { method: 'POST' });
-      if (!r.ok) throw new Error(String((await r.json().catch(()=>({})))?.error || r.status));
-      toast.success('Full document generator rebuilt');
-    } catch (e:any) { toast.error(e?.message ? String(e.message) : 'Failed to rebuild full generator') }
+      setCompiling(sl)
+      setCompLogs([]); setCompSteps({}); setCompProgress(0); setCompJobId(null)
+      const es = new EventSource(`/api/templates/${encodeURIComponent(sl)}/compile/stream`)
+      compEsRef.current = es
+      es.onmessage = (ev) => {
+        try {
+          const data = JSON.parse(ev.data||'{}')
+          if (data?.type === 'info') {
+            if (data.usedWorkspace) setCompLogs((prev)=> ([...(prev||[]), `workspace:${String(data.usedWorkspace)}`]))
+            if (data.jobId) setCompJobId(String(data.jobId))
+          } else if (data?.type === 'log') {
+            setCompLogs((prev)=> ([...(prev||[]), String(data.message||'')]))
+          } else if (data?.type === 'step') {
+            const name = String(data.name||'')
+            const status = String(data.status||'start') as 'start'|'ok'
+            const p = typeof data.progress === 'number' ? Math.max(0, Math.min(100, Math.floor(data.progress))) : null
+            setCompSteps((prev)=> ({ ...(prev||{}), [name]: status }))
+            if (p != null) setCompProgress(p)
+          } else if (data?.type === 'done') {
+            setCompLogs((prev)=> ([...(prev||[]), 'done']))
+            if (compEsRef.current) { compEsRef.current.close(); compEsRef.current = null }
+            setCompiling(null); setCompProgress(100); setCompJobId(null)
+            load()
+          } else if (data?.type === 'error') {
+            setCompLogs((prev)=> ([...(prev||[]), `error:${String(data.error||'unknown')}`]))
+            if (compEsRef.current) { compEsRef.current.close(); compEsRef.current = null }
+            setCompiling(null); setCompJobId(null)
+          }
+        } catch {}
+      }
+      es.onerror = () => { setCompLogs((prev)=> ([...(prev||[]), 'error:stream'])); if (compEsRef.current) { compEsRef.current.close(); compEsRef.current = null }; setCompiling(null); setCompJobId(null) }
+    } catch {
+      setCompiling(null)
+    }
   }
 
   // Render DOCX when buffer and container are ready
@@ -142,24 +177,7 @@ export default function TemplatesPage() {
     finally { setUploading(false) }
   }
 
-  async function compile(sl: string) {
-    try {
-      setCompiling(sl);
-      const r = await fetch(`/api/templates/${encodeURIComponent(sl)}/compile`, { method: 'POST' });
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) {
-        const msg = (j && (j.error || j.message)) ? String(j.error || j.message) : String(r.status);
-        throw new Error(msg);
-      }
-      const ws = j?.usedWorkspace ? ` (Workspace: ${j.usedWorkspace})` : "";
-      if (j?.info) toast.info(`${String(j.info)}${ws}`);
-      else toast.success(`Compiled with AI${ws}`);
-      await load();
-    } catch (e:any) {
-      const msg = e?.message ? String(e.message) : 'Compile failed';
-      toast.error(msg);
-    } finally { setCompiling(null) }
-  }
+  // (legacy compile removed; using SSE compile above)
 
   function startDelete(sl: string) {
     setDeleteSlug(sl);
@@ -306,12 +324,10 @@ export default function TemplatesPage() {
                       <div className="flex gap-2 flex-wrap">
                         <Button size="sm" variant="outline" onClick={() => viewFullGen(selected!)}>View Full Generator</Button>
                       </div>
-                      <div className="flex gap-2 flex-wrap">
-                        <Button size="sm" onClick={() => rebuildFullGen(selected!)}>Rebuild Full Generator</Button>
-                      </div>
+                      {/* Rebuild Full Generator action removed */}
                     </div>
                     {compiling ? (
-                      <div className="w-full mt-2"><Progress indeterminate /></div>
+                      <div className="w-full mt-2"><Progress value={compProgress||0} /></div>
                     ) : null}
                   </div>
                 </div>
@@ -343,6 +359,47 @@ export default function TemplatesPage() {
           </div>
           <DialogFooter>
             <Button variant="secondary" onClick={()=>setCodeModal(null)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Compile Logs */}
+      <Dialog open={!!compLogs} onOpenChange={(v)=>{ if(!v){ setCompLogs(null); setCompSteps({}); setCompProgress(null); setCompJobId(null); if (compEsRef.current) { compEsRef.current.close(); compEsRef.current = null } } }}>
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Compile Logs</DialogTitle>
+            <DialogDescription>Live status from template compilation.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              {typeof compProgress === 'number' ? (
+                <div className="mb-2"><Progress value={compProgress} /></div>
+              ) : (
+                <div className="mb-2"><Progress indeterminate /></div>
+              )}
+              <div className="text-xs text-muted-foreground">{compiling ? 'Running...' : (compProgress === 100 ? 'Completed' : 'Idle')}</div>
+            </div>
+            <div className="border rounded-md bg-muted/30 px-3 py-2 h-40 overflow-auto text-sm">
+              <ul className="text-sm space-y-1">
+                {['resolveTemplate','resolveWorkspace','readTemplate','extractSkeleton','buildPrompt','aiRequest','writeGenerator'].map((s)=> (
+                  <li key={s} className="flex items-center gap-2">
+                    <span className="w-3 h-3 rounded-full inline-block" style={{ backgroundColor: compSteps[s]==='ok' ? '#16a34a' : (compSteps[s]==='start' ? '#f59e0b' : '#d4d4d8') }} />
+                    <span className="capitalize">{s.replace(/([A-Z])/g,' $1')}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div className="border rounded-md bg-muted/30 px-3 py-2 h-40 overflow-auto text-sm">
+              <pre className="whitespace-pre-wrap">{(compLogs||[]).join('\n')}</pre>
+            </div>
+          </div>
+          <DialogFooter>
+            {compiling && compJobId ? (
+              <Button variant="destructive" onClick={async ()=>{ try{ await fetch(`/api/templates/compile/jobs/${encodeURIComponent(compJobId)}/cancel`, { method: 'POST' }); setCompLogs((prev)=> ([...(prev||[]), 'cancel:requested'])) } catch {} }}>Cancel</Button>
+            ) : null}
+            <DialogClose asChild>
+              <Button variant="secondary">Close</Button>
+            </DialogClose>
           </DialogFooter>
         </DialogContent>
       </Dialog>

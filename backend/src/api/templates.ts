@@ -5,6 +5,7 @@ import path from "path"
 import { loadTemplate } from "../services/templateEngine"
 import { safeSlug } from "../services/fs"
 import { anythingllmRequest } from "../services/anythingllm"
+import { createJob, appendLog as jobLog, markJobDone, markJobError, listJobs, getJob, cancelJob, isCancelled } from "../services/genJobs"
 import { libraryRoot } from "../services/fs"
 import { readSettings, writeSettings } from "../services/settings"
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -98,87 +99,7 @@ router.get("/:slug/fullgen", (req, res) => {
 
 // New: Rebuild a full document generator (no placeholders). Writes generator.full.ts
 router.post("/:slug/fullgen/rebuild", async (req, res) => {
-  const slug = String(req.params.slug)
-  try {
-    const dir = path.join(TEMPLATES_ROOT, slug)
-    if (!fs.existsSync(dir)) return res.status(404).json({ error: 'Template not found' })
-    const metaPath = path.join(dir, 'template.json')
-    let wsSlug: string | undefined
-    try { const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8')); if (meta?.workspaceSlug) wsSlug = String(meta.workspaceSlug) } catch {}
-    if (!wsSlug) return res.status(400).json({ error: 'No workspace associated with this template' })
-
-    // Extract a readable structure skeleton from template (prefer HTML to preserve structure)
-    let skeleton = ''
-    try {
-      const docxPath = path.join(dir, 'template.docx')
-      if (fs.existsSync(docxPath)) {
-        const buffer = fs.readFileSync(docxPath)
-        const result = await (mammoth as any).convertToHtml({ buffer }, { styleMap: [
-          "p[style-name='Title'] => h1:fresh",
-          "p[style-name='Subtitle'] => h2:fresh",
-          "p[style-name='Heading 1'] => h1:fresh",
-          "p[style-name='Heading 2'] => h2:fresh",
-          "p[style-name='Heading 3'] => h3:fresh",
-          "p[style-name='Heading 4'] => h4:fresh",
-          "p[style-name='Heading 5'] => h5:fresh",
-          "p[style-name='Heading 6'] => h6:fresh"
-        ], includeDefaultStyleMap: true })
-        skeleton = String(result?.value || '')
-        // Try to extract style/header/footer XML excerpts to guide formatting
-        try {
-          const zip = new PizZip(buffer)
-          const stylesXml = zip.file('word/styles.xml')?.asText() || ''
-          const stylesFxXml = zip.file('word/stylesWithEffects.xml')?.asText() || ''
-          const numberingXml = zip.file('word/numbering.xml')?.asText() || ''
-          const documentXml = zip.file('word/document.xml')?.asText() || ''
-          const themeXml = zip.file('word/theme/theme1.xml')?.asText() || ''
-          const header1 = zip.file('word/header1.xml')?.asText() || ''
-          const header2 = zip.file('word/header2.xml')?.asText() || ''
-          const footer1 = zip.file('word/footer1.xml')?.asText() || ''
-          const footer2 = zip.file('word/footer2.xml')?.asText() || ''
-          const take = (s: string, n = 8000) => (s ? s.slice(0, n) : '')
-          const stylesHint = take(stylesXml)
-          const stylesFxHint = take(stylesFxXml)
-          const numberingHint = take(numberingXml)
-          const documentHint = take(documentXml)
-          const themeHint = take(themeXml)
-          const headersHint = take((header1 + '\n' + header2).trim())
-          const footersHint = take((footer1 + '\n' + footer2).trim())
-
-          // Append hints to skeleton for the prompt assembly below
-          const parts: string[] = []
-          parts.push('TEMPLATE SKELETON (HTML excerpt):')
-          parts.push('---')
-          parts.push(skeleton.slice(0, 12000))
-          parts.push('---')
-          if (stylesHint) { parts.push('STYLES XML (excerpt):', '---', stylesHint, '---') }
-          if (stylesFxHint) { parts.push('STYLES WITH EFFECTS XML (excerpt):', '---', stylesFxHint, '---') }
-          if (numberingHint) { parts.push('NUMBERING XML (excerpt):', '---', numberingHint, '---') }
-          if (documentHint) { parts.push('DOCUMENT XML (excerpt):', '---', documentHint, '---') }
-          if (themeHint) { parts.push('THEME XML (excerpt):', '---', themeHint, '---') }
-          if (headersHint) { parts.push('HEADERS XML (excerpt):', '---', headersHint, '---') }
-          if (footersHint) { parts.push('FOOTERS XML (excerpt):', '---', footersHint, '---') }
-          skeleton = parts.join('\n')
-        } catch {}
-      } else {
-        const srcName = (fs.readdirSync(dir).find((n) => /^source\./i.test(n)) || '')
-        if (srcName) skeleton = fs.readFileSync(path.join(dir, srcName), 'utf-8')
-        else if (fs.existsSync(path.join(dir, 'template.hbs'))) skeleton = fs.readFileSync(path.join(dir, 'template.hbs'), 'utf-8')
-      }
-    } catch {}
-
-    const prompt = `You are a senior TypeScript engineer and document automation specialist. Recreate this template as faithfully as possible while preserving layout, section order, branding, headers/footers, spacing, lists, tables, and emphasis.\n\nOutput: ONLY TypeScript code.\n\nExport exactly:\nexport async function generate(\n  toolkit: { json: (prompt: string) => Promise<any>; text: (prompt: string) => Promise<string>; query?: (prompt: string) => Promise<any>; getSkeleton?: (kind?: 'html'|'text') => Promise<string>; markdownToHtml: (md: string) => string; htmlToDocx: (html: string) => Promise<Uint8Array> },\n  builder: { addHeading(text: string, level?: 1|2|3|4|5|6, opts?: any): void; addParagraph(text: string, opts?: any): void; addBulletList(items: string[]): void; addNumberedList(items: string[]): void; addTable(rows: string[][]): void; pageBreak(): void; save(): Promise<Uint8Array> },\n  context?: Record<string, any>\n): Promise<{ docx?: Uint8Array; html?: string; markdown?: string } | void>;\n\nStrict requirements:\n- Minimize LLM calls: batch any data needs into ONE call (toolkit.query or toolkit.json) if needed.\n- Mirror the TEMPLATE SKELETON or toolkit.getSkeleton('html') to match headings, ordering, and grouping.\n- Prefer the builder API for formatting: use heading levels, paragraph opts (alignment, bold/italic), bullet/numbered lists, tables, and page breaks for clear section boundaries.\n- Apply default paragraph/run styles (font family/size/weight/italic) according to STYLES XML hints when composing content.\n- Preserve visible branding blocks and disclaimers. If exact headers/footers are not available, replicate their content near top/bottom of each logical page (use pageBreak).\n- Honor list formats from NUMBERING XML (e.g., decimal vs bullet), and keep indentation consistent.\n- Recreate spacing and blank lines for visual parity; keep line breaks consistent.\n- No external imports or file I/O.\n\nReturn strategy:\n- If you confidently reconstruct using builder, return { docx }.\n- If exact styles require HTML, compose faithful HTML and return { html } (DocSmith converts via toolkit.htmlToDocx).\n\nTEMPLATE ARTIFACTS (excerpts follow; HTML skeleton and XML hints may be present).\n${skeleton}`
-
-    const chat = await anythingllmRequest<any>(`/workspace/${encodeURIComponent(String(wsSlug))}/chat`, 'POST', { message: prompt, mode: 'query' })
-    const text = String(chat?.textResponse || chat?.message || chat || '')
-    let code = text
-    const m = text.match(/```[a-z]*\s*([\s\S]*?)```/i)
-    if (m && m[1]) code = m[1]
-    code = code.trim()
-    if (!code) return res.status(502).json({ error: 'No code returned' })
-    fs.writeFileSync(path.join(dir, 'generator.full.ts'), code, 'utf-8')
-    return res.json({ ok: true })
-  } catch (e) { return res.status(500).json({ error: (e as Error).message }) }
+  return res.status(410).json({ error: 'Endpoint deprecated. Use POST /api/templates/:slug/compile' })
 })
 
 // Preview template content (agnostic): original or compiled
@@ -452,7 +373,7 @@ router.post("/:slug/compile", async (req, res) => {
       }
     } catch {}
 
-    const prompt = `You are a senior TypeScript engineer and document automation specialist. Recreate this template as faithfully as possible while preserving layout, section order, branding, headers/footers, spacing, lists, tables, and emphasis.\n\nOutput: ONLY TypeScript code.\n\nExport exactly:\nexport async function generate(\n  toolkit: { json: (prompt: string) => Promise<any>; text: (prompt: string) => Promise<string>; query?: (prompt: string) => Promise<any>; getSkeleton?: (kind?: 'html'|'text') => Promise<string>; markdownToHtml: (md: string) => string; htmlToDocx: (html: string) => Promise<Uint8Array> },\n  builder: { addHeading(text: string, level?: 1|2|3|4|5|6, opts?: any): void; addParagraph(text: string, opts?: any): void; addBulletList(items: string[]): void; addNumberedList(items: string[]): void; addTable(rows: string[][]): void; pageBreak(): void; save(): Promise<Uint8Array> },\n  context?: Record<string, any>\n): Promise<{ docx?: Uint8Array; html?: string; markdown?: string } | void>;\n\nStrict requirements:\n- Minimize LLM calls: batch any data needs into ONE call (toolkit.query or toolkit.json) if needed.\n- Mirror the TEMPLATE SKELETON or toolkit.getSkeleton('html') to match headings, ordering, and grouping.\n- Prefer the builder API for formatting: use heading levels, paragraph opts (alignment, bold/italic), bullet/numbered lists, tables, and page breaks for clear section boundaries.\n- Preserve visible branding blocks and disclaimers. If exact headers/footers are not available, replicate their content near top/bottom of each logical page (use pageBreak).\n- Recreate spacing and blank lines for visual parity; keep line breaks consistent.\n- No external imports or file I/O.\n\nReturn strategy:\n- If you confidently reconstruct using builder, return { docx }.\n- If exact styles require HTML, compose faithful HTML and return { html } (DocSmith converts via toolkit.htmlToDocx).\n\nTEMPLATE SKELETON (HTML or text excerpt):\n---\n${skeleton.slice(0,12000)}\n---`
+    const prompt = `You are a senior TypeScript engineer and document automation specialist. Recreate this template faithfully while preserving layout, headers/footers, spacing, lists, tables, images, hyperlinks, and emphasis.\n\nOutput: ONLY TypeScript code that returns raw WordprocessingML (WML).\n\nExport exactly:\nexport async function generate(\n  toolkit: { json: (prompt: string) => Promise<any>; text: (prompt: string) => Promise<string>; query?: (prompt: string) => Promise<any>; getSkeleton?: (kind?: 'html'|'text') => Promise<string> },\n  builder: any,\n  context?: Record<string, any>\n): Promise<{ wml: string }>;\n\nHard requirements:\n- Return ONLY { wml } containing the inner <w:body> children (<w:p>, <w:tbl>, ...). Do NOT include <w:sectPr> or any package-level parts.\n- Mirror the TEMPLATE SKELETON (prefer HTML skeleton) for headings/order/grouping.\n- Apply formatting in WML: run properties (color, size, bold/italic/underline/strike, font) and paragraph properties (alignment, spacing, indents), table widths/styles, list/numbering with <w:numPr> matching template numbering.\n- Use STYLES, THEME, and NUMBERING XML excerpts to choose brand colors, fonts, and list styles. Convert theme colors to hex where needed.\n- Do NOT output HTML, Markdown, or a DOCX buffer. No external imports or file I/O.\n- Do NOT add any sections, paragraphs, tables, or content that are not present in the provided skeleton; if unsure, omit rather than invent.\n- Preserve styling exactly; do not change fonts, colors, sizes, spacing, numbering, or table properties beyond what the skeleton and excerpts imply.\n\nTEMPLATE ARTIFACTS (HTML skeleton + XML excerpts):\n${skeleton}`
 
     const chat = await anythingllmRequest<any>(`/workspace/${encodeURIComponent(String(wsSlug))}/chat`, 'POST', { message: prompt, mode: 'query' })
     const text = String(chat?.textResponse || chat?.message || chat || '')
@@ -466,6 +387,146 @@ router.post("/:slug/compile", async (req, res) => {
   } catch (e) {
     return res.status(500).json({ error: (e as Error).message })
   }
+})
+
+// Live compile (SSE) with logs, steps, cancel
+router.get("/:slug/compile/stream", async (req, res) => {
+  const slug = String(req.params.slug)
+  try {
+    const dir = path.join(TEMPLATES_ROOT, slug)
+    if (!fs.existsSync(dir)) {
+      res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' })
+      res.write(`data: ${JSON.stringify({ type: 'error', error: 'Template not found' })}\n\n`)
+      return res.end()
+    }
+    res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' })
+    const send = (obj: any) => { try { res.write(`data: ${JSON.stringify(obj)}\n\n`) } catch {} }
+    const log = (m: string) => send({ type: 'log', message: m })
+    const steps = ['resolveTemplate','resolveWorkspace','readTemplate','extractSkeleton','buildPrompt','aiRequest','writeGenerator']
+    const totalSteps = steps.length
+    let completed = 0
+    const stepStart = (name: string) => send({ type: 'step', name, status: 'start', progress: Math.round((completed/totalSteps)*100) })
+    const stepOk = (name: string) => { completed = Math.min(totalSteps, completed + 1); send({ type: 'step', name, status: 'ok', progress: Math.round((completed/totalSteps)*100) }) }
+
+    const metaPath = path.join(dir, 'template.json')
+    let wsSlug: string | undefined
+    try { const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8')); if (meta?.workspaceSlug) wsSlug = String(meta.workspaceSlug) } catch {}
+    if (!wsSlug) { send({ type: 'error', error: 'No workspace associated with this template' }); return res.end() }
+    stepOk('resolveTemplate')
+    send({ type: 'info', usedWorkspace: wsSlug })
+    stepOk('resolveWorkspace')
+
+    const job = createJob({ customerId: 0, customerName: 'template', template: slug, filename: 'generator.full.ts', usedWorkspace: wsSlug })
+    send({ type: 'info', jobId: job.id })
+    const logPush = (m:string) => { log(m); jobLog(job.id, m) }
+
+    // Extract skeleton and XML hints
+    stepStart('readTemplate')
+    let skeleton = ''
+    try {
+      const docxPath = path.join(dir, 'template.docx')
+      if (fs.existsSync(docxPath)) {
+        const buffer = fs.readFileSync(docxPath)
+        stepOk('readTemplate')
+        stepStart('extractSkeleton')
+        const result = await (mammoth as any).convertToHtml({ buffer }, { styleMap: [
+          "p[style-name='Title'] => h1:fresh",
+          "p[style-name='Subtitle'] => h2:fresh",
+          "p[style-name='Heading 1'] => h1:fresh",
+          "p[style-name='Heading 2'] => h2:fresh",
+          "p[style-name='Heading 3'] => h3:fresh",
+          "p[style-name='Heading 4'] => h4:fresh",
+          "p[style-name='Heading 5'] => h5:fresh",
+          "p[style-name='Heading 6'] => h6:fresh"
+        ], includeDefaultStyleMap: true })
+        const html = String(result?.value || '')
+        try {
+          const zip = new PizZip(buffer)
+          const stylesXml = zip.file('word/styles.xml')?.asText() || ''
+          const stylesFxXml = zip.file('word/stylesWithEffects.xml')?.asText() || ''
+          const numberingXml = zip.file('word/numbering.xml')?.asText() || ''
+          const documentXml = zip.file('word/document.xml')?.asText() || ''
+          const themeXml = zip.file('word/theme/theme1.xml')?.asText() || ''
+          const header1 = zip.file('word/header1.xml')?.asText() || ''
+          const header2 = zip.file('word/header2.xml')?.asText() || ''
+          const footer1 = zip.file('word/footer1.xml')?.asText() || ''
+          const footer2 = zip.file('word/footer2.xml')?.asText() || ''
+          const take = (s: string, n = 8000) => (s ? s.slice(0, n) : '')
+          const parts: string[] = []
+          parts.push('TEMPLATE SKELETON (HTML excerpt):','---', html.slice(0,12000), '---')
+          if (stylesXml) { parts.push('STYLES XML (excerpt):','---', take(stylesXml), '---') }
+          if (stylesFxXml) { parts.push('STYLES WITH EFFECTS XML (excerpt):','---', take(stylesFxXml), '---') }
+          if (numberingXml) { parts.push('NUMBERING XML (excerpt):','---', take(numberingXml), '---') }
+          if (documentXml) { parts.push('DOCUMENT XML (excerpt):','---', take(documentXml), '---') }
+          if (themeXml) { parts.push('THEME XML (excerpt):','---', take(themeXml), '---') }
+          const headersHint = (header1 + '\n' + header2).trim()
+          const footersHint = (footer1 + '\n' + footer2).trim()
+          if (headersHint) { parts.push('HEADERS XML (excerpt):','---', take(headersHint), '---') }
+          if (footersHint) { parts.push('FOOTERS XML (excerpt):','---', take(footersHint), '---') }
+          skeleton = parts.join('\n')
+        } catch {
+          skeleton = html
+        }
+        stepOk('extractSkeleton')
+      } else {
+        const src = (fs.readdirSync(dir).find((n)=>/^source\./i.test(n))||'')
+        if (src) { skeleton = fs.readFileSync(path.join(dir, src), 'utf-8'); stepOk('readTemplate'); stepOk('extractSkeleton') }
+        else if (fs.existsSync(path.join(dir,'template.hbs'))) { skeleton = fs.readFileSync(path.join(dir,'template.hbs'),'utf-8'); stepOk('readTemplate'); stepOk('extractSkeleton') }
+      }
+    } catch { /* ignore; skeleton may be empty */ }
+
+    // Build prompt
+    stepStart('buildPrompt')
+      const prompt = `You are a senior TypeScript engineer and document automation specialist. Recreate this template faithfully while preserving layout, headers/footers, spacing, lists, tables, images, hyperlinks, and emphasis.\n\nOutput: ONLY TypeScript code that returns raw WordprocessingML (WML).\n\nExport exactly:\nexport async function generate(\n  toolkit: { json: (prompt: string) => Promise<any>; text: (prompt: string) => Promise<string>; query?: (prompt: string) => Promise<any>; getSkeleton?: (kind?: 'html'|'text') => Promise<string> },\n  builder: any,\n  context?: Record<string, any>\n): Promise<{ wml: string }>;\n\nHard requirements:\n- Return ONLY { wml } containing the inner <w:body> children (<w:p>, <w:tbl>, ...). Do NOT include <w:sectPr> or any package-level parts.\n- Mirror the TEMPLATE SKELETON (prefer HTML skeleton) for headings/order/grouping.\n- Apply formatting in WML: run properties (color, size, bold/italic/underline/strike, font) and paragraph properties (alignment, spacing, indents), table widths/styles, list/numbering with <w:numPr> matching template numbering.\n- Use STYLES, THEME, and NUMBERING XML excerpts to choose brand colors, fonts, and list styles. Convert theme colors to hex where needed.\n- Do NOT output HTML, Markdown, or a DOCX buffer. No external imports or file I/O.\n- Do NOT add any sections, paragraphs, tables, or content that are not present in the provided skeleton; if unsure, omit rather than invent.\n- Preserve styling exactly; do not change fonts, colors, sizes, spacing, numbering, or table properties beyond what the skeleton and excerpts imply.\n\nTEMPLATE ARTIFACTS (HTML skeleton + XML excerpts):\n${skeleton}`
+    stepOk('buildPrompt')
+
+    // AI request
+    stepStart('aiRequest')
+    try {
+      if (isCancelled(job.id)) { jobLog(job.id, 'cancelled'); send({ type: 'error', error: 'cancelled' }); return res.end() }
+      const chat = await anythingllmRequest<any>(`/workspace/${encodeURIComponent(String(wsSlug))}/chat`, 'POST', { message: prompt, mode: 'query' })
+      const text = String(chat?.textResponse || chat?.message || chat || '')
+      let code = text
+      const m = text.match(/```[a-z]*\s*([\s\S]*?)```/i)
+      if (m && m[1]) code = m[1]
+      code = code.trim()
+      stepOk('aiRequest')
+
+      // Write generator
+      stepStart('writeGenerator')
+      if (!code) { send({ type: 'error', error: 'No code returned' }); return res.end() }
+      fs.writeFileSync(path.join(dir,'generator.full.ts'), code, 'utf-8')
+      stepOk('writeGenerator')
+      markJobDone(job.id, { path: path.join(dir,'generator.full.ts'), name: 'generator.full.ts' }, { usedWorkspace: wsSlug })
+      return send({ type: 'done', file: { path: path.join(dir,'generator.full.ts'), name: 'generator.full.ts' }, usedWorkspace: wsSlug, jobId: job.id })
+    } catch (e:any) {
+      const msg = String(e?.message || e)
+      jobLog(job.id, `error:${msg}`)
+      markJobError(job.id, msg)
+      return send({ type: 'error', error: msg })
+    } finally {
+      return res.end()
+    }
+  } catch (e) {
+    res.writeHead(500, { 'Content-Type': 'text/event-stream' })
+    res.write(`data: ${JSON.stringify({ type: 'error', error: (e as Error).message })}\n\n`)
+    return res.end()
+  }
+})
+
+// Compile jobs list
+router.get("/compile/jobs", (_req, res) => {
+  try { return res.json({ jobs: listJobs(50) }) } catch (e:any) { return res.status(500).json({ error: String(e?.message || e) }) }
+})
+
+// Compile job details
+router.get("/compile/jobs/:id", (req, res) => {
+  try { const j = getJob(String(req.params.id)); if (!j) return res.status(404).json({ error: 'Not found' }); return res.json(j) } catch (e:any) { return res.status(500).json({ error: String(e?.message || e) }) }
+})
+
+// Cancel compile job
+router.post("/compile/jobs/:id/cancel", (req, res) => {
+  try { cancelJob(String(req.params.id)); return res.json({ ok: true }) } catch (e:any) { return res.status(500).json({ error: String(e?.message || e) }) }
 })
 
 // ---- Delete a template folder ----
@@ -505,3 +566,10 @@ router.delete("/:slug", async (req, res) => {
     return res.status(500).json({ error: (e as Error).message })
   }
 })
+
+
+
+
+
+
+

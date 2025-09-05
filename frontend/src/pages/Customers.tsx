@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "../components/ui/input";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "../components/ui/breadcrumb";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from "../components/ui/dialog";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, DialogDescription, DialogClose } from "../components/ui/dialog";
 import { Icon } from "../components/icons";
 import { A } from "../lib/api";
 import WorkspaceChat from "../components/WorkspaceChat";
@@ -40,6 +40,12 @@ export function CustomersPage() {
   const [loadingTemplates, setLoadingTemplates] = React.useState(false);
   const [selectedTemplate, setSelectedTemplate] = React.useState<string>("");
   const [generating, setGenerating] = React.useState(false);
+  const [genLogs, setGenLogs] = React.useState<string[] | null>(null);
+  const genEventRef = React.useRef<EventSource | null>(null);
+  const [genSteps, setGenSteps] = React.useState<Record<string, 'start'|'ok'|'error'>>({});
+  const [genProgress, setGenProgress] = React.useState<number | null>(null);
+  const [genJobId, setGenJobId] = React.useState<string | null>(null);
+  const [genError, setGenError] = React.useState<string | null>(null);
 
   React.useEffect(() => {
     let ignore = false;
@@ -189,19 +195,59 @@ export function CustomersPage() {
     if (!selectedTemplate) { toast.error("Choose a template"); return; }
     try {
       setGenerating(true);
-      const loadingId = (toast as any).loading ? (toast as any).loading("Generating document...") : undefined;
-      const r = await fetch(`/api/generate`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ customerId: selectedId, template: selectedTemplate }) });
-      const json = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(String(r.status));
-      // Force refresh uploads/documents list after generation
-      try {
-        const r2 = await fetch(`/api/uploads/${selectedId}`);
-        const d2: UploadItem[] = await r2.json();
-        setUploads(Array.isArray(d2) ? d2 : []);
-      } catch {}
-      if (loadingId && (toast as any).success) (toast as any).success("Document generated", { id: loadingId });
-      else toast.success("Document generated");
-      setGenerateOpen(false);
+      // Open logs modal immediately
+      setGenLogs([]);
+      setGenSteps({}); setGenProgress(0); setGenError(null);
+      const url = `/api/generate/stream?customerId=${encodeURIComponent(String(selectedId))}&template=${encodeURIComponent(String(selectedTemplate))}`
+      const es = new EventSource(url)
+      genEventRef.current = es
+      let fileName: string | null = null
+      es.onmessage = (ev) => {
+        try {
+          const data = JSON.parse(ev.data || '{}')
+          if (data?.type === 'log') {
+            setGenLogs((prev) => ([...(prev||[]), String(data.message||'')]))
+          } else if (data?.type === 'info') {
+            const extras: string[] = []
+            if (data.usedWorkspace) extras.push(`workspace:${String(data.usedWorkspace)}`)
+            if (extras.length) setGenLogs((prev) => ([...(prev||[]), ...extras]))
+            if (data.jobId) setGenJobId(String(data.jobId))
+          } else if (data?.type === 'step') {
+            const name = String(data.name || '')
+            const status = (String(data.status || 'start') as 'start'|'ok')
+            const p = typeof data.progress === 'number' ? Math.max(0, Math.min(100, Math.floor(data.progress))) : null
+            setGenSteps((prev) => ({ ...(prev||{}), [name]: status }))
+            if (p != null) setGenProgress(p)
+          } else if (data?.type === 'error') {
+            const errMsg = String(data.error||'unknown')
+            setGenLogs((prev) => ([...(prev||[]), `error:${errMsg}`]))
+            setGenError(errMsg)
+            setGenSteps((prev)=>{
+              const order = ['resolveCustomer','loadTemplate','resolveWorkspace','readGenerator','aiUpdate','transpile','execute','mergeWrite']
+              const next = { ...(prev||{}) } as Record<string,'start'|'ok'|'error'>
+              for (let i = order.length-1; i>=0; i--) { const s = order[i]; if (next[s]==='start') { next[s]='error'; break } }
+              return next
+            })
+            toast.error(`Generation failed: ${errMsg}`)
+            es.close(); genEventRef.current = null; setGenerating(false); setGenJobId(null)
+          } else if (data?.type === 'done') {
+            if (data?.file?.name) fileName = String(data.file.name)
+            setGenLogs((prev) => ([...(prev||[]), `done:${fileName || ''}`]))
+            setGenProgress(100)
+            es.close(); genEventRef.current = null; setGenerating(false); setGenJobId(null)
+            // Refresh uploads
+            (async () => { try { const r2 = await fetch(`/api/uploads/${selectedId}`); const d2: UploadItem[] = await r2.json(); setUploads(Array.isArray(d2) ? d2 : []) } catch {} })()
+            toast.success('Document generated')
+            setGenerateOpen(false)
+          }
+        } catch {}
+      }
+      es.onerror = () => {
+        setGenLogs((prev) => ([...(prev||[]), 'error:stream-connection']))
+        setGenError('Stream disconnected')
+        es.close(); genEventRef.current = null; setGenerating(false); setGenJobId(null)
+        toast.error('Stream disconnected')
+      }
     } catch (e) {
       toast.error("Generation failed");
     } finally { setGenerating(false) }
@@ -450,7 +496,7 @@ export function CustomersPage() {
                   </div>
                 </div>
               <div className="flex items-center gap-2">
-                <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
+                  <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
                   <DialogTrigger asChild>
                     <Button disabled={!selectedId}>
                       <Icon.Upload className="h-4 w-4 mr-2" />Upload
@@ -459,6 +505,9 @@ export function CustomersPage() {
                   <DialogContent>
                     <DialogHeader>
                       <DialogTitle>Upload Document</DialogTitle>
+                      <DialogDescription>
+                        Attach a file to this customer's workspace.
+                      </DialogDescription>
                     </DialogHeader>
                     <div className="space-y-3">
                       <div className="text-sm text-muted-foreground">Click the area below to attach a file, or drag and drop.</div>
@@ -506,6 +555,9 @@ export function CustomersPage() {
                   <DialogContent>
                     <DialogHeader>
                       <DialogTitle>Generate Document</DialogTitle>
+                      <DialogDescription>
+                        Generate a document using this customer's workspace and selected template.
+                      </DialogDescription>
                     </DialogHeader>
                     <div className="space-y-3">
                       <div className="text-sm text-muted-foreground">Choose a template to generate a document using this customer's knowledge.</div>
@@ -530,9 +582,26 @@ export function CustomersPage() {
                       </Button>
                     </DialogFooter>
                   </DialogContent>
-                </Dialog>
+                  </Dialog>
+                  <Dialog>
+                    <DialogTrigger asChild>
+                      <Button variant="outline">Recent Jobs</Button>
+                    </DialogTrigger>
+                    <DialogContent className="sm:max-w-5xl">
+                      <DialogHeader>
+                        <DialogTitle>Recent Generation Jobs</DialogTitle>
+                        <DialogDescription>View recent document generation runs and their logs.</DialogDescription>
+                      </DialogHeader>
+                      <RecentJobs selectedId={selectedId} />
+                      <DialogFooter>
+                        <DialogClose asChild>
+                          <Button variant="secondary">Close</Button>
+                        </DialogClose>
+                      </DialogFooter>
+                    </DialogContent>
+                  </Dialog>
+                </div>
               </div>
-            </div>
 
             <div className="flex-1 min-h-0 overflow-y-auto">
               {!selectedId ? (
@@ -585,8 +654,113 @@ export function CustomersPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Generation Logs */}
+      <Dialog open={!!genLogs} onOpenChange={(v)=>{ if(!v) { setGenLogs(null); setGenSteps({}); setGenProgress(null); setGenJobId(null); setGenError(null) } }}>
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Generation Logs</DialogTitle>
+            <DialogDescription>Live status from the generator.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            {genError ? (
+              <div className="border border-red-300 bg-red-50 text-red-800 rounded px-3 py-2 text-sm">{genError}</div>
+            ) : null}
+            <div>
+              {typeof genProgress === 'number' ? (
+                <div className="mb-2"><Progress value={genProgress} /></div>
+              ) : (
+                <div className="mb-2"><Progress indeterminate /></div>
+              )}
+              <div className="text-xs text-muted-foreground">{generating ? 'Running...' : (genProgress === 100 ? 'Completed' : (genError ? 'Failed' : 'Idle'))}</div>
+            </div>
+            <div className="border rounded-md bg-muted/30 px-3 py-2 h-40 overflow-auto text-sm">
+              <ul className="text-sm space-y-1">
+                {['resolveCustomer','loadTemplate','resolveWorkspace','readGenerator','aiUpdate','transpile','execute','mergeWrite'].map((s)=> (
+                  <li key={s} className="flex items-center gap-2">
+                    <span className="w-3 h-3 rounded-full inline-block" style={{ backgroundColor: genSteps[s]==='ok' ? '#16a34a' : (genSteps[s]==='start' ? '#f59e0b' : (genSteps[s]==='error' ? '#dc2626' : '#d4d4d8')) }} />
+                    <span className="capitalize">{s.replace(/([A-Z])/g,' $1')}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+            <div className="border rounded-md bg-muted/30 px-3 py-2 h-40 overflow-auto text-sm">
+              <pre className="whitespace-pre-wrap">{(genLogs||[]).join('\n')}</pre>
+            </div>
+          </div>
+          <DialogFooter>
+            {generating && genJobId ? (
+              <Button variant="destructive" onClick={async ()=>{ try { await fetch(`/api/generate/jobs/${encodeURIComponent(genJobId)}/cancel`, { method: 'POST' }); setGenLogs((prev)=>([...(prev||[]), 'cancel:requested'])) } catch {} }}>Cancel</Button>
+            ) : null}
+            {!generating && genError ? (
+              <Button variant="outline" onClick={() => { setGenLogs([]); setGenSteps({}); setGenProgress(0); setGenError(null); if (genEventRef.current) { try { genEventRef.current.close() } catch {} ; genEventRef.current = null }; generateDocument(); }}>Retry</Button>
+            ) : null}
+            <DialogClose asChild>
+              <Button variant="secondary" onClick={()=>setGenLogs(null)}>Close</Button>
+            </DialogClose>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
 
 export default CustomersPage;
+
+function RecentJobs({ selectedId }: { selectedId: number | null }) {
+  const [jobs, setJobs] = React.useState<Array<any>>([])
+  const [loading, setLoading] = React.useState(false)
+  const [active, setActive] = React.useState<any | null>(null)
+
+  React.useEffect(() => { let ignore=false; (async () => { try { setLoading(true); const r = await fetch('/api/generate/jobs'); const j = await r.json().catch(()=>({})); setJobs(Array.isArray(j?.jobs) ? j.jobs : []) } catch {} finally { if(!ignore) setLoading(false) } })(); return ()=>{ignore=true} }, [])
+
+  async function openJob(id: string) {
+    try { const r = await fetch(`/api/generate/jobs/${encodeURIComponent(id)}`); const j = await r.json().catch(()=>({})); if (!r.ok) throw new Error(String(r.status)); setActive(j) } catch { setActive(null) }
+  }
+
+  return (
+    <div className="grid grid-cols-12 gap-3">
+      <div className="col-span-12 md:col-span-6">
+        <div className="border rounded-md p-2 h-80 overflow-auto">
+          {loading ? 'Loading...' : (
+            <ul className="text-sm space-y-1">
+              {jobs.map((j: any) => (
+                <li key={j.id} className="flex items-center justify-between gap-2">
+                  <button className="text-left flex-1 truncate" onClick={() => openJob(j.id)}>
+                    <div className="font-medium truncate">{j.template} • {j.customerName || j.customerId}</div>
+                    <div className="text-xs text-muted-foreground truncate">{j.status} • {new Date(j.updatedAt).toLocaleString()} {j.file?.name ? `• ${j.file.name}` : ''}</div>
+                  </button>
+                  <span className={`text-xs ${j.status==='done'?'text-green-600':(j.status==='error'?'text-red-600':'text-amber-600')}`}>{j.status}</span>
+                </li>
+              ))}
+              {!jobs.length ? <li className="text-muted-foreground">No jobs yet.</li> : null}
+            </ul>
+          )}
+        </div>
+      </div>
+      <div className="col-span-12 md:col-span-6">
+        <div className="border rounded-md p-2 h-80 overflow-auto text-sm">
+          {!active ? (
+            <div className="text-muted-foreground">Select a job to view details.</div>
+          ) : (
+            <>
+              <div className="font-medium mb-1">Job {active.id}</div>
+              <div className="text-xs text-muted-foreground mb-2">{active.status} • {new Date(active.updatedAt).toLocaleString()}</div>
+              <div className="mb-2 text-xs">Workspace: {active.usedWorkspace || '-'}</div>
+              <div className="border rounded bg-muted/30 p-2 h-56 overflow-auto">
+                <pre className="whitespace-pre-wrap">{Array.isArray(active.logs) ? active.logs.join('\n') : ''}</pre>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+
+
+
+
+
+

@@ -215,3 +215,31 @@ export async function mergeDocxIntoDocxTemplate(templateDocx: Buffer, generatedD
     return generatedDocx
   }
 }
+
+// Merge raw WordprocessingML (w:p / w:tbl inner content) into a DOCX template's document.xml body,
+// preserving existing sectPr, styles, numbering, headers/footers, and relationships.
+export function mergeWmlIntoDocxTemplate(templateDocx: Buffer, innerWml: string): Buffer {
+  try {
+    const tZip = new PizZip(templateDocx)
+    const tXml = tZip.file('word/document.xml')?.asText() || ''
+    if (!tXml) return templateDocx
+    // sanitize: remove any sectPr provided by caller
+    let fragment = String(innerWml || '')
+    fragment = fragment.replace(/<w:sectPr[\s\S]*?<\/w:sectPr>/g, '')
+    // ensure only plausible body children to avoid corrupting doc
+    if (!/(<w:p|<w:tbl)/.test(fragment)) return templateDocx
+
+    const bodyOpen = tXml.match(/<w:body[^>]*>/)
+    if (!bodyOpen) return templateDocx
+    const startIdx = (bodyOpen.index || 0) + bodyOpen[0].length
+    const sectMatch = tXml.match(/<w:sectPr[\s\S]*?<\/w:sectPr>/)
+    const endIdx = sectMatch && sectMatch.index != null ? sectMatch.index : tXml.lastIndexOf('</w:body>')
+    if (endIdx <= startIdx) return templateDocx
+
+    const newXml = tXml.slice(0, startIdx) + fragment + tXml.slice(endIdx)
+    tZip.file('word/document.xml', newXml)
+    return tZip.generate({ type: 'nodebuffer' })
+  } catch {
+    return templateDocx
+  }
+}

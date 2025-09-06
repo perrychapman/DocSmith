@@ -2,6 +2,7 @@
 import { Router } from "express"
 import path from "path"
 import fs from "fs"
+import { spawn } from "child_process"
 import type { Request } from "express"
 import { getDB } from "../services/storage"
 import { ensureUploadsDir, resolveCustomerPaths } from "../services/customerLibrary"
@@ -74,6 +75,123 @@ router.get("/:customerId", (req, res) => {
           })
           .sort((a, b) => (a.modifiedAt < b.modifiedAt ? 1 : -1))
         return res.json(items)
+      } catch (e) {
+        return res.status(500).json({ error: (e as Error).message })
+      }
+    }
+  )
+})
+
+// GET /api/uploads/:customerId/file?name=FILENAME -> stream a file for viewing/downloading
+router.get("/:customerId/file", (req, res) => {
+  const id = Number(req.params.customerId)
+  const nameRaw = String(req.query.name || "")
+  const name = path.basename(nameRaw)
+  if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "Invalid customerId" })
+  if (!name) return res.status(400).json({ error: "Missing file name" })
+
+  const db = getDB()
+  db.get<CustomerRow>(
+    "SELECT id, name, workspaceSlug, createdAt FROM customers WHERE id = ?",
+    [id],
+    (err, row) => {
+      if (err) return res.status(500).json({ error: err.message })
+      if (!row) return res.status(404).json({ error: "Customer not found" })
+      try {
+        const { uploadsDir } = resolveCustomerPaths(row.id, row.name, new Date(row.createdAt))
+        fs.mkdirSync(uploadsDir, { recursive: true })
+        const target = path.join(uploadsDir, name)
+        const safeBase = path.resolve(uploadsDir)
+        const safeTarget = path.resolve(target)
+        if (!safeTarget.startsWith(safeBase)) return res.status(400).json({ error: "Invalid file path" })
+        if (!fs.existsSync(safeTarget)) return res.status(404).json({ error: "File not found" })
+        return res.sendFile(safeTarget)
+      } catch (e) {
+        return res.status(500).json({ error: (e as Error).message })
+      }
+    }
+  )
+})
+
+// GET /api/uploads/:customerId/browse -> simple HTML listing for the uploads folder
+router.get("/:customerId/browse", (req, res) => {
+  const id = Number(req.params.customerId)
+  if (!Number.isFinite(id) || id <= 0) return res.status(400).send("Invalid customerId")
+
+  const db = getDB()
+  db.get<CustomerRow>(
+    "SELECT id, name, workspaceSlug, createdAt FROM customers WHERE id = ?",
+    [id],
+    (_err, row) => {
+      if (!row) return res.status(404).send("Customer not found")
+      try {
+        const { uploadsDir } = resolveCustomerPaths(row.id, row.name, new Date(row.createdAt))
+        fs.mkdirSync(uploadsDir, { recursive: true })
+        const items = fs
+          .readdirSync(uploadsDir, { withFileTypes: true })
+          .filter((e) => e.isFile())
+          .map((e) => {
+            const full = path.join(uploadsDir, e.name)
+            const stat = fs.statSync(full)
+            return { name: e.name, size: stat.size, m: stat.mtime }
+          })
+          .sort((a, b) => (a.m < b.m ? 1 : -1))
+        const esc = (s: string) => String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+        const rows = items
+          .map((it) => {
+            const href = `/api/uploads/${encodeURIComponent(String(id))}/file?name=${encodeURIComponent(it.name)}`
+            const dt = new Date(it.m).toLocaleString()
+            const size = it.size
+            return `<tr><td style="padding:4px 8px"><a href="${href}" target="_blank" rel="noopener">${esc(it.name)}</a></td><td style="padding:4px 8px;text-align:right">${size}</td><td style=\"padding:4px 8px;color:#666\">${esc(dt)}</td></tr>`
+          })
+          .join("")
+        const html = `<!doctype html><html><head><meta charset="utf-8"><title>Uploads for ${esc(row.name)}</title>
+          <style>body{font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;line-height:1.4;padding:16px}table{border-collapse:collapse;width:100%;max-width:900px}th,td{border-bottom:1px solid #eee;font-size:14px}th{color:#555;text-align:left}</style>
+          </head><body>
+          <h2 style="margin:0 0 8px">Uploads for ${esc(row.name)}</h2>
+          <div style="margin:0 0 12px;color:#666">Customer ID: ${row.id}</div>
+          <table><thead><tr><th>Name</th><th style="text-align:right">Size</th><th>Modified</th></tr></thead><tbody>${rows || '<tr><td colspan="3" style="padding:8px;color:#666">No files</td></tr>'}</tbody></table>
+          </body></html>`
+        res.status(200).send(html)
+      } catch (e) {
+        res.status(500).send((e as Error).message)
+      }
+    }
+  )
+})
+
+// POST /api/uploads/:customerId/open-folder -> open the uploads folder in the host OS file explorer
+router.post("/:customerId/open-folder", (req, res) => {
+  const id = Number(req.params.customerId)
+  if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "Invalid customerId" })
+
+  const db = getDB()
+  db.get<CustomerRow>(
+    "SELECT id, name, workspaceSlug, createdAt FROM customers WHERE id = ?",
+    [id],
+    (_err, row) => {
+      if (!row) return res.status(404).json({ error: "Customer not found" })
+      try {
+        const { uploadsDir } = resolveCustomerPaths(row.id, row.name, new Date(row.createdAt))
+        fs.mkdirSync(uploadsDir, { recursive: true })
+
+        const platform = process.platform
+        let cmd: string
+        let args: string[]
+        if (platform === 'win32') {
+          cmd = 'explorer'
+          // explorer handles forward/back slashes; ensure proper quoting via args
+          args = [uploadsDir]
+        } else if (platform === 'darwin') {
+          cmd = 'open'
+          args = [uploadsDir]
+        } else {
+          cmd = 'xdg-open'
+          args = [uploadsDir]
+        }
+        const child = spawn(cmd, args, { detached: true, stdio: 'ignore' })
+        child.unref()
+        return res.json({ ok: true })
       } catch (e) {
         return res.status(500).json({ error: (e as Error).message })
       }

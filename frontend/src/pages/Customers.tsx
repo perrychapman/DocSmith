@@ -6,6 +6,8 @@ import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbP
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, DialogDescription, DialogClose } from "../components/ui/dialog";
 import { Icon } from "../components/icons";
+import { Maximize2, Minimize2, Search, ExternalLink, Download } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import { A } from "../lib/api";
 import WorkspaceChat from "../components/WorkspaceChat";
 import { toast } from "sonner";
@@ -46,6 +48,24 @@ export function CustomersPage() {
   const [genProgress, setGenProgress] = React.useState<number | null>(null);
   const [genJobId, setGenJobId] = React.useState<string | null>(null);
   const [genError, setGenError] = React.useState<string | null>(null);
+  const [panelMode, setPanelMode] = React.useState<'split'|'chat'|'docs'>('split');
+  const [docQuery, setDocQuery] = React.useState<string>("");
+  const rowsClass = panelMode === 'split'
+    ? 'grid grid-rows-[minmax(0,2fr)_minmax(0,1fr)]'
+    : (panelMode === 'chat'
+      ? 'grid grid-rows-[minmax(0,1fr)_minmax(0,0fr)]'
+      : 'grid grid-rows-[minmax(0,0fr)_minmax(0,1fr)]');
+
+  // Human-readable file size for document list
+  function formatBytes(bytes: number): string {
+    if (!Number.isFinite(bytes) || bytes < 0) return "-";
+    if (bytes < 1024) return `${bytes} B`;
+    const units = ["KB", "MB", "GB", "TB"];
+    let val = bytes / 1024;
+    let idx = 0;
+    while (val >= 1024 && idx < units.length - 1) { val /= 1024; idx++; }
+    return `${val.toFixed(val < 10 ? 1 : 0)} ${units[idx]}`;
+  }
 
   React.useEffect(() => {
     let ignore = false;
@@ -405,7 +425,7 @@ export function CustomersPage() {
           <div className="text-lg font-semibold">Add your first customer</div>
           <div className="text-sm text-muted-foreground">Create a customer to start chatting and uploading documents.</div>
           <div className="flex items-center gap-2 w-full max-w-md">
-            <Input placeholder="Customer name" value={name} onChange={(e) => setName(e.target.value)} />
+            <Input placeholder="Customer name" value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e)=>{ if (e.key==='Enter') add(); }} />
             <Button onClick={add}><Icon.Plus className="h-4 w-4 mr-2"/>Add</Button>
           </div>
         </Card>
@@ -419,7 +439,7 @@ export function CustomersPage() {
                 {/* Add form in panel */}
                 {customers.length > 0 && (
                   <div className="flex items-center gap-2">
-                    <Input placeholder="Customer name" value={name} onChange={(e) => setName(e.target.value)} />
+                    <Input placeholder="Customer name" value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e)=>{ if (e.key==='Enter') add(); }} />
                     <Button onClick={add}><Icon.Plus className="h-4 w-4 mr-2"/>Add</Button>
                   </div>
                 )}
@@ -455,7 +475,7 @@ export function CustomersPage() {
                             </div>
                           )}
                         </button>
-                        <Button size="sm" variant="destructive" onClick={() => startDelete(c)} title="Delete customer">
+                        <Button size="sm" variant="destructive" onClick={() => startDelete(c)} title="Delete customer" aria-label="Delete customer">
                           <Icon.Trash className="h-4 w-4" />
                         </Button>
                       </li>
@@ -469,39 +489,83 @@ export function CustomersPage() {
           </div>
         </div>
 
-        {/* Right: Chat on top, Documents below */}
-        <div className="col-span-12 md:col-span-8 grid grid-rows-[minmax(0,2fr)_minmax(0,1fr)] gap-2 h-[calc(100vh-160px)] min-h-0">
+        {/* Right: Chat and Documents with smooth expand/collapse */}
+        <div
+          className={`col-span-12 md:col-span-8 ${rowsClass} gap-2 h-[calc(100vh-160px)] min-h-0`}
+          style={{
+            transition: 'grid-template-rows 300ms ease',
+            gridTemplateRows: panelMode === 'split'
+              ? 'minmax(0,2fr) minmax(0,1fr)'
+              : (panelMode === 'chat'
+                ? 'minmax(0,1fr) minmax(0,0fr)'
+                : 'minmax(0,0fr) minmax(0,1fr)')
+          }}
+        >
           {/* AI Chat */}
-          {!selectedId ? (
+          <div className="h-full min-h-0 overflow-hidden transition-all duration-300 ease-in-out">
+          
+          {panelMode==='docs' ? null : (!selectedId ? (
             <Card className="p-4 text-sm text-muted-foreground h-full">Select a customer to open chat.</Card>
           ) : wsLoading ? (
             <Card className="p-4 text-sm text-muted-foreground h-full">Resolving workspace…</Card>
           ) : wsSlug ? (
-            <WorkspaceChat slug={wsSlug} className="h-full" />
+            <WorkspaceChat
+              slug={wsSlug}
+              className="h-full"
+              headerActions={(
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button size="icon" variant="ghost" onClick={() => setPanelMode(panelMode==='chat' ? 'split' : 'chat')} aria-label={panelMode==='chat' ? 'Collapse chat' : 'Expand chat'}>
+                      {panelMode==='chat' ? (<Minimize2 className="h-4 w-4" />) : (<Maximize2 className="h-4 w-4" />)}
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="left">{panelMode==='chat' ? 'Collapse chat' : 'Expand chat'}</TooltipContent>
+                </Tooltip>
+              )}
+            />
           ) : (
             <Card className="p-4 text-sm text-muted-foreground h-full">No workspace found for this customer.</Card>
-          )}
+          ))}
+          </div>
 
           {/* Documents */}
-          <Card className="p-4 h-full flex flex-col">
-              <div className="flex items-end justify-between gap-3 mb-3 shrink-0">
-                <div>
+          <Card className={`p-4 h-full flex flex-col overflow-hidden`}>
+              <div className="flex items-center gap-2 mb-3 shrink-0">
+                <div className="hidden">
                   <div className="font-medium">Documents</div>
                   <div className="text-xs text-muted-foreground">
                     {selectedId ? (
-                      <>For {customers.find((x) => x.id === selectedId)?.name || "selected customer"}</>
+                      <>
+                        <span>{uploads.length} document{uploads.length===1?'':'s'}</span>
+                        <span className="mx-1">•</span>
+                        <span>for {customers.find((x) => x.id === selectedId)?.name || 'selected customer'}</span>
+                      </>
                     ) : (
                       <>Select a customer to view documents</>
                     )}
                   </div>
                 </div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-1">
+                  <div className="relative flex-1">
+                    <Search className="h-4 w-4 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      placeholder="Search documents"
+                      value={docQuery}
+                      onChange={(e)=> setDocQuery(e.target.value)}
+                      className="w-full pl-8"
+                    />
+                  </div>
                   <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
-                  <DialogTrigger asChild>
-                    <Button disabled={!selectedId}>
-                      <Icon.Upload className="h-4 w-4 mr-2" />Upload
-                    </Button>
-                  </DialogTrigger>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <DialogTrigger asChild>
+                        <Button disabled={!selectedId} size="icon" variant="ghost" aria-label="Upload document">
+                          <Icon.Upload className="h-4 w-4" />
+                        </Button>
+                      </DialogTrigger>
+                    </TooltipTrigger>
+                    <TooltipContent side="left">Upload</TooltipContent>
+                  </Tooltip>
                   <DialogContent>
                     <DialogHeader>
                       <DialogTitle>Upload Document</DialogTitle>
@@ -540,18 +604,23 @@ export function CustomersPage() {
                     </div>
                     <DialogFooter>
                       <Button variant="secondary" onClick={() => setUploadOpen(false)} disabled={uploading}>Cancel</Button>
-                      <Button onClick={uploadFile} disabled={!selectedId || !file || uploading}>
+                      <Button onClick={uploadFile} disabled={!selectedId || !file || uploading} aria-label="Confirm upload">
                         {uploading ? "Uploading..." : (<><Icon.Upload className="h-4 w-4 mr-2"/>Upload</>)}
                       </Button>
                     </DialogFooter>
                   </DialogContent>
                 </Dialog>
                 <Dialog open={generateOpen} onOpenChange={setGenerateOpen}>
-                  <DialogTrigger asChild>
-                    <Button variant="secondary" disabled={!selectedId}>
-                      <Icon.Plus className="h-4 w-4 mr-2"/>Generate
-                    </Button>
-                  </DialogTrigger>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <DialogTrigger asChild>
+                        <Button size="icon" variant="ghost" disabled={!selectedId} aria-label="Generate document">
+                          <Icon.Plus className="h-4 w-4"/>
+                        </Button>
+                      </DialogTrigger>
+                    </TooltipTrigger>
+                    <TooltipContent side="left">Generate</TooltipContent>
+                  </Tooltip>
                   <DialogContent>
                     <DialogHeader>
                       <DialogTitle>Generate Document</DialogTitle>
@@ -577,16 +646,23 @@ export function CustomersPage() {
                     </div>
                     <DialogFooter>
                       <Button variant="secondary" onClick={() => setGenerateOpen(false)} disabled={generating}>Cancel</Button>
-                      <Button onClick={generateDocument} disabled={!selectedId || !selectedTemplate || generating}>
+                      <Button onClick={generateDocument} disabled={!selectedId || !selectedTemplate || generating} aria-label="Confirm generate">
                         {generating ? 'Generating...' : 'Generate'}
                       </Button>
                     </DialogFooter>
                   </DialogContent>
                   </Dialog>
                   <Dialog>
-                    <DialogTrigger asChild>
-                      <Button variant="outline">Recent Jobs</Button>
-                    </DialogTrigger>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <DialogTrigger asChild>
+                          <Button size="icon" variant="ghost" aria-label="Recent jobs">
+                            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 12a9 9 0 1 0 9-9"/><path d="M3 5v7h7"/></svg>
+                          </Button>
+                        </DialogTrigger>
+                      </TooltipTrigger>
+                      <TooltipContent side="left">Recent Jobs</TooltipContent>
+                    </Tooltip>
                     <DialogContent className="sm:max-w-5xl">
                       <DialogHeader>
                         <DialogTitle>Recent Generation Jobs</DialogTitle>
@@ -600,34 +676,88 @@ export function CustomersPage() {
                       </DialogFooter>
                     </DialogContent>
                   </Dialog>
+                  {/* Open uploads folder */}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        size="icon"
+                        variant="ghost"
+                        aria-label="Open uploads folder"
+                        disabled={!selectedId}
+                        onClick={async () => {
+                          if (!selectedId) return;
+                          try {
+                            const r = await fetch(`/api/uploads/${selectedId}/open-folder`, { method: 'POST' });
+                            if (!r.ok) throw new Error(String(r.status));
+                            toast.success?.('Opened folder');
+                          } catch {
+                            toast.error?.('Failed to open folder');
+                          }
+                        }}
+                      >
+                        <Icon.Folder className="h-4 w-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="left">Open Folder</TooltipContent>
+                  </Tooltip>
+                  {/* Expand/Collapse Documents - right most */}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button size="icon" variant="ghost" onClick={() => setPanelMode(panelMode==='docs' ? 'split' : 'docs')} aria-label={panelMode==='docs' ? 'Collapse documents' : 'Expand documents'}>
+                        {panelMode==='docs' ? (<Minimize2 className="h-4 w-4" />) : (<Maximize2 className="h-4 w-4" />)}
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="left">{panelMode==='docs' ? 'Collapse documents' : 'Expand documents'}</TooltipContent>
+                  </Tooltip>
                 </div>
               </div>
 
             <div className="flex-1 min-h-0 overflow-y-auto">
-              {!selectedId ? (
+          {!selectedId ? (
                 <div className="text-muted-foreground text-sm">Select a customer to view documents.</div>
               ) : loadingUploads ? (
                 <div className="text-muted-foreground text-sm">Loading documents.</div>
-              ) : uploads.length ? (
+              ) : (docQuery.trim() ? uploads.filter((u)=> u.name.toLowerCase().includes(docQuery.trim().toLowerCase())).length : uploads.length) ? (
                 <ul className="space-y-2">
-                  {uploads.map((u, idx) => (
+                  {(docQuery.trim() ? uploads.filter((u)=> u.name.toLowerCase().includes(docQuery.trim().toLowerCase())) : uploads).map((u, idx) => (
                     <li key={idx} className="border rounded-md px-3 py-2 flex items-center justify-between">
                       <div className="flex items-center gap-2">
                         <Icon.File className="h-4 w-4 text-muted-foreground" />
-                        <div className="font-medium">{u.name}</div>
-                        <div className="text-xs text-muted-foreground">{u.size} bytes</div>
+                        <a
+                          href={`/api/uploads/${selectedId}/file?name=${encodeURIComponent(u.name)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title={u.name}
+                          className="font-medium hover:underline truncate max-w-[40ch]"
+                        >
+                          {u.name}
+                        </a>
+                        <div className="text-xs text-muted-foreground">{formatBytes(u.size)}</div>
                       </div>
                       <div className="flex items-center gap-2">
-                        <div className="text-xs text-muted-foreground">{new Date(u.modifiedAt).toLocaleString()}</div>
-                        <Button size="sm" variant="destructive" disabled={uploading || deleting === u.name} onClick={() => deleteUpload(u.name)} title="Delete file">
-                          {deleting === u.name ? 'Deleting...' : <Icon.Trash className="h-4 w-4" />}
-                        </Button>
+                        <div className="text-xs text-muted-foreground mr-2">{new Date(u.modifiedAt).toLocaleString()}</div>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button size="icon" variant="ghost" aria-label={`Download ${u.name}`} onClick={() => { const a = document.createElement('a'); a.href = `/api/uploads/${selectedId}/file?name=${encodeURIComponent(u.name)}`; a.download = u.name; document.body.appendChild(a); a.click(); a.remove(); }}>
+                              <Download className="h-4 w-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent side="left">Download</TooltipContent>
+                        </Tooltip>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button size="icon" variant="destructive" disabled={uploading || deleting === u.name} onClick={() => deleteUpload(u.name)} aria-label={`Delete ${u.name}`}>
+                              {deleting === u.name ? '.' : <Icon.Trash className="h-4 w-4" />}
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent side="left">Delete</TooltipContent>
+                        </Tooltip>
                       </div>
                     </li>
                   ))}
                 </ul>
               ) : (
-                <div className="text-muted-foreground text-sm">No documents yet for this customer.</div>
+                <div className="text-muted-foreground text-sm">{docQuery.trim() ? 'No matching documents.' : 'No documents yet for this customer.'}</div>
               )}
             </div>
           </Card>
@@ -730,7 +860,7 @@ function RecentJobs({ selectedId }: { selectedId: number | null }) {
                     <div className="font-medium truncate">{j.template} • {j.customerName || j.customerId}</div>
                     <div className="text-xs text-muted-foreground truncate">{j.status} • {new Date(j.updatedAt).toLocaleString()} {j.file?.name ? `• ${j.file.name}` : ''}</div>
                   </button>
-                  <span className={`text-xs ${j.status==='done'?'text-green-600':(j.status==='error'?'text-red-600':'text-amber-600')}`}>{j.status}</span>
+                  <span className={`text-xs ${j.status === 'done' ? 'text-green-600' : (j.status === 'error' ? 'text-red-600' : 'text-amber-600')}`}>{j.status}</span>
                 </li>
               ))}
               {!jobs.length ? <li className="text-muted-foreground">No jobs yet.</li> : null}
@@ -757,10 +887,6 @@ function RecentJobs({ selectedId }: { selectedId: number | null }) {
     </div>
   )
 }
-
-
-
-
 
 
 

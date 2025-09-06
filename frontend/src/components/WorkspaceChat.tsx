@@ -12,9 +12,10 @@ type Props = {
   slug: string;
   title?: string;
   className?: string;
+  headerActions?: React.ReactNode;
 };
 
-export default function WorkspaceChat({ slug, title = "AI Chat", className }: Props) {
+export default function WorkspaceChat({ slug, title = "AI Chat", className, headerActions }: Props) {
   const [threads, setThreads] = React.useState<Thread[]>([]);
   const [threadSlug, setThreadSlug] = React.useState<string | undefined>(undefined);
   const [history, setHistory] = React.useState<any[]>([]);
@@ -132,9 +133,7 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className }: Pr
         <strong>{title}</strong>
         <div className="flex items-center gap-2">
           <div className="text-xs text-muted-foreground">{threadSlug ? 'Default thread' : 'Workspace chat'}</div>
-          <Button size="sm" variant="secondary" onClick={loadThreadsAndChats} title="Refresh">
-            <Icon.Refresh className="h-4 w-4" />
-          </Button>
+          {headerActions}
         </div>
       </div>
       <div className="relative flex-1 min-h-0 flex">

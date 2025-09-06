@@ -2,32 +2,32 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Modern dark theme - blue/black/grey */
+/* Light theme: white background, dark blue + grey */
 :root {
   /* Base surfaces */
-  --background: 220 15% 5%; /* near black */
-  --foreground: 210 40% 98%; /* near white */
-  --card: 220 16% 8%; /* dark grey */
-  --card-foreground: 210 40% 98%;
-  --popover: 220 16% 8%;
-  --popover-foreground: 210 40% 98%;
+  --background: 0 0% 100%; /* white */
+  --foreground: 222.2 47.4% 11.2%; /* near-black text */
+  --card: 0 0% 100%;
+  --card-foreground: 222.2 47.4% 11.2%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 222.2 47.4% 11.2%;
 
-  /* Brand accents */
-  --primary: 213 90% 56%; /* blue */
-  --primary-foreground: 210 40% 98%;
-  --accent: 213 90% 56%; /* blue (match primary) */
-  --accent-foreground: 210 40% 98%;
+  /* Brand accents (dark blue) */
+  --primary: 221 83% 45%; /* dark blue */
+  --primary-foreground: 0 0% 100%; /* white */
+  --accent: 221 89% 58%; /* blue (slightly lighter) */
+  --accent-foreground: 0 0% 100%;
 
-  /* UI accents */
-  --secondary: 220 14% 20%; /* grey */
-  --secondary-foreground: 210 40% 98%;
-  --muted: 220 12% 22%;
-  --muted-foreground: 215 20% 72%;
-  --destructive: 0 84% 62%;
-  --destructive-foreground: 210 40% 98%;
-  --border: 220 14% 20%;
-  --input: 220 14% 20%;
-  --ring: 213 90% 56%; /* match primary (blue) */
+  /* UI accents (greys) */
+  --secondary: 220 14% 96%; /* light grey surface */
+  --secondary-foreground: 222.2 47.4% 11.2%;
+  --muted: 210 40% 96%; /* subtle grey */
+  --muted-foreground: 215 16.3% 46.9%; /* mid grey text */
+  --destructive: 0 72% 51%;
+  --destructive-foreground: 0 0% 100%;
+  --border: 214.3 31.8% 91.4%; /* light grey border */
+  --input: 214.3 31.8% 91.4%;
+  --ring: 221 83% 45%; /* match primary (dark blue) */
 
   --radius: 0.6rem;
 }

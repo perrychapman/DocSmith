@@ -26,20 +26,23 @@ export default function App() {
   else if (hash === '#settings') content = <SettingsPage />;
   else content = <CustomersPage />;
 
+  const linkCls = (active: boolean) =>
+    "sidebar-link " + (active ? "is-active" : "");
+
   return (
-    <div className="grid grid-cols-[240px_1fr] h-screen">
-      <aside className="border-r p-4">
+    <div className="grid grid-cols-[240px_1fr] h-screen bg-background">
+      <aside className="app-sidebar border-r p-4">
         <div className="text-lg font-semibold tracking-tight">DocSmith</div>
         <nav className="mt-4 flex flex-col gap-1">
-          <a className={"px-3 py-2 rounded-md hover:bg-accent/40 transition " + (hash==="#customers"?"bg-accent text-accent-foreground":"text-muted-foreground")}
+          <a className={linkCls(hash==="#customers")}
              href="#customers">Customers</a>
-          <a className={"px-3 py-2 rounded-md hover:bg-accent/40 transition " + (hash.startsWith("#workspaces")?"bg-accent text-accent-foreground":"text-muted-foreground")}
+          <a className={linkCls(hash.startsWith("#workspaces"))}
              href="#workspaces">Workspaces</a>
-          <a className={"px-3 py-2 rounded-md hover:bg-accent/40 transition " + (hash==="#jobs"?"bg-accent text-accent-foreground":"text-muted-foreground")}
+          <a className={linkCls(hash==="#jobs")}
              href="#jobs">Jobs</a>
-          <a className={"px-3 py-2 rounded-md hover:bg-accent/40 transition " + (hash==="#templates"?"bg-accent text-accent-foreground":"text-muted-foreground")}
+          <a className={linkCls(hash==="#templates")}
              href="#templates">Templates</a>
-          <a className={"px-3 py-2 rounded-md hover:bg-accent/40 transition " + (hash==="#settings"?"bg-accent text-accent-foreground":"text-muted-foreground")}
+          <a className={linkCls(hash==="#settings")}
              href="#settings">Settings</a>
         </nav>
       </aside>

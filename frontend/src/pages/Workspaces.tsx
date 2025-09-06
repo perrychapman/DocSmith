@@ -161,7 +161,7 @@ export default function WorkspacesPage() {
                 <div className="flex items-center gap-2">
                   <Button size="sm" onClick={() => open(ws.slug)}><Icon.Folder className="h-4 w-4 mr-2" />Open</Button>
                   <Button size="sm" variant="ghost" onClick={() => startRename(ws.slug, ws.name)}><Icon.Pencil className="h-4 w-4 mr-2" />Rename</Button>
-                  <Button size="sm" variant="outline" onClick={() => startDelete(ws.slug, ws.name)}><Icon.Trash className="h-4 w-4 mr-2" />Delete</Button>
+                  <Button size="sm" variant="destructive" onClick={() => startDelete(ws.slug, ws.name)}><Icon.Trash className="h-4 w-4 mr-2" />Delete</Button>
                 </div>
               </div>
             ))}

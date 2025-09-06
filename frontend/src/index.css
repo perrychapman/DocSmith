@@ -2,10 +2,15 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Ensure Tailwind `border` utilities use theme border color */
+@layer base {
+  * { @apply border-border; }
+}
+
 /* Light theme: white background, dark blue + grey */
 :root {
   /* Base surfaces */
-  --background: 0 0% 100%; /* white */
+  --background: 210 20% 97%; /* slightly deeper page bg for contrast */
   --foreground: 222.2 47.4% 11.2%; /* near-black text */
   --card: 0 0% 100%;
   --card-foreground: 222.2 47.4% 11.2%;
@@ -19,17 +24,108 @@
   --accent-foreground: 0 0% 100%;
 
   /* UI accents (greys) */
-  --secondary: 220 14% 96%; /* light grey surface */
+  --secondary: 220 15% 92%; /* sidebar/panel surface (more contrast) */
   --secondary-foreground: 222.2 47.4% 11.2%;
-  --muted: 210 40% 96%; /* subtle grey */
-  --muted-foreground: 215 16.3% 46.9%; /* mid grey text */
+  --muted: 210 40% 93%; /* slightly deeper */
+  --muted-foreground: 215 16.3% 35%; /* darker grey text for readability */
   --destructive: 0 72% 51%;
   --destructive-foreground: 0 0% 100%;
-  --border: 214.3 31.8% 91.4%; /* light grey border */
-  --input: 214.3 31.8% 91.4%;
+  --border: 213 27% 80%; /* stronger border for separation */
+  --input: 213 27% 80%;
   --ring: 221 83% 45%; /* match primary (dark blue) */
 
   --radius: 0.6rem;
+}
+
+/* Status colors for richer button variants */
+:root {
+  --success: 142 72% 29%;
+  --success-foreground: 0 0% 100%;
+  --warning: 38 92% 50%;
+  --warning-foreground: 222.2 47.4% 11.2%;
+  --info: 199 89% 48%;
+  --info-foreground: 0 0% 100%;
+}
+
+/* Component styles: panels and sidebar links */
+@layer components {
+  /* Elevated panel with subtle 3D effect */
+  .panel-3d { 
+    @apply bg-card border border-border rounded-xl shadow-md;
+    box-shadow:
+      0 1px 3px hsl(0 0% 0% / 0.10),
+      0 12px 28px hsl(0 0% 0% / 0.12);
+  }
+  .dark .panel-3d {
+    box-shadow:
+      0 1px 2px hsl(0 0% 0% / 0.55),
+      0 10px 24px hsl(0 0% 0% / 0.45);
+  }
+  /* Keep static elevation; no hover lift */
+
+  /* Modern sidebar look */
+  .app-sidebar {
+    background: linear-gradient(180deg, hsl(var(--secondary)) 0%, hsl(var(--secondary) / 0.92) 100%);
+    @apply bg-secondary/80 backdrop-blur-sm;
+  }
+
+  .sidebar-link {
+    @apply relative rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors;
+  }
+  .sidebar-link:hover { @apply bg-accent/30 text-foreground; }
+  .sidebar-link.is-active { @apply bg-accent text-accent-foreground; }
+  .sidebar-link::before {
+    content: "";
+    position: absolute;
+    left: -8px;
+    top: 12%;
+    bottom: 12%;
+    width: 3px;
+    border-radius: 9999px;
+    background: transparent;
+    transform: scaleY(0.4);
+    transition: background-color 200ms ease, transform 200ms ease;
+  }
+  .sidebar-link:hover::before { background: hsl(var(--accent)); transform: scaleY(1); }
+  .sidebar-link.is-active::before { background: hsl(var(--primary)); transform: scaleY(1); }
+}
+
+/* Dark theme overrides (applied when .dark class is on html) */
+.dark {
+  /* Base surfaces */
+  --background: 220 15% 6%; /* near black */
+  --foreground: 210 40% 98%; /* near white */
+  --card: 220 15% 11%; /* distinct panel surface */
+  --card-foreground: 210 40% 98%;
+  --popover: 220 15% 11%;
+  --popover-foreground: 210 40% 98%;
+
+  /* Brand accents */
+  --primary: 213 90% 56%; /* blue */
+  --primary-foreground: 210 40% 98%;
+  --accent: 213 90% 56%; /* blue (match primary) */
+  --accent-foreground: 210 40% 98%;
+
+  /* UI accents */
+  --secondary: 220 14% 13%; /* sidebar/panel-tier surface */
+  --secondary-foreground: 210 40% 98%;
+  --muted: 220 12% 18%;
+  --muted-foreground: 215 20% 70%;
+  --destructive: 0 84% 62%;
+  --destructive-foreground: 210 40% 98%;
+  --border: 220 14% 22%;
+  --input: 220 14% 22%;
+  --ring: 213 90% 56%; /* match primary (blue) */
+
+  --radius: 0.6rem;
+
+  /* Status colors */
+  --success: 142 70% 40%;
+  --success-foreground: 210 40% 98%;
+  --warning: 48 96% 53%;
+  --warning-foreground: 222.2 47.4% 11.2%;
+  --info: 199 95% 62%;
+  --info-foreground: 210 40% 98%;
 }
 
 html, body, #root { height: 100%; }

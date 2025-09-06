@@ -4,8 +4,12 @@ import { Button } from "@/components/ui/button";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "../components/ui/breadcrumb";
 import { Icon } from "../components/icons";
 import { toast } from "sonner";
+import { useTheme } from "next-themes";
 
 export default function SettingsPage() {
+  const { theme, setTheme } = useTheme();
+  const [mounted, setMounted] = React.useState(false);
+  React.useEffect(() => setMounted(true), []);
   const [ping, setPing] = React.useState<string>("unknown");
   const [auth, setAuth] = React.useState<string>("unknown");
   const [loading, setLoading] = React.useState(false);
@@ -64,6 +68,22 @@ export default function SettingsPage() {
         </BreadcrumbList>
       </Breadcrumb>
       <h1 className="text-2xl font-semibold tracking-tight">Configuration</h1>
+      <Card className="p-4 space-y-3">
+        <div className="font-medium">Appearance</div>
+        <div className="text-sm text-muted-foreground">Choose your preferred theme. "System" follows your OS setting.</div>
+        <div>
+          <select
+            className="w-full border rounded-md h-9 px-2 bg-background"
+            value={mounted ? (theme ?? "system") : "system"}
+            onChange={(e) => setTheme(e.target.value as "light" | "dark" | "system")}
+          >
+            <option value="system">System</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+          </select>
+        </div>
+      </Card>
+
       <Card className="p-4 space-y-3">
         <div className="font-medium">AnythingLLM</div>
         <div className="text-sm">Ping: <span className={ping === 'ok' ? 'text-green-600' : 'text-muted-foreground'}>{ping}</span></div>

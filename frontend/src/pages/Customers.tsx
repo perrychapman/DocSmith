@@ -455,7 +455,7 @@ export function CustomersPage() {
                             </div>
                           )}
                         </button>
-                        <Button size="sm" variant="outline" onClick={() => startDelete(c)} title="Delete customer">
+                        <Button size="sm" variant="destructive" onClick={() => startDelete(c)} title="Delete customer">
                           <Icon.Trash className="h-4 w-4" />
                         </Button>
                       </li>
@@ -619,7 +619,7 @@ export function CustomersPage() {
                       </div>
                       <div className="flex items-center gap-2">
                         <div className="text-xs text-muted-foreground">{new Date(u.modifiedAt).toLocaleString()}</div>
-                        <Button size="sm" variant="outline" disabled={uploading || deleting === u.name} onClick={() => deleteUpload(u.name)} title="Delete file">
+                        <Button size="sm" variant="destructive" disabled={uploading || deleting === u.name} onClick={() => deleteUpload(u.name)} title="Delete file">
                           {deleting === u.name ? 'Deleting...' : <Icon.Trash className="h-4 w-4" />}
                         </Button>
                       </div>

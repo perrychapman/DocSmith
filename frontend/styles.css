@@ -13,6 +13,17 @@
   --border: #e5e7eb;            /* grey-200 */
 }
 
+/* Dark theme overrides for legacy styles */
+.dark {
+  --bg: #0f141a;
+  --panel: #151b23;
+  --muted: #8aa0b2;
+  --text: #e8eef4;
+  --accent: #4da3ff;
+  --accent-bg: rgba(77,163,255,0.12);
+  --border: #26303b;
+}
+
 * { box-sizing: border-box; }
 html, body, #app { height: 100%; }
 body {

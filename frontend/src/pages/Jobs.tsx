@@ -132,9 +132,9 @@ export default function JobsPage() {
               </SelectContent>
             </Select>
             <Input placeholder="Search template or customer" value={q} onChange={(e)=>setQ(e.target.value)} />
-            <Button variant="outline" className="ml-auto" onClick={()=> setClearOpen(true)}>Clear All</Button>
+            <Button variant="destructive" className="ml-auto" onClick={()=> setClearOpen(true)}>Clear All</Button>
           </div>
-          <div className="border rounded-md p-2 min-h-0 flex-1 overflow-hidden flex flex-col">
+          <div className="panel-3d p-2 min-h-0 flex-1 overflow-hidden flex flex-col">
             <ScrollArea className="flex-1 min-h-0">
               <ul className="text-sm space-y-1 pr-2">
                 {filtered.map(j => (
@@ -153,7 +153,7 @@ export default function JobsPage() {
         </div>
 
         <div className="col-span-12 md:col-span-8 grid grid-rows-[auto_minmax(0,1fr)_minmax(0,1fr)] gap-3 h-full min-h-0">
-          <div className="border rounded-md p-3 min-h-0 flex-1 overflow-hidden">
+          <div className="panel-3d p-3 min-h-0 flex-1 overflow-hidden">
             {!active ? (
               <div className="text-muted-foreground text-sm">Select a job to view details.</div>
             ) : (
@@ -165,13 +165,17 @@ export default function JobsPage() {
                   </div>
                   <div className="flex items-center gap-2">
                     {active.status==='running' ? (
-                      <a className="text-xs underline text-red-600" href="#" onClick={(e)=>{ e.preventDefault(); cancelActive(); }}>Cancel</a>
+                      <Button size="sm" variant="warning" onClick={(e)=>{ e.preventDefault(); cancelActive(); }}>Cancel</Button>
                     ) : null}
-                    <a className="text-xs underline text-destructive" href="#" onClick={(e)=>{ e.preventDefault(); setDeleteOpen(true) }}>Delete</a>
+                    <Button size="sm" variant="destructive" onClick={(e)=>{ e.preventDefault(); setDeleteOpen(true) }}>Delete</Button>
                     {active.file ? (
                       <>
-                        <a className="text-xs underline" href="#" onClick={async (e)=>{ e.preventDefault(); try { await fetch(`/api/generate/jobs/${encodeURIComponent(active.id)}/reveal`) } catch {} }} title={active.file.path}>Open Folder</a>
-                        <a className="text-xs underline" href={`/api/generate/jobs/${encodeURIComponent(active.id)}/file?download=true`}>Download</a>
+                        <Button asChild size="sm" variant="link">
+                          <a href="#" onClick={async (e)=>{ e.preventDefault(); try { await fetch(`/api/generate/jobs/${encodeURIComponent(active.id)}/reveal`) } catch {} }} title={active.file.path}>Open Folder</a>
+                        </Button>
+                        <Button asChild size="sm" variant="link">
+                          <a href={`/api/generate/jobs/${encodeURIComponent(active.id)}/file?download=true`}>Download</a>
+                        </Button>
                       </>
                     ) : null}
                   </div>

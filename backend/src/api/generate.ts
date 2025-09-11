@@ -6,7 +6,7 @@ import { getDB } from "../services/storage"
 import { renderTemplate, loadTemplate } from "../services/templateEngine"
 import { mergeHtmlIntoDocxTemplate } from "../services/docxCompose"
 import { ensureDocumentsDir, resolveCustomerPaths } from "../services/customerLibrary"
-import { libraryRoot } from "../services/fs"
+import { libraryRoot, safeFileName, displayNameFromSlug } from "../services/fs"
 import { anythingllmRequest } from "../services/anythingllm"
 import { createJob, createJobWithId, appendLog as jobLog, markJobDone, markJobError, setJobMeta, listJobs, getJob, stepStart as jobStepStart, stepOk as jobStepOk, cancelJob, isCancelled, initJobs, deleteJob, clearJobs } from "../services/genJobs"
 import child_process from 'child_process'
@@ -52,12 +52,8 @@ router.post("/", async (req, res) => {
         let usedWorkspace: string | undefined
         const logs: string[] = []
         try {
-          const metaPath = path.join(tpl.dir, 'template.json')
-          // Prefer customer's workspace over template's
+          // Prefer customer's workspace; do not rely on template.json
           let wsSlug: string | undefined = row.workspaceSlug ? String(row.workspaceSlug) : undefined
-          if (!wsSlug && fs.existsSync(metaPath)) {
-            try { const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8')); if (meta?.workspaceSlug) wsSlug = String(meta.workspaceSlug) } catch {}
-          }
           const fullGenPath = path.join(tpl.dir, 'generator.full.ts')
           // Require full generator for all outputs
           if (fs.existsSync(fullGenPath)) {
@@ -351,8 +347,16 @@ router.post("/", async (req, res) => {
                 const inner = String((result as any).wml || (result as any).bodyXml || '')
                 if (isCancelled(job.id)) { logAndPush('cancelled'); return res.status(499).json({ error: 'cancelled', jobId: job.id }) }
                 const merged = (await import('../services/docxCompose')).mergeWmlIntoDocxTemplate(fs.readFileSync((tpl as any).templatePath), inner)
-                const fnameLocal = (filename || (tpl as any).meta?.output?.filenamePattern || `${slug}-{{ts}}`).replace("{{ts}}", String(Date.now()))
+                // Default filename: {Customer}_{TemplateName}_{YYYYMMDD_HHmmss}
+                const dt = new Date()
+                const dtStr = `${dt.getFullYear()}${String(dt.getMonth()+1).padStart(2,'0')}${String(dt.getDate()).padStart(2,'0')}_${String(dt.getHours()).padStart(2,'0')}${String(dt.getMinutes()).padStart(2,'0')}${String(dt.getSeconds()).padStart(2,'0')}`
+                const templateName = safeFileName(String(displayNameFromSlug(String(slug))))
+                const customerName = safeFileName(String(row.name))
+                const defaultBase = `${customerName}_${templateName}_${dtStr}`
+                const baseName = filename || defaultBase
+                const fnameLocal = baseName
                 const outPathLocal = path.join(docsDir, fnameLocal + '.docx')
+                try { jobLog(job.id, `outfile:${path.basename(outPathLocal)}`) } catch {}
                 fs.writeFileSync(outPathLocal, merged)
                 markJobDone(job.id, { path: outPathLocal, name: path.basename(outPathLocal) }, { usedWorkspace })
                 return res.status(201).json({ ok: true, file: { path: outPathLocal, name: path.basename(outPathLocal) }, ...(usedWorkspace ? { usedWorkspace } : {}), logs: [...logs, 'fullgen:ok'], jobId: job.id })
@@ -379,6 +383,11 @@ router.post("/", async (req, res) => {
 
 export default router
 
+// Lightweight health + signature endpoint for troubleshooting runtime version
+router.get("/health", (_req, res) => {
+  try { return res.json({ ok: true, signature: 'naming-v2' }) } catch (e:any) { return res.status(500).json({ ok: false, error: String(e?.message || e) }) }
+})
+
 // Live log streaming via Server-Sent Events (SSE)
 router.get("/stream", async (req, res) => {
   try {
@@ -392,8 +401,10 @@ router.get("/stream", async (req, res) => {
       res.write(`data: ${JSON.stringify({ type: 'error', error: 'customerId and template are required' })}\n\n`)
       return res.end()
     }
-    res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' })
+    res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-DocSmith-Signature': 'naming-v2' })
     const send = (obj: any) => { try { res.write(`data: ${JSON.stringify(obj)}\n\n`) } catch {} }
+    // Identify server build for troubleshooting
+    try { send({ type: 'info', signature: 'naming-v2' }) } catch {}
     const log = (message: string) => send({ type: 'log', message })
     // Structured step reporting
     const totalSteps = 8
@@ -416,6 +427,8 @@ router.get("/stream", async (req, res) => {
     if (!tpl) { send({ type: 'error', error: 'Template not found' }); return res.end() }
     stepOk('loadTemplate')
     const docsDir = ensureDocumentsDir(row.id, row.name, new Date(row.createdAt))
+    // Inform client where the document will be stored (dir only)
+    try { send({ type: 'info', documentsDir: docsDir }) } catch {}
 
     try {
       const metaPath = path.join((tpl as any).dir, 'template.json')
@@ -456,7 +469,7 @@ router.get("/stream", async (req, res) => {
         logAndPush('ai-modified:start')
         stepStartRec('aiUpdate')
         try {
-          const aiPrompt = `You are a senior TypeScript engineer. Update the following DocSmith generator function to incorporate customer-specific data from THIS WORKSPACE. Keep the EXACT export signature. Compose the final output as raw WordprocessingML (WML) via return { wml }. Do not import external modules or do file I/O. Maintain formatting with runs (color/size/bold/italic/underline/strike/font) and paragraph props (align/spacing/indents).\n\nSTRICT CONSTRAINTS:\n- PRESERVE ALL EXISTING WML STRUCTURE AND STYLING from the CURRENT GENERATOR CODE: do not alter fonts, colors, sizes, spacing, numbering, table properties, headers/footers, or section settings.\n- ONLY substitute text content (and list/table cell values) with workspace-derived strings.\n- DO NOT add, remove, or reorder sections/paragraphs/tables/runs unless absolutely necessary. If no data is found, keep the section and leave values empty rather than inventing content.\n- No boilerplate or extra headings; do not add content beyond what the template structure implies.\n- IMPORTANT: At runtime, toolkit.json/query/text are DISABLED. Do not rely on them. Encode all workspace-informed content directly in the returned WML or via the provided context parameter.\n- Use minimal LLM calls (within this single update).\n\nOnly output TypeScript code with the updated generate implementation.\n\nCURRENT GENERATOR CODE:\n\n\`\`\`ts\n${tsCode}\n\`\`\``
+          const aiPrompt = `You are a senior TypeScript engineer. Update the following document generator function to incorporate customer-specific data from THIS WORKSPACE. Keep the EXACT export signature. Compose the final output as raw WordprocessingML (WML) via return { wml }. Do not import external modules or do file I/O. Maintain formatting with runs (color/size/bold/italic/underline/strike/font) and paragraph props (align/spacing/indents).\n\nSTRICT CONSTRAINTS:\n- PRESERVE ALL EXISTING WML STRUCTURE AND STYLING from the CURRENT GENERATOR CODE: do not alter fonts, colors, sizes, spacing, numbering, table properties, headers/footers, or section settings.\n- ONLY substitute text content (and list/table cell values) with workspace-derived strings.\n- DO NOT add, remove, or reorder sections/paragraphs/tables/runs unless absolutely necessary. If no data is found, keep the section and leave values empty rather than inventing content.\n- No boilerplate or extra headings; do not add content beyond what the template structure implies.\n- IMPORTANT: At runtime, toolkit.json/query/text are DISABLED. Do not rely on them. Encode all workspace-informed content directly in the returned WML or via the provided context parameter.\n- Use minimal LLM calls (within this single update).\n\nOnly output TypeScript code with the updated generate implementation.\n\nCURRENT GENERATOR CODE:\n\n\`\`\`ts\n${tsCode}\n\`\`\``
           const r = await anythingllmRequest<any>(`/workspace/${encodeURIComponent(wsForGen)}/chat`, 'POST', { message: aiPrompt, mode: 'query' })
           const t = String(r?.textResponse || r?.message || r || '')
           const m = t.match(/```[a-z]*\s*([\s\S]*?)```/i)
@@ -544,8 +557,18 @@ router.get("/stream", async (req, res) => {
       stepStartRec('mergeWrite')
       const merged = (await import('../services/docxCompose')).mergeWmlIntoDocxTemplate(fs.readFileSync((tpl as any).templatePath), inner)
       logAndPush('merge:ok')
-      const fnameLocal = (filename || (tpl as any).meta?.output?.filenamePattern || `${slug}-{{ts}}`).replace("{{ts}}", String(Date.now()))
+      // Default filename: {Customer}_{TemplateName}_{YYYYMMDD_HHmmss}
+      const dt2 = new Date()
+      const dtStr2 = `${dt2.getFullYear()}${String(dt2.getMonth()+1).padStart(2,'0')}${String(dt2.getDate()).padStart(2,'0')}_${String(dt2.getHours()).padStart(2,'0')}${String(dt2.getMinutes()).padStart(2,'0')}${String(dt2.getSeconds()).padStart(2,'0')}`
+      const templateName2 = safeFileName(String(displayNameFromSlug(String(slug))))
+      const customerName2 = safeFileName(String(row.name))
+      const defaultBase2 = `${customerName2}_${templateName2}_${dtStr2}`
+      const baseName2 = filename || defaultBase2
+      const fnameLocal = baseName2
+      // Emit SSE info with resolved names
+      try { send({ type: 'info', templateName: templateName2, customerName: customerName2, outfile: fnameLocal + '.docx' }) } catch {}
       const outPathLocal = path.join(docsDir, fnameLocal + '.docx')
+      try { jobLog(job.id, `outfile:${path.basename(outPathLocal)}`) } catch {}
       fs.writeFileSync(outPathLocal, merged)
       stepOkRec('mergeWrite')
       markJobDone(job.id, { path: outPathLocal, name: path.basename(outPathLocal) }, { usedWorkspace: wsForGen })

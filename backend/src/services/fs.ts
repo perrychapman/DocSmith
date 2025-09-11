@@ -21,6 +21,25 @@ export function safeSlug(input: string): string {
     .slice(0, 60) || "untitled"
 }
 
+// Safe filename for files (keeps alnum, space, dash, underscore, dot)
+// Replaces Windows-forbidden characters and trims trailing dots/spaces
+export function safeFileName(input: string): string {
+  let s = String(input || '').trim()
+  // Replace forbidden characters \\ / : * ? " < > |
+  s = s.replace(/[\\/:*?"<>|]+/g, '_')
+  // Collapse whitespace
+  s = s.replace(/\s+/g, ' ')
+  // Prevent names like '.' or '..'
+  if (/^\.+$/.test(s)) s = s.replace(/\./g, '_')
+  // Trim trailing dots/spaces (Windows)
+  s = s.replace(/[ .]+$/g, '')
+  // Fallback if empty
+  if (!s) s = 'untitled'
+  // Limit length
+  if (s.length > 120) s = s.slice(0, 120)
+  return s
+}
+
 // Folder name strategy: {CustomerName}_{Month_Year}
 // Example: "Acme Corp" + Aug 2025 → "Acme-Corp_Aug_2025"
 export function customerFolderName(id: number, name?: string, createdAt?: Date): string {
@@ -29,6 +48,16 @@ export function customerFolderName(id: number, name?: string, createdAt?: Date):
   const month = d.toLocaleString("en-US", { month: "short" }) // Jan, Feb, ... Aug
   const year = d.getFullYear()
   return `${safeName}_${month}_${year}`
+}
+
+// Human-friendly name from a slug or folder (e.g., "sailpoint-discovery-sessions" -> "Sailpoint Discovery Sessions")
+export function displayNameFromSlug(input: string): string {
+  const s = String(input || '')
+    .replace(/[._-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!s) return 'Untitled'
+  return s.replace(/\b\w/g, (c) => c.toUpperCase())
 }
 
 // ---------- Customer Paths ----------

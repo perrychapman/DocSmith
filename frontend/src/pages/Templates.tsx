@@ -7,30 +7,25 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "../components/ui/breadcrumb";
 import { Icon } from "../components/icons";
 import { Progress } from "../components/ui/progress";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import { toast } from "sonner";
 
-type TItem = { slug: string; name?: string; hasTemplate?: boolean; hasSource?: boolean; hasFullGen?: boolean; compiledAt?: string; workspaceSlug?: string; updatedAt?: string };
+type TItem = { slug: string; name?: string; dir?: string; hasTemplate?: boolean; hasDocx?: boolean; hasExcel?: boolean; hasSource?: boolean; hasFullGen?: boolean; compiledAt?: string; workspaceSlug?: string; updatedAt?: string; versionCount?: number };
 
 export default function TemplatesPage() {
   const [items, setItems] = React.useState<TItem[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [uploadOpen, setUploadOpen] = React.useState(false);
   const [file, setFile] = React.useState<File | null>(null);
+  const fileInputRef = React.useRef<HTMLInputElement | null>(null);
   const [name, setName] = React.useState("");
   const [slug, setSlug] = React.useState("");
   const [uploading, setUploading] = React.useState(false);
   const [compiling, setCompiling] = React.useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
   const [deleteSlug, setDeleteSlug] = React.useState<string | null>(null);
-  const [selected, setSelected] = React.useState<string | null>(null);
-  const [previewVariant, setPreviewVariant] = React.useState<'original'>('original');
-  const [previewText, setPreviewText] = React.useState("");
-  const [previewHtml, setPreviewHtml] = React.useState<string | null>(null);
-  const [previewLoading, setPreviewLoading] = React.useState(false);
-  const docxRef = React.useRef<HTMLDivElement | null>(null);
-  const [docxAb, setDocxAb] = React.useState<ArrayBuffer | null>(null);
-  const [inspecting, setInspecting] = React.useState(false);
-  const [controls, setControls] = React.useState<Array<{ tag?: string; alias?: string; type?: string }>>([]);
+  
   // cleaned: no separate code state; use modal
   const [codeModal, setCodeModal] = React.useState<{ title: string; code: string } | null>(null);
   const [compLogs, setCompLogs] = React.useState<string[] | null>(null);
@@ -38,6 +33,9 @@ export default function TemplatesPage() {
   const [compProgress, setCompProgress] = React.useState<number | null>(null);
   const [compJobId, setCompJobId] = React.useState<string | null>(null);
   const compEsRef = React.useRef<EventSource | null>(null);
+  const [q, setQ] = React.useState("");
+  const [typeFilter, setTypeFilter] = React.useState<string>("all"); // all|docx|excel|text
+  const [sortBy, setSortBy] = React.useState<string>("recent"); // recent|name
 
   async function load() {
     setLoading(true);
@@ -45,50 +43,13 @@ export default function TemplatesPage() {
       const r = await fetch(`/api/templates`);
       const j = await r.json();
       setItems(Array.isArray(j?.templates) ? j.templates : []);
-      // auto-select first template if none selected
-      if (!selected) {
-        const first = (Array.isArray(j?.templates) ? j.templates : [])[0]?.slug;
-        if (first) setSelected(first);
-      }
     } catch {
       setItems([]);
     } finally { setLoading(false) }
   }
   React.useEffect(() => { load(); }, []);
 
-  async function loadPreview(sl: string, variant: 'original'|'compiled') {
-    setPreviewLoading(true);
-    setPreviewText("");
-    setPreviewHtml(null);
-    try {
-      // Try docx binary preview first
-      const rDoc = await fetch(`/api/templates/${encodeURIComponent(sl)}/file?variant=${variant}`);
-      if (rDoc.ok && (rDoc.headers.get('content-type') || '').includes('application/vnd.openxmlformats-officedocument')) {
-        const ab = await rDoc.arrayBuffer();
-        setPreviewHtml('DOCX');
-        setDocxAb(ab);
-        return;
-      }
-      // Fallback to HTML/text preview
-      const r = await fetch(`/api/templates/${encodeURIComponent(sl)}/preview?variant=${variant}`);
-      const j = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(String(j?.error || r.status));
-      if (j?.html) setPreviewHtml(String(j.html));
-      else setPreviewText(String(j?.text || ''));
-    } catch (e:any) {
-      const msg = e?.message ? String(e.message) : 'Preview failed';
-      toast.error(msg);
-      setPreviewText('');
-    } finally { setPreviewLoading(false) }
-  }
-
-  React.useEffect(() => {
-    if (selected) loadPreview(selected, previewVariant);
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selected, previewVariant]);
-
-  // inspector removed
-  React.useEffect(() => {}, [selected]);
+  
 
   // Only Full Generator is supported now
 
@@ -102,6 +63,19 @@ export default function TemplatesPage() {
   }
 
   // Rebuild Full Generator removed; compile consolidates this flow
+
+  async function openFolder(sl: string) {
+    try {
+      const r = await fetch(`/api/templates/${encodeURIComponent(sl)}/reveal`);
+      if (!r.ok) throw new Error(String(r.status));
+      toast.success('Opened folder');
+    } catch { toast.error('Failed to open folder'); }
+  }
+
+  async function copyPath(p?: string) {
+    try { await navigator.clipboard.writeText(String(p||'')); toast.success('Path copied'); }
+    catch { toast.error('Copy failed'); }
+  }
 
   async function compile(sl: string) {
     try {
@@ -141,21 +115,21 @@ export default function TemplatesPage() {
     }
   }
 
-  // Render DOCX when buffer and container are ready
-  React.useEffect(() => {
-    (async () => {
-      if (previewHtml === 'DOCX' && docxAb && docxRef.current) {
-        try {
-          const mod = await import('docx-preview');
-          const renderAsync = (mod as any).renderAsync as (buf: ArrayBuffer, el: HTMLElement, opts?: any) => Promise<void>;
-          docxRef.current.innerHTML = '';
-          await renderAsync(docxAb, docxRef.current as any, { className: 'docx', inWrapper: true, ignoreFonts: true });
-        } catch {
-          // ignore; loadPreview fallback handles errors via toast
-        }
-      }
-    })();
-  }, [previewHtml, docxAb, selected, previewVariant]);
+  async function openFolder(sl: string) {
+    try {
+      const r = await fetch(`/api/templates/${encodeURIComponent(sl)}/reveal`, { method: 'POST' });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(String(j?.error || r.status));
+      toast.success('Opened folder');
+    } catch (e:any) { toast.error(e?.message || 'Failed to open folder'); }
+  }
+
+  async function copyPath(p?: string) {
+    try { await navigator.clipboard.writeText(String(p||'')); toast.success('Path copied'); }
+    catch { toast.error('Copy failed'); }
+  }
+
+  // Removed DOCX client-side rendering; server returns HTML for DOCX previews
 
   async function doUpload() {
     if (!file) { toast.error("Choose a file"); return; }
@@ -205,9 +179,7 @@ export default function TemplatesPage() {
     }
   }
 
-  function selectTemplate(sl: string) {
-    setSelected(sl);
-  }
+  
 
   return (
     <div className="space-y-6 animate-in fade-in-0 slide-in-from-top-2">
@@ -238,8 +210,31 @@ export default function TemplatesPage() {
               <div className="space-y-3">
                 <Input placeholder="Display name (optional)" value={name} onChange={(e) => setName(e.target.value)} />
                 <Input placeholder="Slug (optional)" value={slug} onChange={(e) => setSlug(e.target.value)} />
-                <input type="file" onChange={(e) => setFile(e.target.files?.[0] || null)} />
-                <div className="text-xs text-muted-foreground">Supported: Markdown (.md), HTML (.html), Text (.txt). Compile to Handlebars with AI after upload.</div>
+                <div className="text-sm text-muted-foreground">Click the area below to attach a file, or drag and drop.</div>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  className="hidden"
+                  disabled={uploading}
+                  onChange={(e) => setFile(e.target.files?.[0] || null)}
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                  onDrop={(e) => {
+                    e.preventDefault(); e.stopPropagation();
+                    const f = (e as any).dataTransfer?.files?.[0] as File | undefined;
+                    if (f) setFile(f);
+                  }}
+                  disabled={uploading}
+                  className="w-full rounded-md border border-dashed p-6 text-center hover:bg-accent/40 transition flex flex-col items-center justify-center text-muted-foreground"
+                >
+                  <Icon.Upload className="h-6 w-6 mb-1" />
+                  <div className="font-medium">{file ? 'Change selected file' : 'Click to select a file'}</div>
+                  <div className="text-xs mt-1 max-w-full truncate">{file ? file.name : 'or drag and drop here'}</div>
+                </button>
+                <div className="text-xs text-muted-foreground">Supported: Markdown (.md), HTML (.html), Text (.txt), Word (.docx), Excel (.xlsx). Compile to Handlebars with AI after upload.</div>
               </div>
               <DialogFooter>
                 <Button variant="secondary" onClick={() => setUploadOpen(false)} disabled={uploading}>Cancel</Button>
@@ -252,89 +247,117 @@ export default function TemplatesPage() {
       </div>
 
       <div className="grid grid-cols-12 gap-4 min-h-0">
-        {/* Left list */}
-        <div className="col-span-12 md:col-span-4 lg:col-span-4">
+        {/* Cards list full width */}
+        <div className="col-span-12">
           <Card className="p-4 h-[calc(100vh-220px)] overflow-y-auto">
             {loading ? (
-              <div className="text-sm text-muted-foreground">Loading templates.</div>
+              <div className="text-sm text-muted-foreground">Loading templates…</div>
             ) : items.length ? (
-              <div className="space-y-2">
-                {items.map((t) => (
-                  <div key={t.slug} className={`rounded-md border bg-card/50 hover:bg-accent/10 transition px-3 py-3 ${selected===t.slug ? 'ring-1 ring-ring' : ''}`}>
-                    <button className="text-left w-full" onClick={() => selectTemplate(t.slug)}>
-                      <div className="font-medium">{t.name || t.slug}</div>
-                      <div className="text-xs text-muted-foreground">{t.hasFullGen ? 'Compiled' : 'Not compiled'}{t.compiledAt ? ` • ${new Date(t.compiledAt).toLocaleString()}` : ''}</div>
-                      <div className="text-xs text-muted-foreground">{t.slug} • {t.hasTemplate ? 'Compiled' : 'Uploaded'}{t.hasFullGen ? ' • FullGen' : ''}{t.workspaceSlug ? ` • WS ${t.workspaceSlug}` : ''}{t.updatedAt ? ` • ${new Date(t.updatedAt).toLocaleString()}` : ''}</div>
-                    </button>
-                    <div className="mt-2 flex items-center gap-2">
-                      <Button size="sm" variant="outline" onClick={() => compile(t.slug)} disabled={compiling === t.slug}>
-                        {compiling === t.slug ? 'Compiling...' : (t.hasFullGen ? 'Recompile' : 'Compile')}
-                      </Button>
+              <>
+                <div className="flex items-center gap-2 mb-2">
+                  <Input placeholder="Search templates" value={q} onChange={(e)=>setQ(e.target.value)} className="w-[260px]" />
+                  <Select value={typeFilter} onValueChange={setTypeFilter}>
+                    <SelectTrigger className="w-[160px]"><SelectValue placeholder="Type" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All types</SelectItem>
+                      <SelectItem value="docx">Word (DOCX)</SelectItem>
+                      <SelectItem value="excel">Excel (XLSX)</SelectItem>
+                      <SelectItem value="text">Text/HTML/MD</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Select value={sortBy} onValueChange={setSortBy}>
+                    <SelectTrigger className="w-[180px]"><SelectValue placeholder="Sort by" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="recent">Recently modified</SelectItem>
+                      <SelectItem value="name">Name (A–Z)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                {items
+                  .filter((t)=> !q || (t.name||t.slug).toLowerCase().includes(q.toLowerCase()) || t.slug.toLowerCase().includes(q.toLowerCase()))
+                  .filter((t)=> typeFilter==='all' ? true : (typeFilter==='docx' ? !!t.hasDocx : (typeFilter==='excel' ? !!(t as any).hasExcel : !t.hasDocx && !((t as any).hasExcel))))
+                  .sort((a,b)=> sortBy==='name' ? String(a.name||a.slug).localeCompare(String(b.name||b.slug)) : (new Date(b.updatedAt||0).getTime() - new Date(a.updatedAt||0).getTime()))
+                  .map((t) => (
+                  <div key={t.slug} className="rounded-md border bg-card/50 transition px-4 py-3">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="font-medium">{t.name || t.slug}</div>
+                        <div className="text-xs text-muted-foreground">{t.slug}</div>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <span className={`text-xs px-2 py-0.5 rounded border ${t.hasFullGen ? 'bg-green-50 text-green-700 border-green-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>{t.hasFullGen ? 'Compiled' : 'Not compiled'}</span>
+                          </TooltipTrigger>
+                          <TooltipContent>{t.hasFullGen ? 'Template has a generated FullGen script' : 'Template has not been compiled yet'}</TooltipContent>
+                        </Tooltip>
+                        <span className="text-xs px-2 py-0.5 rounded border">{t.hasDocx ? 'Word' : (t.hasExcel ? 'Excel' : 'Text')}</span>
+                      </div>
+                    </div>
+                    <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
+                      <div>
+                        <div className="text-muted-foreground">Workspace</div>
+                        <div>{t.workspaceSlug || '—'}</div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground">Compiled</div>
+                        <div>{t.compiledAt ? new Date(t.compiledAt).toLocaleString() : '—'}</div>
+                      </div>
+                      <div>
+                        <div className="text-muted-foreground">Updated</div>
+                        <div>{t.updatedAt ? new Date(t.updatedAt).toLocaleString() : '—'}</div>
+                      </div>
+                    </div>
+                    <div className="mt-2 flex items-center gap-2 flex-wrap justify-end">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button size="icon" variant="ghost" aria-label="Open folder" title="Open Folder" onClick={async ()=>{
+                            try {
+                              const r = await fetch(`/api/templates/${encodeURIComponent(t.slug)}/open-folder`, { method: 'POST' });
+                              if (!r.ok) throw new Error(String(r.status));
+                              toast.success('Opened folder');
+                            } catch { toast.error('Failed to open folder') }
+                          }}>
+                            <Icon.Folder className="h-4 w-4" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Open Folder</TooltipContent>
+                      </Tooltip>
+                      {/* Update action removed */}
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button size="icon" variant="ghost" aria-label="Compile" title={compiling === t.slug ? 'Compiling' : (t.hasFullGen ? 'Recompile' : 'Compile')} onClick={() => compile(t.slug)} disabled={compiling === t.slug}>
+                            <Icon.Refresh className="h-4 w-4" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>{compiling === t.slug ? 'Compiling' : (t.hasFullGen ? 'Recompile' : 'Compile')}</TooltipContent>
+                      </Tooltip>
                       {t.hasFullGen ? (
-                        <button className="text-xs underline text-muted-foreground" onClick={() => viewFullGen(t.slug)}>View FullGen</button>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button size="icon" variant="ghost" aria-label="View FullGen" title="View FullGen" onClick={() => viewFullGen(t.slug)}>
+                              <Icon.File className="h-4 w-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>View FullGen</TooltipContent>
+                        </Tooltip>
                       ) : null}
-                      <Button size="sm" variant="destructive" onClick={() => startDelete(t.slug)}>Delete</Button>
+                      <Button size="icon" variant="destructive" aria-label="Delete" title="Delete" onClick={() => startDelete(t.slug)}>
+                        <Icon.Trash className="h-4 w-4" />
+                      </Button>
                     </div>
                   </div>
                 ))}
               </div>
+              </>
             ) : (
               <div className="text-sm text-muted-foreground">No templates yet. Upload one to get started.</div>
             )}
           </Card>
         </div>
 
-        {/* Right preview */}
-        <div className="col-span-12 md:col-span-8 lg:col-span-8">
-          <Card className="p-4 h-[calc(100vh-220px)] flex flex-col">
-            {!selected ? (
-              <div className="text-sm text-muted-foreground">Select a template to preview.</div>
-            ) : (
-              <>
-                <div className="flex items-center justify-between gap-2 mb-3">
-                  <div className="font-medium truncate">{items.find(i=>i.slug===selected)?.name || selected}</div>
-                  <div className="relative inline-flex bg-muted rounded-full p-1">
-                    <div className={`absolute inset-y-1 left-1 w-full rounded-full bg-background shadow`}></div>
-                    <button className={`relative z-10 w-48 text-center text-sm py-1 rounded-full`}>Original</button>
-                  </div>
-                </div>
-                <div className="border rounded-md bg-muted/30 text-sm overflow-auto flex-1">
-                  {previewLoading ? 'Loading preview...' : (
-                    previewHtml === 'DOCX' ? (
-                      <div className="w-full h-full overflow-auto">
-                        <div className="mx-auto my-6 bg-white text-foreground shadow-sm" style={{ width: '816px', padding: '96px' }}>
-                          <div ref={docxRef} className="docx" />
-                        </div>
-                      </div>
-                    ) : previewHtml != null ? (
-                      <div className="w-full h-full overflow-auto">
-                        <div className="mx-auto my-6 bg-white text-foreground shadow-sm" style={{ width: '816px', padding: '96px' }}>
-                          <div className="prose max-w-none" dangerouslySetInnerHTML={{ __html: previewHtml }} />
-                        </div>
-                      </div>
-                    ) : (
-                      <pre className="whitespace-pre-wrap px-3 py-2">{previewText || 'No content'}</pre>
-                    )
-                  )}
-                </div>
-                <div className="mt-3 grid grid-cols-12 gap-3">
-                  <div className="col-span-12">
-                    <div className="text-sm font-medium mb-1">Actions</div>
-                    <div className="border rounded-md p-3 bg-card/50 flex flex-col gap-2">
-                      <div className="flex gap-2 flex-wrap">
-                        <Button size="sm" variant="outline" onClick={() => viewFullGen(selected!)}>View Full Generator</Button>
-                      </div>
-                      {/* Rebuild Full Generator action removed */}
-                    </div>
-                    {compiling ? (
-                      <div className="w-full mt-2"><Progress value={compProgress||0} /></div>
-                    ) : null}
-                  </div>
-                </div>
-              </>
-            )}
-          </Card>
-        </div>
+        {/* Right preview removed: cards are full width */}
       </div>
 
       {/* Delete Template Confirm */}
@@ -363,8 +386,8 @@ export default function TemplatesPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Compile Logs */}
-      <Dialog open={!!compLogs} onOpenChange={(v)=>{ if(!v){ setCompLogs(null); setCompSteps({}); setCompProgress(null); setCompJobId(null); if (compEsRef.current) { compEsRef.current.close(); compEsRef.current = null } } }}>
+  {/* Compile Logs */}
+  <Dialog open={!!compLogs} onOpenChange={(v)=>{ if(!v){ setCompLogs(null); setCompSteps({}); setCompProgress(null); setCompJobId(null); if (compEsRef.current) { compEsRef.current.close(); compEsRef.current = null } } }}>
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>Compile Logs</DialogTitle>
@@ -402,8 +425,8 @@ export default function TemplatesPage() {
             </DialogClose>
           </DialogFooter>
         </DialogContent>
-      </Dialog>
-
+  </Dialog>
     </div>
   );
 }
+

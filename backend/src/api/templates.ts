@@ -35,6 +35,9 @@ router.get("/", (_req, res) => {
           const dir = path.join(TEMPLATES_ROOT, slug)
           const hasHbs = fs.existsSync(path.join(dir, "template.hbs"))
           const hasDocx = fs.existsSync(path.join(dir, "template.docx"))
+          const hasExcel = fs.existsSync(path.join(dir, "template.xlsx"))
+          // Versioning disabled
+          const versionCount = 0
           let hasSource = false
           try { hasSource = !!(fs.readdirSync(dir).find((n) => /^source\./i.test(n))) } catch {}
           const hasScript = false
@@ -49,6 +52,7 @@ router.get("/", (_req, res) => {
           } catch {}
           let updatedAt = new Date().toISOString()
           try { updatedAt = fs.statSync(dir).mtime.toISOString() } catch {}
+          // Prefer friendly name derived from slug when template.json is absent
           let name: string | undefined
           let workspaceSlug: string | undefined
           try {
@@ -59,9 +63,10 @@ router.get("/", (_req, res) => {
               workspaceSlug = meta?.workspaceSlug
             }
           } catch {}
-          return { slug, name: name || slug, hasTemplate: (hasHbs || hasDocx), hasSource, hasScript, hasHelperTs, hasFullGen, compiledAt, workspaceSlug, updatedAt }
+          const friendly = require('../services/fs').displayNameFromSlug(slug)
+          return { slug, name: (name || friendly || slug), hasTemplate: (hasHbs || hasDocx || hasExcel), hasDocx, hasExcel, hasSource, hasScript, hasHelperTs, hasFullGen, compiledAt, workspaceSlug, updatedAt, dir, versionCount }
         } catch {
-          return { slug: d.name, name: d.name, hasTemplate: false, hasSource: false, hasScript: false, hasHelperTs: false, hasFullGen: false, updatedAt: new Date().toISOString() }
+          return { slug: d.name, name: d.name, hasTemplate: false, hasDocx: false, hasExcel: false, hasSource: false, hasScript: false, hasHelperTs: false, hasFullGen: false, updatedAt: new Date().toISOString(), dir: path.join(TEMPLATES_ROOT, d.name), versionCount: 0 }
         }
       })
     return res.json({ templates: items })
@@ -201,6 +206,103 @@ router.get("/:slug/preview", async (req, res) => {
   }
 })
 
+// Generate a PDF preview locally (no third-party upload)
+// GET /api/templates/:slug/preview.pdf?variant=original
+router.get("/:slug/preview.pdf", async (req, res) => {
+  const slug = String(req.params.slug)
+  const variant = String(req.query.variant || 'original').toLowerCase()
+  try {
+    const dir = path.join(TEMPLATES_ROOT, slug)
+    if (!fs.existsSync(dir)) return res.status(404).json({ error: 'Template not found' })
+
+    const docxPath = path.join(dir, 'template.docx')
+    const srcName = (fs.readdirSync(dir).find((n) => /^source\./i.test(n)) || '')
+    const srcPath = srcName ? path.join(dir, srcName) : ''
+    const tmplHbsPath = path.join(dir, 'template.hbs')
+    const suggestedPath = path.join(dir, 'suggested.hbs')
+
+    // Resolve HTML for preview (prefer DOCX->HTML, else suggested/compiled HBS, else source)
+    let html = ''
+    async function docxToHtml(bufOrPath: string | Buffer): Promise<string> {
+      if (typeof bufOrPath === 'string') {
+        const buffer = fs.readFileSync(bufOrPath)
+        const result = await mammoth.convertToHtml({ buffer }, { includeDefaultStyleMap: true })
+        return String(result?.value || '')
+      } else {
+        const result = await mammoth.convertToHtml({ buffer: bufOrPath }, { includeDefaultStyleMap: true })
+        return String(result?.value || '')
+      }
+    }
+
+    if (fs.existsSync(docxPath)) {
+      html = await docxToHtml(docxPath)
+    } else {
+      const hbsFile = fs.existsSync(suggestedPath) ? suggestedPath : (fs.existsSync(tmplHbsPath) ? tmplHbsPath : '')
+      if (hbsFile) {
+        const body = fs.readFileSync(hbsFile, 'utf-8')
+        const compiled = Handlebars.compile(body)
+        const rendered = compiled({})
+        html = /<html|<body|<div|<p|<h[1-6]|<table|<span/i.test(rendered) ? rendered : `<pre>${rendered}</pre>`
+      } else if (srcPath) {
+        const ext = path.extname(srcPath).toLowerCase()
+        const raw = fs.readFileSync(srcPath, 'utf-8')
+        if (ext === '.md' || ext === '.markdown') {
+          // Lazy import marked to avoid ESM/CJS friction
+          const { marked } = await import('marked') as any
+          html = String(marked.parse(raw))
+        } else if (ext === '.html' || ext === '.htm') {
+          html = raw
+        } else {
+          html = `<pre>${raw.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</pre>`
+        }
+      }
+    }
+
+    // Wrap HTML in a printable document (basic margins/typography)
+    const htmlDoc = `<!doctype html>
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <style>
+            @page { margin: 0.5in; }
+            body { font-family: Arial, Helvetica, sans-serif; color: #111; }
+            h1,h2,h3,h4,h5,h6 { page-break-after: avoid; }
+            table { border-collapse: collapse; width: 100%; }
+            table, th, td { border: 1px solid #ddd; }
+            th, td { padding: 4px 6px; }
+            pre { white-space: pre-wrap; font-family: Consolas, Monaco, monospace; }
+          </style>
+        </head>
+        <body>${html || ''}</body>
+      </html>`
+
+    // Render to PDF via Puppeteer (local, no network)
+    const puppeteer = await import('puppeteer') as any
+    // Use a headless mode compatible in many environments
+    const browser = await (puppeteer as any).launch({
+      headless: true,
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    })
+    try {
+      const page = await browser.newPage()
+      await page.setContent(htmlDoc, { waitUntil: 'load' })
+      const pdf: Buffer = await page.pdf({
+        printBackground: true,
+        format: 'letter',
+        margin: { top: '0.5in', right: '0.5in', bottom: '0.5in', left: '0.5in' }
+      })
+      res.setHeader('Content-Type', 'application/pdf')
+      res.setHeader('Cache-Control', 'no-store')
+      res.setHeader('Content-Disposition', `inline; filename="${slug}.preview.pdf"`)
+      return res.send(pdf)
+    } finally {
+      await browser.close().catch(()=>{})
+    }
+  } catch (e) {
+    return res.status(500).json({ error: (e as Error).message })
+  }
+})
+
 // Serve DOCX file (original or compiled-empty)
 router.get("/:slug/file", async (req, res) => {
   const slug = String(req.params.slug)
@@ -256,15 +358,20 @@ router.post("/upload", (req, res) => {
       fs.mkdirSync(dir, { recursive: true })
       const ext = (path.extname(f.filename) || ".txt").toLowerCase()
       const isDocx = ext === ".docx"
-      const target = path.join(dir, isDocx ? `template.docx` : `source${ext}`)
+      const isExcel = ext === ".xlsx"
+      const target = path.join(dir, isDocx ? `template.docx` : (isExcel ? `template.xlsx` : `source${ext}`))
       fs.renameSync(f.path, target)
       // Write/merge template.json
       const metaPath = path.join(dir, 'template.json')
       let meta: any = {}
       try { if (fs.existsSync(metaPath)) meta = JSON.parse(fs.readFileSync(metaPath,'utf-8')) } catch {}
       const name = String((req.body?.name || meta?.name || providedSlug)).trim()
-      const fmt = isDocx ? 'docx' : (ext === '.html' ? 'html' : (ext === '.md' || ext === '.markdown' ? 'md' : 'txt'))
-      meta = { ...meta, name, output: { format: fmt, filenamePattern: (meta?.output?.filenamePattern || `${providedSlug}-{{ts}}`) } }
+      const fmt = isDocx ? 'docx' : (isExcel ? 'excel' : (ext === '.html' ? 'html' : (ext === '.md' || ext === '.markdown' ? 'md' : 'txt')))
+      // Do not set a default filenamePattern here; backend will apply
+      // a global default of {Customer}_{TemplateName}_{YYYYMMDD_HHmmss}.
+      // Preserve any existing explicit pattern only.
+      const existingPattern = (meta?.output?.filenamePattern ? String(meta.output.filenamePattern) : undefined)
+      meta = { ...meta, name, output: { format: fmt, ...(existingPattern ? { filenamePattern: existingPattern } : {}) } }
       fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2), 'utf-8')
 
       // Ensure AnythingLLM workspace and upload template file to it
@@ -514,6 +621,260 @@ router.get("/:slug/compile/stream", async (req, res) => {
   }
 })
 
+// Open the template folder on the server machine (local UX)
+router.post("/:slug/open", async (req, res) => {
+  try {
+    const slug = String(req.params.slug)
+    const dir = path.join(TEMPLATES_ROOT, slug)
+    if (!fs.existsSync(dir)) return res.status(404).json({ error: 'Template not found' })
+    const platform = process.platform
+    const { execFile } = await import('child_process')
+    const openCmd = platform === 'win32' ? 'explorer' : (platform === 'darwin' ? 'open' : 'xdg-open')
+    execFile(openCmd, [dir], { windowsHide: true }, (err) => {
+      if (err) return res.status(500).json({ error: String(err.message || err) })
+      return res.json({ ok: true })
+    })
+  } catch (e) { return res.status(500).json({ error: (e as Error).message }) }
+})
+
+// Alias for consistency with Jobs page
+router.post("/:slug/reveal", async (req, res) => {
+  try {
+    const slug = String(req.params.slug)
+    const dir = path.join(TEMPLATES_ROOT, slug)
+    if (!fs.existsSync(dir)) return res.status(404).json({ error: 'Template not found' })
+    const platform = process.platform
+    const { execFile } = await import('child_process')
+    const openCmd = platform === 'win32' ? 'explorer' : (platform === 'darwin' ? 'open' : 'xdg-open')
+    execFile(openCmd, [dir], { windowsHide: true }, (err) => {
+      if (err) return res.status(500).json({ error: String(err.message || err) })
+      return res.json({ ok: true })
+    })
+  } catch (e) { return res.status(500).json({ error: (e as Error).message }) }
+})
+
+// GET alias for reveal to match frontend fetch
+router.get("/:slug/reveal", async (req, res) => {
+  try {
+    const slug = String(req.params.slug)
+    const dir = path.join(TEMPLATES_ROOT, slug)
+    if (!fs.existsSync(dir)) return res.status(404).json({ error: 'Template not found' })
+    const platform = process.platform
+    const { execFile } = await import('child_process')
+    const openCmd = platform === 'win32' ? 'explorer' : (platform === 'darwin' ? 'open' : 'xdg-open')
+    execFile(openCmd, [dir], { windowsHide: true }, (err) => {
+      if (err) return res.status(500).json({ error: String(err.message || err) })
+      return res.json({ ok: true })
+    })
+  } catch (e) { return res.status(500).json({ error: (e as Error).message }) }
+})
+
+// Match Customers page convention: POST /api/templates/:slug/open-folder
+router.post("/:slug/open-folder", async (req, res) => {
+  try {
+    const slug = String(req.params.slug)
+    const dir = path.join(TEMPLATES_ROOT, slug)
+    if (!fs.existsSync(dir)) return res.status(404).json({ error: 'Template not found' })
+    const platform = process.platform
+    const { spawn } = await import('child_process')
+    let cmd = ''
+    let args: string[] = []
+    if (platform === 'win32') { cmd = 'explorer'; args = [dir] }
+    else if (platform === 'darwin') { cmd = 'open'; args = [dir] }
+    else { cmd = 'xdg-open'; args = [dir] }
+    try {
+      const child = spawn(cmd, args, { detached: true, stdio: 'ignore' })
+      child.unref()
+      return res.json({ ok: true })
+    } catch (e) {
+      return res.status(500).json({ error: (e as Error).message })
+    }
+  } catch (e) { return res.status(500).json({ error: (e as Error).message }) }
+})
+
+// Alternative path shape to avoid any routing edge cases
+router.post("/reveal/:slug", async (req, res) => {
+  try {
+    const slug = String(req.params.slug)
+    const dir = path.join(TEMPLATES_ROOT, slug)
+    if (!fs.existsSync(dir)) return res.status(404).json({ error: 'Template not found' })
+    const platform = process.platform
+    const { execFile } = await import('child_process')
+    const openCmd = platform === 'win32' ? 'explorer' : (platform === 'darwin' ? 'open' : 'xdg-open')
+    execFile(openCmd, [dir], { windowsHide: true }, (err) => {
+      if (err) return res.status(500).json({ error: String(err.message || err) })
+      return res.json({ ok: true })
+    })
+  } catch (e) { return res.status(500).json({ error: (e as Error).message }) }
+})
+
+router.get("/reveal/:slug", async (req, res) => {
+  try {
+    const slug = String(req.params.slug)
+    const dir = path.join(TEMPLATES_ROOT, slug)
+    if (!fs.existsSync(dir)) return res.status(404).json({ error: 'Template not found' })
+    const platform = process.platform
+    const { execFile } = await import('child_process')
+    const openCmd = platform === 'win32' ? 'explorer' : (platform === 'darwin' ? 'open' : 'xdg-open')
+    execFile(openCmd, [dir], { windowsHide: true }, (err) => {
+      if (err) return res.status(500).json({ error: String(err.message || err) })
+      return res.json({ ok: true })
+    })
+  } catch (e) { return res.status(500).json({ error: (e as Error).message }) }
+})
+
+// Generate a PDF preview locally (no third-party upload)
+// GET /api/templates/:slug/preview.pdf?variant=original
+router.get("/:slug/preview.pdf", async (req, res) => {
+  const slug = String(req.params.slug)
+  const variant = String(req.query.variant || 'original').toLowerCase()
+  try {
+    const dir = path.join(TEMPLATES_ROOT, slug)
+    if (!fs.existsSync(dir)) return res.status(404).json({ error: 'Template not found' })
+
+    const docxPath = path.join(dir, 'template.docx')
+    const srcName = (fs.readdirSync(dir).find((n) => /^source\./i.test(n)) || '')
+    const srcPath = srcName ? path.join(dir, srcName) : ''
+    const tmplHbsPath = path.join(dir, 'template.hbs')
+    const suggestedPath = path.join(dir, 'suggested.hbs')
+
+    // DOCX: Pure-JS conversion using Mammoth -> HTML, then render to PDF via Puppeteer
+    if (fs.existsSync(docxPath)) {
+      const buffer = fs.readFileSync(docxPath)
+      // Extract page size, margins, and default font to improve fidelity
+      let pageCss = "@page { size: 8.5in 11in; margin: 0.75in; }"
+      let bodyFontCss = "body { font-family: 'Times New Roman', Georgia, serif; font-size: 12pt; color: #111; }"
+      try {
+        const zip = new (PizZip as any)(buffer)
+        const docXml = zip.file('word/document.xml')?.asText() || ''
+        const stylesXml = zip.file('word/styles.xml')?.asText() || ''
+        // Page size and margins from sectPr
+        const sectMatch = docXml.match(/<w:sectPr[\s\S]*?<\/w:sectPr>/)
+        if (sectMatch) {
+          const sect = sectMatch[0]
+          const pgSz = sect.match(/<w:pgSz[^>]*?\/>/)
+          const pgMar = sect.match(/<w:pgMar[^>]*?\/>/)
+          const twip = (v: string | undefined) => {
+            const n = v ? parseInt(v, 10) : NaN
+            return isFinite(n) ? (n / 1440) : NaN // twips to inches
+          }
+          let wIn = 8.5, hIn = 11
+          if (pgSz) {
+            const w = /w:w=\"(\d+)\"/.exec(pgSz[0])?.[1]
+            const h = /w:h=\"(\d+)\"/.exec(pgSz[0])?.[1]
+            const orient = /w:orient=\"([^\"]+)\"/.exec(pgSz[0])?.[1]
+            const wi = twip(w)
+            const hi = twip(h)
+            if (isFinite(wi) && isFinite(hi)) { wIn = wi; hIn = hi }
+            if (orient === 'landscape' && wIn < hIn) { const t = wIn; wIn = hIn; hIn = t }
+          }
+          let mt = 0.75, mr = 0.75, mb = 0.75, ml = 0.75
+          if (pgMar) {
+            const top = /w:top=\"(\d+)\"/.exec(pgMar[0])?.[1]
+            const right = /w:right=\"(\d+)\"/.exec(pgMar[0])?.[1]
+            const bottom = /w:bottom=\"(\d+)\"/.exec(pgMar[0])?.[1]
+            const left = /w:left=\"(\d+)\"/.exec(pgMar[0])?.[1]
+            const ti = twip(top), ri = twip(right), bi = twip(bottom), li = twip(left)
+            mt = isFinite(ti) ? ti : mt
+            mr = isFinite(ri) ? ri : mr
+            mb = isFinite(bi) ? bi : mb
+            ml = isFinite(li) ? li : ml
+          }
+          pageCss = `@page { size: ${wIn.toFixed(2)}in ${hIn.toFixed(2)}in; margin: ${mt.toFixed(2)}in ${mr.toFixed(2)}in ${mb.toFixed(2)}in ${ml.toFixed(2)}in; }`
+        }
+        // Default font from styles
+        const rFonts = /<w:rPrDefault>[\s\S]*?<w:rFonts[^>]*\/>/.exec(stylesXml)?.[0] || ''
+        const fontAscii = /w:ascii=\"([^\"]+)\"/.exec(rFonts)?.[1]
+        const fontSzVal = /<w:sz[^>]*w:val=\"(\d+)\"/.exec(stylesXml)?.[1]
+        const fontSzPt = fontSzVal ? (parseInt(fontSzVal, 10) / 2) : 12
+        if (fontAscii) {
+          bodyFontCss = `body { font-family: '${fontAscii}', 'Times New Roman', Georgia, serif; font-size: ${fontSzPt}pt; color: #111; }`
+        } else {
+          bodyFontCss = `body { font-family: 'Times New Roman', Georgia, serif; font-size: ${fontSzPt}pt; color: #111; }`
+        }
+      } catch {}
+      const result = await (mammoth as any).convertToHtml({ buffer }, {
+        includeDefaultStyleMap: true,
+        styleMap: [
+          "p[style-name='Title'] => h1:fresh",
+          "p[style-name='Subtitle'] => h2:fresh",
+          "p[style-name='Heading 1'] => h1:fresh",
+          "p[style-name='Heading 2'] => h2:fresh",
+          "p[style-name='Heading 3'] => h3:fresh",
+          "p[style-name='Heading 4'] => h4:fresh",
+          "p[style-name='Heading 5'] => h5:fresh",
+          "p[style-name='Heading 6'] => h6:fresh"
+        ],
+        convertImage: (mammoth as any).images?.inline?.(async (element: any) => {
+          const image = await element.read('base64')
+          const contentType = element.contentType
+          return { src: `data:${contentType};base64,${image}` }
+        })
+      })
+      const html = String(result?.value || '')
+      const htmlDoc = `<!doctype html><html><head><meta charset=\"utf-8\" />
+        <style>
+          ${pageCss}
+          ${bodyFontCss}
+          h1 { font-size: 20pt; margin: 0.3in 0 0.15in; }
+          h2 { font-size: 16pt; margin: 0.25in 0 0.12in; }
+          h3 { font-size: 14pt; margin: 0.2in 0 0.1in; }
+          p { margin: 0.08in 0; line-height: 1.3; }
+          img { max-width: 100%; }
+        </style>
+      </head><body>${html}</body></html>`
+      const puppeteer = await import('puppeteer') as any
+      const browser = await (puppeteer as any).launch({ headless: true, args: ['--no-sandbox','--disable-setuid-sandbox'] })
+      try {
+        const page = await browser.newPage()
+        await page.setContent(htmlDoc, { waitUntil: 'load' })
+        const pdf: Buffer = await page.pdf({ printBackground: true, format: 'letter', margin: { top: '0.75in', right: '0.75in', bottom: '0.75in', left: '0.75in' } })
+        res.setHeader('Content-Type', 'application/pdf')
+        res.setHeader('Cache-Control', 'no-store')
+        res.setHeader('Content-Disposition', `inline; filename="${slug}.preview.pdf"`)
+        return res.send(pdf)
+      } finally { await browser.close().catch(()=>{}) }
+    }
+
+    // Non-DOCX: build PDF via Puppeteer (markdown/html/txt)
+    let html = ''
+    if (fs.existsSync(suggestedPath) || fs.existsSync(tmplHbsPath)) {
+      const hbsFile = fs.existsSync(suggestedPath) ? suggestedPath : tmplHbsPath
+      const body = fs.readFileSync(hbsFile, 'utf-8')
+      const compiled = Handlebars.compile(body)
+      const rendered = compiled({})
+      html = /<html|<body|<div|<p|<h[1-6]|<table|<span/i.test(rendered) ? rendered : `<pre>${rendered}</pre>`
+    } else if (srcPath) {
+      const ext = path.extname(srcPath).toLowerCase()
+      const raw = fs.readFileSync(srcPath, 'utf-8')
+      if (ext === '.md' || ext === '.markdown') {
+        const { marked } = await import('marked') as any
+        html = String(marked.parse(raw))
+      } else if (ext === '.html' || ext === '.htm') {
+        html = raw
+      } else {
+        html = `<pre>${raw.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</pre>`
+      }
+    } else {
+      html = '<div style="color:#666">No previewable content</div>'
+    }
+    const wrap = `<!doctype html><html><head><meta charset=\"utf-8\" /><style>@page{margin:0.5in}body{font-family:Arial,Helvetica,sans-serif;color:#111}</style></head><body>${html}</body></html>`
+    const puppeteer = await import('puppeteer') as any
+    const browser = await (puppeteer as any).launch({ headless: true, args: ['--no-sandbox','--disable-setuid-sandbox'] })
+    try {
+      const page = await browser.newPage()
+      await page.setContent(wrap, { waitUntil: 'load' })
+      const pdf: Buffer = await page.pdf({ printBackground: true, format: 'letter', margin: { top: '0.5in', right: '0.5in', bottom: '0.5in', left: '0.5in' } })
+      res.setHeader('Content-Type', 'application/pdf')
+      res.setHeader('Cache-Control', 'no-store')
+      res.setHeader('Content-Disposition', `inline; filename="${slug}.preview.pdf"`)
+      return res.send(pdf)
+    } finally { await browser.close().catch(()=>{}) }
+  } catch (e) {
+    return res.status(500).json({ error: (e as Error).message })
+  }
+})
+
 // Compile jobs list
 router.get("/compile/jobs", (_req, res) => {
   try { return res.json({ jobs: listJobs(50) }) } catch (e:any) { return res.status(500).json({ error: String(e?.message || e) }) }
@@ -566,10 +927,4 @@ router.delete("/:slug", async (req, res) => {
     return res.status(500).json({ error: (e as Error).message })
   }
 })
-
-
-
-
-
-
-
+// Versioning routes removed; single upload endpoint above handles both new and replacement uploads without version history.

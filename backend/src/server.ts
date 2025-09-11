@@ -35,9 +35,21 @@ app.use((req, res, next) => {
   next();
 });
 
+// Identify this runtime across all API responses
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api')) {
+    res.setHeader('X-DocSmith-Signature', 'naming-v2');
+  }
+  next();
+});
+
 // --- Health check routes ---
 app.get("/healthz", (_req, res) => {
-  res.json({ ok: true });
+  res.json({ ok: true, signature: 'naming-v2' });
+});
+// Explicit API health for proxy checks
+app.get("/api/health", (_req, res) => {
+  res.json({ ok: true, signature: 'naming-v2' });
 });
 
 // --- Static UI ---

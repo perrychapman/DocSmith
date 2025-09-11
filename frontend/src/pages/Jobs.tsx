@@ -1,12 +1,15 @@
 import * as React from "react";
 import { Separator } from "../components/ui/separator";
 import { Button } from "../components/ui/Button";
+import { Badge } from "../components/ui/badge";
 import { Card } from "../components/ui/card";
 import { Input } from "../components/ui/input";
 import { ScrollArea } from "../components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "../components/ui/breadcrumb";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
+import { Icon } from "../components/icons";
+import { toast } from "sonner";
 
 type Job = {
   id: string;
@@ -32,10 +35,9 @@ export default function JobsPage() {
   const [active, setActive] = React.useState<Job | null>(null);
   const [statusFilter, setStatusFilter] = React.useState<string>('');
   const [q, setQ] = React.useState('');
-  // Auto-refresh is always on; no UI toggle
   const [error, setError] = React.useState<string | null>(null);
-  const [clearOpen, setClearOpen] = React.useState(false)
-  const [deleteOpen, setDeleteOpen] = React.useState(false)
+  const [clearOpen, setClearOpen] = React.useState(false);
+  const [deleteOpen, setDeleteOpen] = React.useState(false);
 
   async function loadJobs() {
     try {
@@ -67,7 +69,6 @@ export default function JobsPage() {
   }
 
   React.useEffect(() => { loadJobs(); }, []);
-  // Periodically refresh both list and the active job details
   React.useEffect(() => {
     const t = setInterval(() => {
       loadJobs();
@@ -90,7 +91,82 @@ export default function JobsPage() {
     (!q || (j.template?.toLowerCase().includes(q.toLowerCase()) || String(j.customerName||j.customerId).toLowerCase().includes(q.toLowerCase())))
   );
 
+  const isCompileJob = (j: Job) => {
+    return j.customerId === 0 || String(j.customerName||'').toLowerCase() === 'template' || String(j.file?.name||'') === 'generator.full.ts'
+  }
+  const statusLabel = (s: Job['status']) => (s === 'done' ? 'Completed' : (s.charAt(0).toUpperCase() + s.slice(1)))
+  const statusBadge = (s: Job['status']) => {
+    const label = statusLabel(s)
+    if (s === 'running') {
+      return (
+        <Badge variant="outline" className="shrink-0 border-warning text-warning bg-warning/10 flex items-center gap-1">
+          <Icon.Refresh className="h-3.5 w-3.5 animate-spin" /> {label}
+        </Badge>
+      )
+    }
+    if (s === 'done') {
+      return (
+        <Badge variant="outline" className="shrink-0 border-success text-success bg-success/10 flex items-center gap-1">
+          <Icon.Check className="h-3.5 w-3.5" /> {label}
+        </Badge>
+      )
+    }
+    if (s === 'cancelled') {
+      return (
+        <Badge variant="outline" className="shrink-0 border-muted-foreground text-muted-foreground bg-muted/10 flex items-center gap-1">
+          <Icon.Stop className="h-3.5 w-3.5" /> {label}
+        </Badge>
+      )
+    }
+    return (
+      <Badge variant="outline" className="shrink-0 border-destructive text-destructive bg-destructive/10 flex items-center gap-1">
+        <Icon.X className="h-3.5 w-3.5" /> {label}
+      </Badge>
+    )
+  }
+
+  const statusBadgeIcon = (s: Job['status']) => {
+    const label = statusLabel(s)
+    if (s === 'running') {
+      return (
+        <Badge variant="outline" aria-label={label} title={label} className="shrink-0 h-6 w-6 p-0 grid place-items-center border-warning text-warning bg-warning/10">
+          <Icon.Refresh className="h-3.5 w-3.5 animate-spin" />
+        </Badge>
+      )
+    }
+    if (s === 'done') {
+      return (
+        <Badge variant="outline" aria-label={label} title={label} className="shrink-0 h-6 w-6 p-0 grid place-items-center border-success text-success bg-success/10">
+          <Icon.Check className="h-3.5 w-3.5" />
+        </Badge>
+      )
+    }
+    if (s === 'cancelled') {
+      return (
+        <Badge variant="outline" aria-label={label} title={label} className="shrink-0 h-6 w-6 p-0 grid place-items-center border-muted-foreground text-muted-foreground bg-muted/10">
+          <Icon.Stop className="h-3.5 w-3.5" />
+        </Badge>
+      )
+    }
+    return (
+      <Badge variant="outline" aria-label={label} title={label} className="shrink-0 h-6 w-6 p-0 grid place-items-center border-destructive text-destructive bg-destructive/10">
+        <Icon.X className="h-3.5 w-3.5" />
+      </Badge>
+    )
+  }
+
   const cancelActive = async () => { if (!activeId) return; try { await fetch(`/api/generate/jobs/${encodeURIComponent(activeId)}/cancel`, { method: 'POST' }); await openJob(activeId) } catch {} };
+
+  async function revealTemplateFolder(slug: string) {
+    try {
+      const r = await fetch(`/api/templates/${encodeURIComponent(slug)}/open-folder`, { method: 'POST' });
+      const j = await r.json().catch(() => (null as any));
+      if (!r.ok) throw new Error(String(j?.error || r.status));
+      toast.success('Opened template folder');
+    } catch (e:any) {
+      toast.error(e?.message ? String(e.message) : 'Failed to open template folder');
+    }
+  }
 
   return (
     <div className="flex flex-col gap-4 h-full">
@@ -117,134 +193,147 @@ export default function JobsPage() {
       <Card className="h-[calc(100vh-160px)] overflow-hidden p-0">
         <div className="h-full p-4 space-y-3 overflow-y-auto">
           <div className="grid grid-cols-12 gap-2 h-full min-h-0">
-          <div className="col-span-12 md:col-span-4 h-full min-h-0 flex flex-col">
-          <div className="flex items-center gap-2 mb-2 shrink-0">
-            <Select value={(statusFilter || 'all')} onValueChange={(v)=>setStatusFilter(v === 'all' ? '' : v)}>
-              <SelectTrigger className="w-[170px]">
-                <SelectValue placeholder="All statuses" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All statuses</SelectItem>
-                <SelectItem value="running">Running</SelectItem>
-                <SelectItem value="done">Done</SelectItem>
-                <SelectItem value="error">Error</SelectItem>
-                <SelectItem value="cancelled">Cancelled</SelectItem>
-              </SelectContent>
-            </Select>
-            <Input placeholder="Search template or customer" value={q} onChange={(e)=>setQ(e.target.value)} />
-            <Button variant="destructive" className="ml-auto" onClick={()=> setClearOpen(true)}>Clear All</Button>
-          </div>
-          <div className="panel-3d p-2 min-h-0 flex-1 overflow-hidden flex flex-col">
-            <ScrollArea className="flex-1 min-h-0">
-              <ul className="text-sm space-y-1 pr-2">
-                {filtered.map(j => (
-                  <li key={j.id} className={"flex items-center gap-2 justify-between rounded px-2 py-1 cursor-pointer " + (activeId===j.id?"bg-accent":"hover:bg-accent/40")} onClick={()=>openJob(j.id)}>
-                    <div className="min-w-0 flex-1">
-                      <div className="font-medium truncate">{j.template} · {j.customerName || j.customerId}</div>
-                      <div className="text-xs text-muted-foreground truncate">{j.status} · {new Date(j.updatedAt).toLocaleString()}</div>
-                    </div>
-                    <span className={`text-xs ${j.status==='done'?'text-green-600':(j.status==='error'?'text-red-600':(j.status==='cancelled'?'text-gray-500':'text-amber-600'))}`}>{j.status}</span>
-                  </li>
-                ))}
-                {!filtered.length ? <li className="text-muted-foreground">No jobs.</li> : null}
-              </ul>
-            </ScrollArea>
-          </div>
-        </div>
-
-        <div className="col-span-12 md:col-span-8 grid grid-rows-[auto_minmax(0,1fr)_minmax(0,1fr)] gap-3 h-full min-h-0">
-          <div className="panel-3d p-3 min-h-0 flex-1 overflow-hidden">
-            {!active ? (
-              <div className="text-muted-foreground text-sm">Select a job to view details.</div>
-            ) : (
-              <div className="flex flex-col h-full space-y-3 pr-2 text-sm">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div className="font-medium">Job {active.id}</div>
-                    <div className="text-xs text-muted-foreground">{active.status} · Updated {new Date(active.updatedAt).toLocaleString()}</div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {active.status==='running' ? (
-                      <Button size="sm" variant="warning" onClick={(e)=>{ e.preventDefault(); cancelActive(); }}>Cancel</Button>
-                    ) : null}
-                    <Button size="sm" variant="destructive" onClick={(e)=>{ e.preventDefault(); setDeleteOpen(true) }}>Delete</Button>
-                    {active.file ? (
-                      <>
-                        <Button asChild size="sm" variant="link">
-                          <a href="#" onClick={async (e)=>{ e.preventDefault(); try { await fetch(`/api/generate/jobs/${encodeURIComponent(active.id)}/reveal`) } catch {} }} title={active.file.path}>Open Folder</a>
-                        </Button>
-                        <Button asChild size="sm" variant="link">
-                          <a href={`/api/generate/jobs/${encodeURIComponent(active.id)}/file?download=true`}>Download</a>
-                        </Button>
-                      </>
-                    ) : null}
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <div className="text-muted-foreground">Customer</div>
-                    <div>{active.customerName || active.customerId}</div>
-                  </div>
-                  <div>
-                    <div className="text-muted-foreground">Template</div>
-                    <div>{active.template}</div>
-                  </div>
-                  <div>
-                    <div className="text-muted-foreground">File</div>
-                    <div className="truncate">{active.file?.name || '-'}</div>
-                  </div>
-                  <div>
-                    <div className="text-muted-foreground">Workspace</div>
-                    <div>{active.usedWorkspace || '-'}</div>
-                  </div>
-                  <div>
-                    <div className="text-muted-foreground">Started</div>
-                    <div>{new Date(active.startedAt).toLocaleString()}</div>
-                  </div>
-                  <div>
-                    <div className="text-muted-foreground">Completed</div>
-                    <div>{active.completedAt ? new Date(active.completedAt).toLocaleString() : '-'}</div>
-                  </div>
-                  <div>
-                    <div className="text-muted-foreground">Elapsed</div>
-                    <div>{formatDuration(((active.completedAt ? new Date(active.completedAt) : new Date()).getTime()) - new Date(active.startedAt).getTime())}</div>
-                  </div>
-                </div>
-
-                {Array.isArray(active.steps) && active.steps.length ? (
-                  <div className="flex-1 min-h-0 flex flex-col">
-                    <div className="font-medium mb-1">Steps</div>
-                    <ScrollArea className="flex-1 min-h-0">
-                      <ul className="space-y-1 pr-2">
-                        {active.steps.map((s, idx) => (
-                          <li key={idx} className="flex items-center justify-between border rounded px-2 py-1">
-                            <div>
-                              <div className="text-sm">{s.name}</div>
-                              <div className="text-xs text-muted-foreground">{s.status || '-'} {s.durationMs ? `· ${formatDuration(s.durationMs)}` : ''}</div>
-                            </div>
-                            <div className="text-xs text-muted-foreground">{s.startedAt ? new Date(s.startedAt).toLocaleTimeString() : ''} {s.endedAt?`→ ${new Date(s.endedAt).toLocaleTimeString()}`:''}</div>
-                          </li>
-                        ))}
-                      </ul>
-                    </ScrollArea>
-                  </div>
-                ) : null}
-
-                <div className="flex-1 min-h-0 flex flex-col">
-                  <div className="font-medium mb-1">Logs</div>
-                  <div className="border rounded bg-muted/30 p-2 flex-1 min-h-0">
-                    <ScrollArea className="flex-1 min-h-0">
-                      <pre className="whitespace-pre-wrap pr-2">{Array.isArray(active.logs) ? active.logs.join('\n') : ''}</pre>
-                    </ScrollArea>
-                  </div>
-                </div>
+            {/* Left: list */}
+            <div className="col-span-12 md:col-span-4 h-full min-h-0 flex flex-col">
+              <div className="flex items-center gap-2 mb-2 shrink-0">
+                <Select value={(statusFilter || 'all')} onValueChange={(v)=>setStatusFilter(v === 'all' ? '' : v)}>
+                  <SelectTrigger className="w-[170px]">
+                    <SelectValue placeholder="All statuses" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All statuses</SelectItem>
+                    <SelectItem value="running">Running</SelectItem>
+                    <SelectItem value="done">Completed</SelectItem>
+                    <SelectItem value="error">Error</SelectItem>
+                    <SelectItem value="cancelled">Cancelled</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Input placeholder="Search template or customer" value={q} onChange={(e)=>setQ(e.target.value)} />
+                <Button variant="destructive" className="ml-auto" onClick={()=> setClearOpen(true)}>Clear All</Button>
               </div>
-            )}
+              <div className="panel-3d p-2 min-h-0 flex-1 overflow-hidden flex flex-col">
+                <ScrollArea className="flex-1 min-h-0">
+                  <ul className="text-sm space-y-1 pr-2">
+                    {filtered.map(j => (
+                      <li key={j.id} className={"flex items-center gap-2 justify-between rounded px-2 py-1 cursor-pointer " + (activeId===j.id?"bg-accent":"hover:bg-accent/40")} onClick={()=>openJob(j.id)}>
+                        <div className="min-w-0 flex-1">
+                          <div className="font-medium truncate flex items-center gap-2">
+                            <span className="truncate">{j.template}</span>
+                          </div>
+                          <div className="text-xs text-foreground truncate">{!isCompileJob(j) ? `for ${String(j.customerName || j.customerId)} • ` : ''}{new Date(j.updatedAt).toLocaleString()}</div>
+                        </div>
+                        {statusBadgeIcon(j.status)}
+                      </li>
+                    ))}
+                    {!filtered.length ? <li className="text-muted-foreground">No jobs.</li> : null}
+                  </ul>
+                </ScrollArea>
+              </div>
+            </div>
+
+            {/* Right: details */}
+            <div className="col-span-12 md:col-span-8 h-full min-h-0 flex flex-col">
+              <div className="panel-3d p-3 min-h-0 flex-1 overflow-hidden">
+                {!active ? (
+                  <div className="text-muted-foreground text-sm">Select a job to view details.</div>
+                ) : (
+                  <div className="flex flex-col h-full space-y-3 text-sm">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <div className="flex items-center gap-2">
+                          <div className="font-medium">
+                            {isCompileJob(active)
+                              ? `${active.template}`
+                              : `${active.template} for ${String(active.customerName || active.customerId)}`}
+                          </div>
+                          <Badge variant={isCompileJob(active)?'secondary':'outline'}>{isCompileJob(active)?'Template Compile':'Document Generation'}</Badge>
+                          {statusBadge(active.status)}
+                        </div>
+                        <div className="text-xs text-muted-foreground">Updated {new Date(active.updatedAt).toLocaleString()}</div>
+                      </div>
+                      <div className="flex items-center gap-1">
+                        {active.status==='running' ? (
+                          <Button size="icon" variant="ghost" aria-label="Cancel" title="Cancel" onClick={(e)=>{ e.preventDefault(); cancelActive(); }}>
+                            <Icon.Stop className="h-4 w-4" />
+                          </Button>
+                        ) : null}
+                        {!isCompileJob(active) && active.file ? (
+                          <>
+                            <Button asChild size="icon" variant="ghost" aria-label="Open Folder" title="Open Folder">
+                              <a href="#" onClick={async (e)=>{ e.preventDefault(); try { await fetch(`/api/generate/jobs/${encodeURIComponent(active.id)}/reveal`) } catch {} }}>
+                                <Icon.Folder className="h-4 w-4" />
+                              </a>
+                            </Button>
+                            <Button asChild size="icon" variant="ghost" aria-label="Download" title="Download">
+                              <a href={`/api/generate/jobs/${encodeURIComponent(active.id)}/file?download=true`}>
+                                <Icon.File className="h-4 w-4" />
+                              </a>
+                            </Button>
+                          </>
+                        ) : null}
+                        <Button size="icon" variant="destructive" aria-label="Delete" title="Delete" onClick={(e)=>{ e.preventDefault(); setDeleteOpen(true) }}>
+                          <Icon.Trash className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </div>
+
+                    {/* Meta chips */}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge asChild variant="outline">
+                        <a href="#" title="Reveal Template Folder" onClick={(e)=>{ e.preventDefault(); revealTemplateFolder(active.template) }}>
+                          Template: {active.template}
+                        </a>
+                      </Badge>
+                      {!isCompileJob(active) ? (
+                        <Badge asChild variant="outline"><a href="#customers" title="View Customers">Customer: {active.customerName || active.customerId}</a></Badge>
+                      ) : null}
+                      {active.file?.name ? (
+                        <Badge asChild variant="outline">
+                          <a href={`/api/generate/jobs/${encodeURIComponent(active.id)}/file?download=true`} title="Download file">File: {active.file.name}</a>
+                        </Badge>
+                      ) : (
+                        <Badge variant="outline">File: -</Badge>
+                      )}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      Started {new Date(active.startedAt).toLocaleString()} • Completed {active.completedAt ? new Date(active.completedAt).toLocaleString() : '-'} • Elapsed {formatDuration(((active.completedAt ? new Date(active.completedAt) : new Date()).getTime()) - new Date(active.startedAt).getTime())}
+                    </div>
+
+                    {Array.isArray(active.steps) && active.steps.length ? (
+                      <div className="max-h-56 min-h-[6rem] flex flex-col mb-6 min-h-0">
+                        <div className="font-medium mb-1">Steps</div>
+                        <ScrollArea className="h-full min-h-0">
+                          <ul className="space-y-1 pr-2 pb-2">
+                            {active.steps.map((s, idx) => (
+                              <li key={idx} className="flex items-center justify-between border rounded px-2 py-1">
+                                <div>
+                                  <div className="text-sm">{s.name}</div>
+                                  <div className="text-xs text-muted-foreground">{s.status || '-'} {s.durationMs ? `• ${formatDuration(s.durationMs)}` : ''}</div>
+                                </div>
+                                <div className="text-xs text-muted-foreground">{s.startedAt ? new Date(s.startedAt).toLocaleTimeString() : ''} {s.endedAt?`→ ${new Date(s.endedAt).toLocaleTimeString()}`:''}</div>
+                              </li>
+                            ))}
+                          </ul>
+                        </ScrollArea>
+                      </div>
+                    ) : null}
+
+                    <div className="flex-1 min-h-0 flex flex-col w-full mt-2">
+                      <div className="font-medium mb-1">Logs</div>
+                      <div className="border rounded bg-muted/30 p-2 flex-1 min-h-0">
+                        <ScrollArea className="flex-1 min-h-0">
+                          <pre className="whitespace-pre-wrap pr-2">{Array.isArray(active.logs) ? active.logs.join('\n') : ''}</pre>
+                        </ScrollArea>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         </div>
-      </div>
-      </div>
       </Card>
+
       {/* Clear All Jobs */}
       <AlertDialog open={clearOpen} onOpenChange={setClearOpen}>
         <AlertDialogContent>
@@ -275,17 +364,3 @@ export default function JobsPage() {
     </div>
   );
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-

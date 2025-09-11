@@ -230,6 +230,11 @@ export function CustomersPage() {
           } else if (data?.type === 'info') {
             const extras: string[] = []
             if (data.usedWorkspace) extras.push(`workspace:${String(data.usedWorkspace)}`)
+            if (data.documentsDir) extras.push(`dir:${String(data.documentsDir)}`)
+            if (data.templateName) extras.push(`template:${String(data.templateName)}`)
+            if (data.customerName) extras.push(`customer:${String(data.customerName)}`)
+            if (data.outfile) extras.push(`outfile:${String(data.outfile)}`)
+            if (data.signature) extras.push(`signature:${String(data.signature)}`)
             if (extras.length) setGenLogs((prev) => ([...(prev||[]), ...extras]))
             if (data.jobId) setGenJobId(String(data.jobId))
           } else if (data?.type === 'step') {

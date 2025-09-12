@@ -26,10 +26,10 @@ const router = Router()
 
 const TEMPLATES_ROOT = path.join(libraryRoot(), "templates")
 
-type Body = { customerId?: number; template?: string; filename?: string; data?: any; embed?: boolean; refresh?: boolean; jobId?: string }
+ type Body = { customerId?: number; template?: string; filename?: string; data?: any; embed?: boolean; refresh?: boolean; jobId?: string; instructions?: string }
 
 router.post("/", async (req, res) => {
-  const { customerId, template: slug, filename, data, embed, refresh, jobId } = (req.body || {}) as Body
+  const { customerId, template: slug, filename, data, embed, refresh, jobId, instructions } = (req.body || {}) as Body
   if (!customerId || !slug) return res.status(400).json({ error: "customerId and template are required" })
 
   const db = getDB()
@@ -47,6 +47,9 @@ router.post("/", async (req, res) => {
 
         // Build initial context
         const context: any = { customer: { id: row.id, name: row.name }, now: new Date().toISOString(), ...(data || {}) }
+        if (instructions && String(instructions).trim().length) {
+          context.userInstructions = String(instructions)
+        }
 
         // Enforce single-path generation via generator.full.ts producing raw WML
         let usedWorkspace: string | undefined
@@ -95,7 +98,10 @@ router.post("/", async (req, res) => {
               // Ask the AI (customer workspace) to update the generator code to use workspace data
               try {
                 if (forceRefresh || !(logs.includes('ai-cache:hit'))) {
-                const aiPrompt = `You are a senior TypeScript engineer. Update the following DocSmith generator function to incorporate customer-specific data from THIS WORKSPACE. Keep the EXACT export signature. Compose the final output as raw WordprocessingML (WML) via return { wml }. Do not import external modules or do file I/O. Maintain formatting with runs (color/size/bold/italic/underline/strike/font) and paragraph props (align/spacing/indents).\n\nSTRICT CONSTRAINTS:\n- PRESERVE ALL EXISTING WML STRUCTURE AND STYLING from the CURRENT GENERATOR CODE: do not alter fonts, colors, sizes, spacing, numbering, table properties, headers/footers, or section settings.\n- ONLY substitute text content (and list/table cell values) with workspace-derived strings.\n- DO NOT add, remove, or reorder sections/paragraphs/tables/runs unless absolutely necessary. If no data is found, keep the section and leave values empty rather than inventing content.\n- No boilerplate or extra headings; do not add content beyond what the template structure implies.\n- IMPORTANT: At runtime, toolkit.json/query/text are DISABLED. Do not rely on them. Encode all workspace-informed content directly in the returned WML or via the provided context parameter.\n- Use minimal LLM calls (within this single update).\n\nOnly output TypeScript code with the updated generate implementation.\n\nCURRENT GENERATOR CODE:\n\n\`\`\`ts\n${tsCode}\n\`\`\``
+                const userAddendum = instructions && String(instructions).trim().length
+                  ? `\n\nUSER ADDITIONAL INSTRUCTIONS (prioritize when choosing workspace data):\n${String(instructions).trim()}\n`
+                  : ''
+                const aiPrompt = `You are a senior TypeScript engineer. Update the following DocSmith generator function to incorporate customer-specific data from THIS WORKSPACE. Keep the EXACT export signature. Compose the final output as raw WordprocessingML (WML) via return { wml }. Do not import external modules or do file I/O. Maintain formatting with runs (color/size/bold/italic/underline/strike/font) and paragraph props (align/spacing/indents).\n\nSTRICT CONSTRAINTS:\n- PRESERVE ALL EXISTING WML STRUCTURE AND STYLING from the CURRENT GENERATOR CODE: do not alter fonts, colors, sizes, spacing, numbering, table properties, headers/footers, or section settings.\n- ONLY substitute text content (and list/table cell values) with workspace-derived strings.\n- DO NOT add, remove, or reorder sections/paragraphs/tables/runs unless absolutely necessary. If no data is found, keep the section and leave values empty rather than inventing content.\n- No boilerplate or extra headings; do not add content beyond what the template structure implies.\n- IMPORTANT: At runtime, toolkit.json/query/text are DISABLED. Do not rely on them. Encode all workspace-informed content directly in the returned WML or via the provided context parameter.\n- Use minimal LLM calls (within this single update).${userAddendum}\n\nOnly output TypeScript code with the updated generate implementation.\n\nCURRENT GENERATOR CODE:\n\n\`\`\`ts\n${tsCode}\n\`\`\``
                 stepStartRec('aiUpdate')
                 const r = await anythingllmRequest<any>(`/workspace/${encodeURIComponent(wsForGen)}/chat`, 'POST', { message: aiPrompt, mode: 'query' })
                 const t = String(r?.textResponse || r?.message || r || '')
@@ -394,6 +400,7 @@ router.get("/stream", async (req, res) => {
     const customerId = Number(req.query.customerId)
     const slug = String(req.query.template || '')
     const filename = req.query.filename ? String(req.query.filename) : undefined
+    const instructions = req.query.instructions ? String(req.query.instructions) : undefined
     // Default to refresh=true so the AI-updated generator is rebuilt each run unless explicitly disabled
     const refresh = String((req.query.refresh ?? 'true')).toLowerCase() === 'true'
     if (!customerId || !slug) {
@@ -469,7 +476,10 @@ router.get("/stream", async (req, res) => {
         logAndPush('ai-modified:start')
         stepStartRec('aiUpdate')
         try {
-          const aiPrompt = `You are a senior TypeScript engineer. Update the following document generator function to incorporate customer-specific data from THIS WORKSPACE. Keep the EXACT export signature. Compose the final output as raw WordprocessingML (WML) via return { wml }. Do not import external modules or do file I/O. Maintain formatting with runs (color/size/bold/italic/underline/strike/font) and paragraph props (align/spacing/indents).\n\nSTRICT CONSTRAINTS:\n- PRESERVE ALL EXISTING WML STRUCTURE AND STYLING from the CURRENT GENERATOR CODE: do not alter fonts, colors, sizes, spacing, numbering, table properties, headers/footers, or section settings.\n- ONLY substitute text content (and list/table cell values) with workspace-derived strings.\n- DO NOT add, remove, or reorder sections/paragraphs/tables/runs unless absolutely necessary. If no data is found, keep the section and leave values empty rather than inventing content.\n- No boilerplate or extra headings; do not add content beyond what the template structure implies.\n- IMPORTANT: At runtime, toolkit.json/query/text are DISABLED. Do not rely on them. Encode all workspace-informed content directly in the returned WML or via the provided context parameter.\n- Use minimal LLM calls (within this single update).\n\nOnly output TypeScript code with the updated generate implementation.\n\nCURRENT GENERATOR CODE:\n\n\`\`\`ts\n${tsCode}\n\`\`\``
+          const userAddendum = instructions && String(instructions).trim().length
+            ? `\n\nUSER ADDITIONAL INSTRUCTIONS (prioritize when choosing workspace data):\n${String(instructions).trim()}\n`
+            : ''
+          const aiPrompt = `You are a senior TypeScript engineer. Update the following document generator function to incorporate customer-specific data from THIS WORKSPACE. Keep the EXACT export signature. Compose the final output as raw WordprocessingML (WML) via return { wml }. Do not import external modules or do file I/O. Maintain formatting with runs (color/size/bold/italic/underline/strike/font) and paragraph props (align/spacing/indents).\n\nSTRICT CONSTRAINTS:\n- PRESERVE ALL EXISTING WML STRUCTURE AND STYLING from the CURRENT GENERATOR CODE: do not alter fonts, colors, sizes, spacing, numbering, table properties, headers/footers, or section settings.\n- ONLY substitute text content (and list/table cell values) with workspace-derived strings.\n- DO NOT add, remove, or reorder sections/paragraphs/tables/runs unless absolutely necessary. If no data is found, keep the section and leave values empty rather than inventing content.\n- No boilerplate or extra headings; do not add content beyond what the template structure implies.\n- IMPORTANT: At runtime, toolkit.json/query/text are DISABLED. Do not rely on them. Encode all workspace-informed content directly in the returned WML or via the provided context parameter.\n- Use minimal LLM calls (within this single update).${userAddendum}\n\nOnly output TypeScript code with the updated generate implementation.\n\nCURRENT GENERATOR CODE:\n\n\`\`\`ts\n${tsCode}\n\`\`\``
           const r = await anythingllmRequest<any>(`/workspace/${encodeURIComponent(wsForGen)}/chat`, 'POST', { message: aiPrompt, mode: 'query' })
           const t = String(r?.textResponse || r?.message || r || '')
           const m = t.match(/```[a-z]*\s*([\s\S]*?)```/i)
@@ -546,6 +556,9 @@ router.get("/stream", async (req, res) => {
       logAndPush('generate:start')
       stepStartRec('execute')
       const context: any = { customer: { id: row.id, name: row.name }, now: new Date().toISOString() }
+      if (instructions && String(instructions).trim().length) {
+        context.userInstructions = String(instructions)
+      }
       const result = await generateFull(toolkit, builder, context)
       logAndPush('generate:ok')
       stepOkRec('execute')

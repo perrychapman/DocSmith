@@ -12,6 +12,10 @@ import { A } from "../lib/api";
 import WorkspaceChat from "../components/WorkspaceChat";
 import { toast } from "sonner";
 import { Progress } from "../components/ui/progress";
+import { ScrollArea } from "../components/ui/scroll-area";
+import { Textarea } from "../components/ui/textarea";
+import { Badge } from "../components/ui/badge";
+import JobsPanel from "../components/JobsPanel";
 
 type Customer = { id: number; name: string; createdAt: string };
 type UploadItem = { name: string; path: string; size: number; modifiedAt: string };
@@ -41,6 +45,7 @@ export function CustomersPage() {
   const [templates, setTemplates] = React.useState<Array<{ slug: string; name: string }>>([]);
   const [loadingTemplates, setLoadingTemplates] = React.useState(false);
   const [selectedTemplate, setSelectedTemplate] = React.useState<string>("");
+  const [genInstructions, setGenInstructions] = React.useState<string>("");
   const [generating, setGenerating] = React.useState(false);
   const [genLogs, setGenLogs] = React.useState<string[] | null>(null);
   const genEventRef = React.useRef<EventSource | null>(null);
@@ -218,7 +223,8 @@ export function CustomersPage() {
       // Open logs modal immediately
       setGenLogs([]);
       setGenSteps({}); setGenProgress(0); setGenError(null);
-      const url = `/api/generate/stream?customerId=${encodeURIComponent(String(selectedId))}&template=${encodeURIComponent(String(selectedTemplate))}`
+      const extra = genInstructions && genInstructions.trim().length ? `&instructions=${encodeURIComponent(genInstructions)}` : ''
+      const url = `/api/generate/stream?customerId=${encodeURIComponent(String(selectedId))}&template=${encodeURIComponent(String(selectedTemplate))}${extra}`
       const es = new EventSource(url)
       genEventRef.current = es
       let fileName: string | null = null
@@ -275,7 +281,8 @@ export function CustomersPage() {
       }
     } catch (e) {
       toast.error("Generation failed");
-    } finally { setGenerating(false) }
+      setGenerating(false)
+    }
   }
 
   // Live refresh uploads list for the selected customer
@@ -630,11 +637,10 @@ export function CustomersPage() {
                     <DialogHeader>
                       <DialogTitle>Generate Document</DialogTitle>
                       <DialogDescription>
-                        Generate a document using this customer's workspace and selected template.
+                        Generate documents using this customer's workspace and selected template.
                       </DialogDescription>
                     </DialogHeader>
                     <div className="space-y-3">
-                      <div className="text-sm text-muted-foreground">Choose a template to generate a document using this customer's knowledge.</div>
                       <div>
                         <label className="text-sm">Template</label>
                         <select className="mt-1 w-full border rounded-md h-9 px-2 bg-background" value={selectedTemplate} onChange={(e) => setSelectedTemplate(e.target.value)} disabled={loadingTemplates}>
@@ -644,6 +650,16 @@ export function CustomersPage() {
                             )) : <option value="">No templates found</option>
                           )}
                         </select>
+                      </div>
+                      <div>
+                        <label className="text-sm">Additional AI context (optional)</label>
+                        <Textarea
+                          className="mt-1 w-full"
+                          rows={4}
+                          placeholder="e.g., only include specific sources, reference meeting notes from last week, keep answers concise, etc."
+                          value={genInstructions}
+                          onChange={(e) => setGenInstructions(e.target.value)}
+                        />
                       </div>
                       {generating ? (
                         <div className="pt-2"><Progress indeterminate /></div>
@@ -668,12 +684,14 @@ export function CustomersPage() {
                       </TooltipTrigger>
                       <TooltipContent side="left">Recent Jobs</TooltipContent>
                     </Tooltip>
-                    <DialogContent className="sm:max-w-5xl">
+                    <DialogContent className="max-w-[95vw] sm:max-w-6xl">
                       <DialogHeader>
                         <DialogTitle>Recent Generation Jobs</DialogTitle>
                         <DialogDescription>View recent document generation runs and their logs.</DialogDescription>
                       </DialogHeader>
-                      <RecentJobs selectedId={selectedId} />
+                      <div className="h-[70vh] min-h-[480px]">
+                        <JobsPanel customerId={selectedId || undefined} />
+                      </div>
                       <DialogFooter>
                         <DialogClose asChild>
                           <Button variant="secondary">Close</Button>
@@ -792,7 +810,7 @@ export function CustomersPage() {
 
       {/* Generation Logs */}
       <Dialog open={!!genLogs} onOpenChange={(v)=>{ if(!v) { setGenLogs(null); setGenSteps({}); setGenProgress(null); setGenJobId(null); setGenError(null) } }}>
-        <DialogContent className="sm:max-w-2xl">
+        <DialogContent className="sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle>Generation Logs</DialogTitle>
             <DialogDescription>Live status from the generator.</DialogDescription>
@@ -809,18 +827,50 @@ export function CustomersPage() {
               )}
               <div className="text-xs text-muted-foreground">{generating ? 'Running...' : (genProgress === 100 ? 'Completed' : (genError ? 'Failed' : 'Idle'))}</div>
             </div>
-            <div className="border rounded-md bg-muted/30 px-3 py-2 h-40 overflow-auto text-sm">
-              <ul className="text-sm space-y-1">
-                {['resolveCustomer','loadTemplate','resolveWorkspace','readGenerator','aiUpdate','transpile','execute','mergeWrite'].map((s)=> (
-                  <li key={s} className="flex items-center gap-2">
-                    <span className="w-3 h-3 rounded-full inline-block" style={{ backgroundColor: genSteps[s]==='ok' ? '#16a34a' : (genSteps[s]==='start' ? '#f59e0b' : (genSteps[s]==='error' ? '#dc2626' : '#d4d4d8')) }} />
-                    <span className="capitalize">{s.replace(/([A-Z])/g,' $1')}</span>
-                  </li>
-                ))}
-              </ul>
+            <div className="border rounded-md bg-muted/30 px-3 py-2 h-40 overflow-hidden text-sm">
+              <ScrollArea className="h-full pr-2">
+                <ul className="space-y-1">
+                  {['resolveCustomer','loadTemplate','resolveWorkspace','readGenerator','aiUpdate','transpile','execute','mergeWrite'].map((s)=> {
+                    const st = genSteps[s]
+                    const label = s.replace(/([A-Z])/g,' $1')
+                    let badge
+                    if (st === 'ok') {
+                      badge = (
+                        <Badge variant="outline" className="border-success text-success bg-success/10 flex items-center gap-1">
+                          <Icon.Check className="h-3.5 w-3.5" /> Completed
+                        </Badge>
+                      )
+                    } else if (st === 'start') {
+                      badge = (
+                        <Badge variant="outline" className="border-warning text-warning bg-warning/10 flex items-center gap-1">
+                          <Icon.Refresh className="h-3.5 w-3.5 animate-spin" /> Running
+                        </Badge>
+                      )
+                    } else if (st === 'error') {
+                      badge = (
+                        <Badge variant="outline" className="border-destructive text-destructive bg-destructive/10 flex items-center gap-1">
+                          <Icon.X className="h-3.5 w-3.5" /> Error
+                        </Badge>
+                      )
+                    } else {
+                      badge = (
+                        <Badge variant="outline" className="border-muted-foreground text-muted-foreground bg-muted/10">Pending</Badge>
+                      )
+                    }
+                    return (
+                      <li key={s} className="flex items-center justify-between border rounded px-2 py-1">
+                        <div className="text-sm capitalize">{label}</div>
+                        {badge}
+                      </li>
+                    )
+                  })}
+                </ul>
+              </ScrollArea>
             </div>
-            <div className="border rounded-md bg-muted/30 px-3 py-2 h-40 overflow-auto text-sm">
-              <pre className="whitespace-pre-wrap">{(genLogs||[]).join('\n')}</pre>
+            <div className="border rounded-md bg-muted/30 px-3 py-2 h-40 overflow-hidden text-sm">
+              <ScrollArea className="h-full pr-2">
+                <pre className="whitespace-pre-wrap break-all font-mono w-full max-w-full">{(genLogs||[]).join('\n')}</pre>
+              </ScrollArea>
             </div>
           </div>
           <DialogFooter>
@@ -846,8 +896,74 @@ function RecentJobs({ selectedId }: { selectedId: number | null }) {
   const [jobs, setJobs] = React.useState<Array<any>>([])
   const [loading, setLoading] = React.useState(false)
   const [active, setActive] = React.useState<any | null>(null)
+  
+  const isCompileJob = (j: any) => {
+    try {
+      return j?.customerId === 0 || String(j?.customerName || '').toLowerCase() === 'template' || String(j?.file?.name || '') === 'generator.full.ts'
+    } catch { return false }
+  }
 
-  React.useEffect(() => { let ignore=false; (async () => { try { setLoading(true); const r = await fetch('/api/generate/jobs'); const j = await r.json().catch(()=>({})); setJobs(Array.isArray(j?.jobs) ? j.jobs : []) } catch {} finally { if(!ignore) setLoading(false) } })(); return ()=>{ignore=true} }, [])
+  // Status badge with label (parity with Jobs page)
+  const statusBadge = (s: 'running'|'done'|'error'|'cancelled') => {
+    const label = s === 'done' ? 'Completed' : (s.charAt(0).toUpperCase() + s.slice(1))
+    if (s === 'running') {
+      return (
+        <Badge variant="outline" className="shrink-0 border-warning text-warning bg-warning/10 flex items-center gap-1">
+          <Icon.Refresh className="h-3.5 w-3.5 animate-spin" /> {label}
+        </Badge>
+      )
+    }
+    if (s === 'done') {
+      return (
+        <Badge variant="outline" className="shrink-0 border-success text-success bg-success/10 flex items-center gap-1">
+          <Icon.Check className="h-3.5 w-3.5" /> {label}
+        </Badge>
+      )
+    }
+    if (s === 'cancelled') {
+      return (
+        <Badge variant="outline" className="shrink-0 border-muted-foreground text-muted-foreground bg-muted/10 flex items-center gap-1">
+          <Icon.Stop className="h-3.5 w-3.5" /> {label}
+        </Badge>
+      )
+    }
+    return (
+      <Badge variant="outline" className="shrink-0 border-destructive text-destructive bg-destructive/10 flex items-center gap-1">
+        <Icon.X className="h-3.5 w-3.5" /> {label}
+      </Badge>
+    )
+  }
+
+  async function revealTemplateFolder(slug: string) {
+    try {
+      const r = await fetch(`/api/templates/${encodeURIComponent(slug)}/open-folder`, { method: 'POST' })
+      const j = await r.json().catch(() => (null as any))
+      if (!r.ok) throw new Error(String(j?.error || r.status))
+      toast.success('Opened template folder')
+    } catch (e:any) {
+      toast.error(e?.message ? String(e.message) : 'Failed to open template folder')
+    }
+  }
+
+  React.useEffect(() => {
+    let ignore=false
+    const load = async () => {
+      try {
+        setLoading(true)
+        const r = await fetch('/api/generate/jobs')
+        const j = await r.json().catch(()=>({}))
+        if (!ignore) {
+          const arr = Array.isArray(j?.jobs) ? j.jobs : []
+          setJobs(arr)
+          const filtered = selectedId ? arr.filter((x:any)=> x.customerId === selectedId) : arr
+          if (!active && filtered.length) { try { await openJob(filtered[0].id) } catch {} }
+        }
+      } catch { if (!ignore) setJobs([]) } finally { if(!ignore) setLoading(false) }
+    }
+    load()
+    const t = setInterval(load, 5000)
+    return ()=>{ignore=true; clearInterval(t)}
+  }, [selectedId])
 
   async function openJob(id: string) {
     try { const r = await fetch(`/api/generate/jobs/${encodeURIComponent(id)}`); const j = await r.json().catch(()=>({})); if (!r.ok) throw new Error(String(r.status)); setActive(j) } catch { setActive(null) }
@@ -855,37 +971,114 @@ function RecentJobs({ selectedId }: { selectedId: number | null }) {
 
   return (
     <div className="grid grid-cols-12 gap-3">
-      <div className="col-span-12 md:col-span-6">
-        <div className="border rounded-md p-2 h-80 overflow-auto">
+      <div className="col-span-12 md:col-span-4">
+        <div className="border rounded-md p-2 h-[60vh] overflow-auto">
           {loading ? 'Loading...' : (
-            <ul className="text-sm space-y-1">
-              {jobs.map((j: any) => (
-                <li key={j.id} className="flex items-center justify-between gap-2">
+            <ul className="text-sm space-y-1 pr-2">
+              {(selectedId ? jobs.filter((j:any)=> j.customerId === selectedId) : jobs).map((j: any) => (
+                <li key={j.id} onClick={() => openJob(j.id)} className={"flex items-center gap-2 justify-between rounded px-2 py-1 cursor-pointer " + ((active?.id===j.id)?"bg-accent":"hover:bg-accent/40") }>
                   <button className="text-left flex-1 truncate" onClick={() => openJob(j.id)}>
                     <div className="font-medium truncate">{j.template} • {j.customerName || j.customerId}</div>
                     <div className="text-xs text-muted-foreground truncate">{j.status} • {new Date(j.updatedAt).toLocaleString()} {j.file?.name ? `• ${j.file.name}` : ''}</div>
                   </button>
-                  <span className={`text-xs ${j.status === 'done' ? 'text-green-600' : (j.status === 'error' ? 'text-red-600' : 'text-amber-600')}`}>{j.status}</span>
+                  {(() => { const s = String(j.status||''); const label = (s==='done'?'Completed':(s.charAt(0).toUpperCase()+s.slice(1))); if (s==='running') return (<Badge variant="outline" aria-label={label} title={label} className="shrink-0 h-6 w-6 p-0 grid place-items-center border-warning text-warning bg-warning/10"><Icon.Refresh className="h-3.5 w-3.5 animate-spin" /></Badge>); if (s==='done') return (<Badge variant="outline" aria-label={label} title={label} className="shrink-0 h-6 w-6 p-0 grid place-items-center border-success text-success bg-success/10"><Icon.Check className="h-3.5 w-3.5" /></Badge>); if (s==='cancelled') return (<Badge variant="outline" aria-label={label} title={label} className="shrink-0 h-6 w-6 p-0 grid place-items-center border-muted-foreground text-muted-foreground bg-muted/10"><Icon.Stop className="h-3.5 w-3.5" /></Badge>); return (<Badge variant="outline" aria-label={label} title={label} className="shrink-0 h-6 w-6 p-0 grid place-items-center border-destructive text-destructive bg-destructive/10"><Icon.X className="h-3.5 w-3.5" /></Badge>) })()}
                 </li>
               ))}
-              {!jobs.length ? <li className="text-muted-foreground">No jobs yet.</li> : null}
+              {!(selectedId ? jobs.filter((j:any)=> j.customerId === selectedId).length : jobs.length) ? (
+                <li className="text-muted-foreground">No jobs yet.</li>
+              ) : null}
             </ul>
           )}
         </div>
       </div>
-      <div className="col-span-12 md:col-span-6">
-        <div className="border rounded-md p-2 h-80 overflow-auto text-sm">
+      <div className="col-span-12 md:col-span-8">
+        <div className="border rounded-md p-2 h-[60vh] overflow-auto text-sm">
           {!active ? (
             <div className="text-muted-foreground">Select a job to view details.</div>
           ) : (
-            <>
-              <div className="font-medium mb-1">Job {active.id}</div>
-              <div className="text-xs text-muted-foreground mb-2">{active.status} • {new Date(active.updatedAt).toLocaleString()}</div>
-              <div className="mb-2 text-xs">Workspace: {active.usedWorkspace || '-'}</div>
-              <div className="border rounded bg-muted/30 p-2 h-56 overflow-auto">
-                <pre className="whitespace-pre-wrap">{Array.isArray(active.logs) ? active.logs.join('\n') : ''}</pre>
+            <div className="flex flex-col h-full space-y-3 text-sm">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="font-medium">
+                    {isCompileJob(active) ? `${active.template}` : `${active.template} for ${String(active.customerName || active.customerId)}`}
+                  </div>
+                  <Badge variant={isCompileJob(active)?'secondary':'outline'}>{isCompileJob(active)?'Template Compile':'Document Generation'}</Badge>
+                </div>
+                <div className="flex items-center gap-1">
+                  {statusBadge(String(active.status) as any)}
+                  {active.status==='running' ? (
+                    <Button size="icon" variant="ghost" aria-label="Cancel" title="Cancel" onClick={async (e)=>{ e.preventDefault(); try { if (active?.id) { await fetch(`/api/generate/jobs/${encodeURIComponent(active.id)}/cancel`, { method: 'POST' }) ; await openJob(active.id) } } catch {} }}>
+                      <Icon.Stop className="h-4 w-4" />
+                    </Button>
+                  ) : null}
+                  {!isCompileJob(active) && active.file ? (
+                    <>
+                      <Button asChild size="icon" variant="ghost" aria-label="Open Folder" title="Open Folder">
+                        <a href="#" onClick={async (e)=>{ e.preventDefault(); try { await fetch(`/api/generate/jobs/${encodeURIComponent(active.id)}/reveal`) } catch {} }}>
+                          <Icon.Folder className="h-4 w-4" />
+                        </a>
+                      </Button>
+                      <Button asChild size="icon" variant="ghost" aria-label="Download" title="Download">
+                        <a href={`/api/generate/jobs/${encodeURIComponent(active.id)}/file?download=true`}>
+                          <Download className="h-4 w-4" />
+                        </a>
+                      </Button>
+                    </>
+                  ) : null}
+                  <Button size="icon" variant="destructive" aria-label="Delete" title="Delete" onClick={(e)=>{ e.preventDefault(); /* open simple confirm */ try { if (active?.id) { fetch(`/api/generate/jobs/${encodeURIComponent(active.id)}`, { method: 'DELETE' }).then(()=> setActive(null)).catch(()=>{}) } } catch {} }}>
+                    <Icon.Trash className="h-4 w-4" />
+                  </Button>
+                </div>
               </div>
-            </>
+              <div className="text-xs text-muted-foreground mb-2">{active.status} • {new Date(active.updatedAt).toLocaleString()}</div>
+              <div className="flex flex-wrap items-center gap-2 mb-2">
+                <Badge asChild variant="outline">
+                  <a href="#" title="Reveal Template Folder" onClick={(e)=>{ e.preventDefault(); revealTemplateFolder(active.template) }}>
+                    Template: {active.template}
+                  </a>
+                </Badge>
+                {!isCompileJob(active) ? (
+                  <Badge asChild variant="outline"><a href="#customers" title="View Customers">Customer: {active.customerName || active.customerId}</a></Badge>
+                ) : null}
+                {active.usedWorkspace ? (
+                  <Badge variant="outline">Workspace: {active.usedWorkspace}</Badge>
+                ) : null}
+                {active.file?.name ? (
+                  <Badge asChild variant="outline"><a href={`/api/generate/jobs/${encodeURIComponent(active.id)}/file?download=true`} title="Download file">File: {active.file.name}</a></Badge>
+                ) : (
+                  <Badge variant="outline">File: -</Badge>
+                )}
+              </div>
+              <div className="text-xs text-muted-foreground mb-2">
+                Started {active.startedAt ? new Date(active.startedAt).toLocaleString() : '-'}  Completed {active.completedAt ? new Date(active.completedAt).toLocaleString() : '-'}  Elapsed {(() => { try { const end = active.completedAt ? new Date(active.completedAt) : new Date(); const ms = end.getTime() - new Date(active.startedAt).getTime(); const m = Math.floor(ms/60000); const s = Math.floor((ms%60000)/1000); return `${m}:${String(s).padStart(2,'0')}` } catch { return '-' } })()}
+              </div>
+              {Array.isArray(active.steps) && active.steps.length ? (
+                <div className="max-h-56 min-h-[6rem] flex flex-col min-h-0">
+                  <div className="font-medium mb-1">Steps</div>
+                  <ScrollArea className="h-full min-h-0">
+                    <ul className="space-y-1 pr-2 pb-2">
+                      {active.steps.map((s: any, idx: number) => (
+                        <li key={idx} className="flex items-center justify-between border rounded px-2 py-1">
+                          <div>
+                            <div className="text-sm">{s.name}</div>
+                            <div className="text-xs text-muted-foreground">{s.status || '-'} {s.durationMs ? ` ${(() => { const ms = s.durationMs||0; const m = Math.floor(ms/60000); const ss = Math.floor((ms%60000)/1000); return `${m}:${String(ss).padStart(2,'0')}` })()}` : ''}</div>
+                          </div>
+                          <div className="text-xs text-muted-foreground">{s.startedAt ? new Date(s.startedAt).toLocaleTimeString() : ''} {s.endedAt?`\u001a ${new Date(s.endedAt).toLocaleTimeString()}`:''}</div>
+                        </li>
+                      ))}
+                    </ul>
+                  </ScrollArea>
+                </div>
+              ) : null}
+              <div className="flex-1 min-h-0 flex flex-col w-full">
+                <div className="font-medium mb-1">Logs</div>
+                <div className="border rounded bg-muted/30 p-2 flex-1 min-h-0">
+                  <ScrollArea className="flex-1 min-h-0">
+                    <pre className="whitespace-pre-wrap pr-2">{Array.isArray(active.logs) ? active.logs.join('\n') : ''}</pre>
+                  </ScrollArea>
+                </div>
+              </div>
+            </div>
           )}
         </div>
       </div>

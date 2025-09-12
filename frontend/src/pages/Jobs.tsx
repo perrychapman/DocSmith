@@ -266,7 +266,7 @@ export default function JobsPage() {
                             </Button>
                             <Button asChild size="icon" variant="ghost" aria-label="Download" title="Download">
                               <a href={`/api/generate/jobs/${encodeURIComponent(active.id)}/file?download=true`}>
-                                <Icon.File className="h-4 w-4" />
+                                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
                               </a>
                             </Button>
                           </>

@@ -8,14 +8,26 @@ import { readSSEStream } from "../lib/utils";
 
 type Thread = { id?: number; slug?: string; name?: string };
 
+type ExternalCard = {
+  id: string;
+  side?: 'user' | 'assistant';
+  template?: string;
+  jobId?: string;
+  jobStatus?: 'running'|'done'|'error'|'cancelled';
+  filename?: string;
+  aiContext?: string;
+  timestamp?: number;
+};
+
 type Props = {
   slug: string;
   title?: string;
   className?: string;
   headerActions?: React.ReactNode;
+  externalCards?: ExternalCard[];
 };
 
-export default function WorkspaceChat({ slug, title = "AI Chat", className, headerActions }: Props) {
+export default function WorkspaceChat({ slug, title = "AI Chat", className, headerActions, externalCards }: Props) {
   const [threads, setThreads] = React.useState<Thread[]>([]);
   const [threadSlug, setThreadSlug] = React.useState<string | undefined>(undefined);
   const [history, setHistory] = React.useState<any[]>([]);
@@ -23,6 +35,23 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
   const [loading, setLoading] = React.useState(false);
   const [replying, setReplying] = React.useState(false);
   const [stream] = React.useState(true);
+  // Jobs for this workspace (UI-only correlation to hide codey outputs)
+  type Job = {
+    id: string;
+    customerId: number;
+    customerName?: string;
+    template: string;
+    filename?: string;
+    usedWorkspace?: string;
+    startedAt: string;
+    updatedAt: string;
+    completedAt?: string;
+    status: 'running'|'done'|'error'|'cancelled';
+    file?: { path: string; name: string };
+    error?: string;
+  };
+  const [wsJobs, setWsJobs] = React.useState<Job[]>([]);
+  const injectedRef = React.useRef<Record<string, number>>({});
 
   const listRef = React.useRef<HTMLDivElement | null>(null);
   const [atBottom, setAtBottom] = React.useState(true);
@@ -62,6 +91,73 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
 
   React.useEffect(() => { loadThreadsAndChats(); }, [slug]);
   React.useEffect(() => { if (atBottom) scrollToBottom(); }, [history, atBottom, scrollToBottom]);
+  // Inject external cards as synthetic assistant messages
+  React.useEffect(() => {
+    if (!externalCards || !externalCards.length) return;
+    const map = injectedRef.current || {};
+    setHistory((prev) => {
+      let next = prev.slice();
+      for (const c of externalCards) {
+        const key = String(c.id);
+        const ts = Number(c.timestamp || 0) || Date.now();
+        const idx = next.findIndex((m: any) => !!m && m.card && String(m.card.id) === key);
+        if (idx >= 0) {
+          const old = next[idx] as any;
+          next[idx] = { ...old, sentAt: ts, role: (c.side || 'user'), card: { ...(old.card || {}), ...c } };
+        } else {
+          next.push({ role: (c.side || 'user'), content: '', sentAt: ts, card: { ...c } });
+        }
+        map[key] = ts;
+      }
+      injectedRef.current = map;
+      return next;
+    });
+  }, [externalCards]);
+  // Poll jobs and keep only those for this workspace
+  React.useEffect(() => {
+    let cancelled = false;
+    async function loadJobsOnce() {
+      try {
+        const r = await fetch('/api/generate/jobs');
+        const j = await r.json().catch(()=>({}));
+        const list: Job[] = Array.isArray(j?.jobs) ? j.jobs : [];
+        const filtered = list.filter((x) => String(x?.usedWorkspace || '') === String(slug));
+        filtered.sort((a,b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+        if (!cancelled) setWsJobs(filtered);
+      } catch { if (!cancelled) setWsJobs([]); }
+    }
+    loadJobsOnce();
+    const t = setInterval(loadJobsOnce, 5000);
+    return () => { cancelled = true; clearInterval(t) };
+  }, [slug]);
+
+  // Detect prompts/responses originating from DocSmith generation jobs
+  const isGenJobPrompt = (txt: string) => {
+    const s = String(txt || '').toLowerCase();
+    if (!s) return false;
+    return (
+      (s.includes('current generator code:') && s.includes('docsmith')) ||
+      (s.includes('you are a senior typescript engineer') && s.includes('docsmith'))
+    );
+  };
+  const isGenJobResponse = (txt: string) => {
+    const s = String(txt || '');
+    if (!s) return false;
+    if (/export\s+async\s+function\s+generate\s*\(/i.test(s)) return true;
+    if (/```\s*ts[\s\S]*```/i.test(s)) return true;
+    return false;
+  };
+  const looksLikeCode = (txt: string) => {
+    const s = String(txt || '');
+    if (!s) return false;
+    if (/```/.test(s)) return true;
+    const lines = s.split(/\r?\n/);
+    const codeKeywords = /(\bfunction\b|\bclass\b|\binterface\b|\bconst\b|\blet\b|\bexport\b|\bimport\b|<\/?[a-z][^>]*>)/i;
+    const punctScore = (s.match(/[{};<>]/g) || []).length;
+    const keywordHits = lines.reduce((acc, l) => acc + (codeKeywords.test(l) ? 1 : 0), 0);
+    return lines.length >= 6 && (keywordHits >= 3 || punctScore >= 6);
+  };
+  const latestRelevantJob = () => wsJobs[0];
 
   function sortOldestFirst(arr: any[]): any[] {
     if (!Array.isArray(arr) || arr.length <= 1) return arr || [];
@@ -142,10 +238,75 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
             {history.map((m, idx) => {
               const isUser = (String(m.role || '')).toLowerCase() === 'user';
               const text = String(m.content || m.message || m.text || '');
+              const card = (m as any).card as ExternalCard | undefined;
+              const shouldHideAsCode = (isGenJobPrompt(text) || isGenJobResponse(text) || (!isUser && looksLikeCode(text)));
+              const job = shouldHideAsCode ? latestRelevantJob() : null;
+              const jobStatus = job?.status;
+              // For generation prompts we inject our own sent card; skip rendering the raw prompt replacement
+              if (shouldHideAsCode && isUser) return null;
               return (
                 <div key={idx} className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
                   <div className={`max-w-[75%] whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 ${isUser ? 'bg-primary text-primary-foreground rounded-br-md' : 'bg-card border rounded-bl-md'}`}>
-                    {text}
+                    {card ? (
+                      <div className="space-y-1">
+                        <div className="font-medium">
+                          {isUser
+                            ? (card.jobStatus === 'running' ? 'Document Generating' : 'Document Requested')
+                            : 'Document Generated'}
+                        </div>
+                        <div className="text-sm text-muted-foreground">
+                          {card.template ? <>Template: {card.template}</> : null}
+                          {!isUser && card.filename ? <> · File: {card.filename}</> : null}
+                        </div>
+                        {isUser && card.aiContext ? (
+                          <div className="text-xs text-muted-foreground">AI Context: {card.aiContext}</div>
+                        ) : null}
+                        <div className="flex items-center gap-2 pt-1">
+                          {card.jobId ? (
+                            isUser ? (
+                              <a className="underline" href={`#jobs?id=${encodeURIComponent(card.jobId)}`}>View job</a>
+                            ) : (
+                              <>
+                                <a className="inline-flex items-center justify-center h-6 w-6 rounded hover:underline" title="Download" href={`/api/generate/jobs/${encodeURIComponent(card.jobId)}/file?download=true`}>
+                                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+                                </a>
+                                <a className="inline-flex items-center justify-center h-6 w-6 rounded hover:underline" title="Open folder" href="#" onClick={async (e)=>{ e.preventDefault(); try { await fetch(`/api/generate/jobs/${encodeURIComponent(card.jobId)}/reveal`) } catch {} }}>
+                                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h5l2 3h9a1 1 0 0 1 1 1v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/></svg>
+                                </a>
+                                <a className="underline" href={`#jobs?id=${encodeURIComponent(card.jobId)}`}>View job</a>
+                              </>
+                            )
+                          ) : (
+                            <a className="underline" href="#jobs">View jobs</a>
+                          )}
+                        </div>
+                      </div>
+                    ) : shouldHideAsCode ? (
+                      <div className="space-y-1">
+                        <div className="font-medium">{jobStatus==='running' ? 'Generating document…' : (jobStatus==='done' ? 'Document generated' : 'Document generation')}</div>
+                        {job ? (
+                          <div className="text-sm text-muted-foreground">
+                            Template: {job.template}
+                            {job.file?.name ? ` · File: ${job.file.name}` : ''}
+                          </div>
+                        ) : null}
+                        <div className="flex items-center gap-2 pt-1">
+                          {job ? (
+                            jobStatus === 'done' && job.file?.name ? (
+                              <a className="underline" href={`/api/generate/jobs/${encodeURIComponent(job.id)}/file?download=true`}>
+                                Download document
+                              </a>
+                            ) : (
+                              <a className="underline" href={`#jobs?id=${encodeURIComponent(job.id)}`}>View job</a>
+                            )
+                          ) : (
+                            <a className="underline" href="#jobs">View jobs</a>
+                          )}
+                        </div>
+                      </div>
+                    ) : (
+                      <>{text}</>
+                    )}
                   </div>
                 </div>
               );

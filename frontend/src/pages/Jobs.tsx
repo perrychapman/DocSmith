@@ -69,6 +69,21 @@ export default function JobsPage() {
   }
 
   React.useEffect(() => { loadJobs(); }, []);
+  // Pick up job id from hash like #jobs?id=<id>
+  React.useEffect(() => {
+    const parse = () => {
+      const h = location.hash || '';
+      if (!h.toLowerCase().startsWith('#jobs')) return;
+      const q = h.split('?')[1] || '';
+      const sp = new URLSearchParams(q);
+      const id = sp.get('id');
+      if (id) setActiveId(id);
+    };
+    parse();
+    const on = () => parse();
+    window.addEventListener('hashchange', on);
+    return () => window.removeEventListener('hashchange', on);
+  }, []);
   React.useEffect(() => {
     const t = setInterval(() => {
       loadJobs();

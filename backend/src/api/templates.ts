@@ -530,61 +530,199 @@ router.get("/:slug/compile/stream", async (req, res) => {
     // Extract skeleton and XML hints
     stepStart('readTemplate')
     let skeleton = ''
+    let isExcel = false
     try {
-      const docxPath = path.join(dir, 'template.docx')
-      if (fs.existsSync(docxPath)) {
-        const buffer = fs.readFileSync(docxPath)
+      const xlsxPath = path.join(dir, 'template.xlsx')
+      if (fs.existsSync(xlsxPath)) {
+        isExcel = true
+        const buffer = fs.readFileSync(xlsxPath)
         stepOk('readTemplate')
         stepStart('extractSkeleton')
-        const result = await (mammoth as any).convertToHtml({ buffer }, { styleMap: [
-          "p[style-name='Title'] => h1:fresh",
-          "p[style-name='Subtitle'] => h2:fresh",
-          "p[style-name='Heading 1'] => h1:fresh",
-          "p[style-name='Heading 2'] => h2:fresh",
-          "p[style-name='Heading 3'] => h3:fresh",
-          "p[style-name='Heading 4'] => h4:fresh",
-          "p[style-name='Heading 5'] => h5:fresh",
-          "p[style-name='Heading 6'] => h6:fresh"
-        ], includeDefaultStyleMap: true })
-        const html = String(result?.value || '')
         try {
           const zip = new PizZip(buffer)
-          const stylesXml = zip.file('word/styles.xml')?.asText() || ''
-          const stylesFxXml = zip.file('word/stylesWithEffects.xml')?.asText() || ''
-          const numberingXml = zip.file('word/numbering.xml')?.asText() || ''
-          const documentXml = zip.file('word/document.xml')?.asText() || ''
-          const themeXml = zip.file('word/theme/theme1.xml')?.asText() || ''
-          const header1 = zip.file('word/header1.xml')?.asText() || ''
-          const header2 = zip.file('word/header2.xml')?.asText() || ''
-          const footer1 = zip.file('word/footer1.xml')?.asText() || ''
-          const footer2 = zip.file('word/footer2.xml')?.asText() || ''
-          const take = (s: string, n = 8000) => (s ? s.slice(0, n) : '')
+          const workbookXml: string = zip.file('xl/workbook.xml')?.asText() || ''
+          const relsXml: string = zip.file('xl/_rels/workbook.xml.rels')?.asText() || ''
+          const sstXml: string = zip.file('xl/sharedStrings.xml')?.asText() || ''
+          const stylesXml: string = zip.file('xl/styles.xml')?.asText() || ''
+          const xmlUnesc = (s: string) => String(s || '')
+            .replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>')
+            .replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+          const shared: string[] = []
+          if (sstXml) {
+            const siMatches = Array.from(sstXml.matchAll(/<si>([\s\S]*?)<\/si>/g))
+            for (const m of siMatches) {
+              const inner = m[1] || ''
+              const texts = Array.from(inner.matchAll(/<t[^>]*>([\s\S]*?)<\/t>/g)).map(mm => xmlUnesc(mm[1] || ''))
+              shared.push(texts.join(''))
+            }
+          }
+          const relMap: Record<string, string> = {}
+          for (const m of Array.from(relsXml.matchAll(/<Relationship[^>]*Id="([^"]+)"[^>]*Target="([^"]+)"[^>]*>/g))) {
+            const id = m[1]
+            let target = m[2]
+            if (target && !/^xl\//.test(target)) target = `xl/${target.replace(/^\.\//,'')}`
+            relMap[id] = target
+          }
+          const sheets: Array<{ name: string; rid?: string; target?: string }> = []
+          for (const m of Array.from(workbookXml.matchAll(/<sheet[^>]*name="([^"]+)"[^>]*r:id="([^"]+)"[^>]*>/g))) {
+            const name = xmlUnesc(m[1] || '')
+            const rid = m[2]
+            const target = relMap[rid]
+            sheets.push({ name, rid, target })
+          }
           const parts: string[] = []
-          parts.push('TEMPLATE SKELETON (HTML excerpt):','---', html.slice(0,12000), '---')
-          if (stylesXml) { parts.push('STYLES XML (excerpt):','---', take(stylesXml), '---') }
-          if (stylesFxXml) { parts.push('STYLES WITH EFFECTS XML (excerpt):','---', take(stylesFxXml), '---') }
-          if (numberingXml) { parts.push('NUMBERING XML (excerpt):','---', take(numberingXml), '---') }
-          if (documentXml) { parts.push('DOCUMENT XML (excerpt):','---', take(documentXml), '---') }
-          if (themeXml) { parts.push('THEME XML (excerpt):','---', take(themeXml), '---') }
-          const headersHint = (header1 + '\n' + header2).trim()
-          const footersHint = (footer1 + '\n' + footer2).trim()
-          if (headersHint) { parts.push('HEADERS XML (excerpt):','---', take(headersHint), '---') }
-          if (footersHint) { parts.push('FOOTERS XML (excerpt):','---', take(footersHint), '---') }
+          // Excel alignment map from styles.xml
+          const xfAlign: Record<number, string | undefined> = {}
+          try {
+            if (stylesXml) {
+              const xfsMatch = stylesXml.match(/<cellXfs[^>]*>([\s\S]*?)<\/cellXfs>/)
+              const inner = xfsMatch ? xfsMatch[1] : ''
+              let idx = 0
+              for (const xmAny of Array.from(inner.matchAll(/<xf[^>]*?(?:\salignment=\"([^\"]*)\")[^>]*?\/>|<xf[^>]*?>([\s\S]*?)<\/xf>/g))) {
+                const xm = xmAny as unknown as RegExpMatchArray
+                const inlineAlign = xm[1] as string | undefined
+                const xin = xm[2] as string | undefined
+                let align: string | undefined
+                if (inlineAlign) {
+                  const hm = inlineAlign.match(/horizontal=\"([^\"]+)\"/)
+                  align = hm ? hm[1] : undefined
+                } else if (xin) {
+                  const am = xin.match(/<alignment[^>]*horizontal=\"([^\"]+)\"[^>]*\/>/)
+                  align = am ? am[1] : undefined
+                }
+                xfAlign[idx++] = align
+              }
+            }
+          } catch {}
+          parts.push('EXCEL TEMPLATE SKELETON:')
+          parts.push('---')
+          parts.push(`SHEETS (${sheets.length}): ${sheets.map((s,i)=>`${i+1}) ${s.name}`).join(' | ')}`)
+          const maxSheets = Math.min(3, sheets.length || 0)
+          for (let i=0; i<maxSheets; i++) {
+            const s = sheets[i]!
+            const target = s.target || ''
+            let sheetXml = ''
+            try { sheetXml = target ? (zip.file(target)?.asText() || '') : '' } catch {}
+            parts.push('---')
+            parts.push(`SHEET: ${s.name}`)
+            // Column widths summary (first 12)
+            try {
+              const colsMatch = sheetXml.match(/<cols>([\s\S]*?)<\/cols>/)
+              if (colsMatch) {
+                const colWidths: Record<number, number> = {}
+                const colsInner = colsMatch[1] || ''
+                for (const cm of Array.from(colsInner.matchAll(/<col[^>]*min=\"(\d+)\"[^>]*max=\"(\d+)\"[^>]*width=\"([\d\.]+)\"[^>]*\/>/g))) {
+                  const min = Number(cm[1]); const max = Number(cm[2]); const w = Number(cm[3])
+                  for (let cc = min; cc <= max; cc++) colWidths[cc] = w
+                }
+                const firstCols = Object.keys(colWidths).map(n=>Number(n)).sort((a,b)=>a-b).slice(0,12)
+                if (firstCols.length) {
+                  const toCol = (n:number) => { let s=''; let x=n; while (x>0) { const m=((x-1)%26); s=String.fromCharCode(65+m)+s; x=Math.floor((x-1)/26) } return s }
+                  parts.push(`COLUMNS (width): ${firstCols.map(c=>`${toCol(c)}=${(colWidths[c]||0).toFixed(2)}`).join(', ')}`)
+                }
+              }
+            } catch {}
+            const merges: string[] = []
+            for (const mm of Array.from(sheetXml.matchAll(/<mergeCell[^>]*ref="([^"]+)"[^>]*\/>/g))) merges.push(mm[1])
+            if (merges.length) parts.push(`MERGES: ${merges.slice(0,12).join(', ')}${merges.length>12?' …':''}`)
+            const rowMatches = Array.from(sheetXml.matchAll(/<row[^>]*r="(\d+)"[^>]*>([\s\S]*?)<\/row>/g))
+            const previewLines: string[] = []
+            const alignmentSamples: string[] = []
+            for (const rm of rowMatches) {
+              const rnum = Number(rm[1])
+              if (rnum > 50) break
+              const rowXml = rm[2] || ''
+              const cells = Array.from(rowXml.matchAll(/<c[^>]*r="([A-Z]+\d+)"([^>]*)>([\s\S]*?)<\/c>/g))
+              const entries: string[] = []
+              for (const c of cells) {
+                const ref = c[1]
+                const attrs = c[2] || ''
+                const inner = c[3] || ''
+                const tMatch = attrs.match(/\bt="([^"]+)"/)
+                const t = tMatch ? tMatch[1] : undefined
+                const vMatch = inner.match(/<v>([\s\S]*?)<\/v>/)
+                let vRaw = vMatch ? vMatch[1] : ''
+                let val: string = ''
+                if (t === 's') {
+                  const idx = Number(vRaw)
+                  val = String(shared[idx] ?? '')
+                } else {
+                  val = xmlUnesc(vRaw)
+                }
+                if (val && val.trim()) entries.push(`${ref}=${val.replace(/\s+/g,' ').slice(0,60)}`)
+                // Sample a few alignments via style index s="n"
+                const sIdxMatch = attrs.match(/\bs=\"(\d+)\"/)
+                const sIdx = sIdxMatch ? Number(sIdxMatch[1]) : undefined
+                const horiz = (sIdx != null) ? (xfAlign[sIdx] || undefined) : undefined
+                if (horiz && alignmentSamples.length < 16) alignmentSamples.push(`${ref}=${horiz}`)
+              }
+              if (entries.length) previewLines.push(`R${rnum}: ${entries.join(' | ')}`)
+              if (previewLines.length >= 12) break
+            }
+            if (previewLines.length) { parts.push('ROWS:', ...previewLines) }
+            if (alignmentSamples.length) { parts.push(`ALIGNMENT SAMPLES: ${alignmentSamples.join(', ')}`) }
+          }
           skeleton = parts.join('\n')
-        } catch {
-          skeleton = html
-        }
+        } catch { skeleton = '' }
         stepOk('extractSkeleton')
       } else {
-        const src = (fs.readdirSync(dir).find((n)=>/^source\./i.test(n))||'')
-        if (src) { skeleton = fs.readFileSync(path.join(dir, src), 'utf-8'); stepOk('readTemplate'); stepOk('extractSkeleton') }
-        else if (fs.existsSync(path.join(dir,'template.hbs'))) { skeleton = fs.readFileSync(path.join(dir,'template.hbs'),'utf-8'); stepOk('readTemplate'); stepOk('extractSkeleton') }
+        const docxPath = path.join(dir, 'template.docx')
+        if (fs.existsSync(docxPath)) {
+          const buffer = fs.readFileSync(docxPath)
+          stepOk('readTemplate')
+          stepStart('extractSkeleton')
+          const result = await (mammoth as any).convertToHtml({ buffer }, { styleMap: [
+            "p[style-name='Title'] => h1:fresh",
+            "p[style-name='Subtitle'] => h2:fresh",
+            "p[style-name='Heading 1'] => h1:fresh",
+            "p[style-name='Heading 2'] => h2:fresh",
+            "p[style-name='Heading 3'] => h3:fresh",
+            "p[style-name='Heading 4'] => h4:fresh",
+            "p[style-name='Heading 5'] => h5:fresh",
+            "p[style-name='Heading 6'] => h6:fresh"
+          ], includeDefaultStyleMap: true })
+          const html = String(result?.value || '')
+          try {
+            const zip = new PizZip(buffer)
+            const stylesXml = zip.file('word/styles.xml')?.asText() || ''
+            const stylesFxXml = zip.file('word/stylesWithEffects.xml')?.asText() || ''
+            const numberingXml = zip.file('word/numbering.xml')?.asText() || ''
+            const documentXml = zip.file('word/document.xml')?.asText() || ''
+            const themeXml = zip.file('word/theme/theme1.xml')?.asText() || ''
+            const header1 = zip.file('word/header1.xml')?.asText() || ''
+            const header2 = zip.file('word/header2.xml')?.asText() || ''
+            const footer1 = zip.file('word/footer1.xml')?.asText() || ''
+            const footer2 = zip.file('word/footer2.xml')?.asText() || ''
+            const take = (s: string, n = 8000) => (s ? s.slice(0, n) : '')
+            const parts: string[] = []
+            parts.push('TEMPLATE SKELETON (HTML excerpt):','---', html.slice(0,12000), '---')
+            if (stylesXml) { parts.push('STYLES XML (excerpt):','---', take(stylesXml), '---') }
+            if (stylesFxXml) { parts.push('STYLES WITH EFFECTS XML (excerpt):','---', take(stylesFxXml), '---') }
+            if (numberingXml) { parts.push('NUMBERING XML (excerpt):','---', take(numberingXml), '---') }
+            if (documentXml) { parts.push('DOCUMENT XML (excerpt):','---', take(documentXml), '---') }
+            if (themeXml) { parts.push('THEME XML (excerpt):','---', take(themeXml), '---') }
+            const headersHint = (header1 + '\n' + header2).trim()
+            const footersHint = (footer1 + '\n' + footer2).trim()
+            if (headersHint) { parts.push('HEADERS XML (excerpt):','---', take(headersHint), '---') }
+            if (footersHint) { parts.push('FOOTERS XML (excerpt):','---', take(footersHint), '---') }
+            skeleton = parts.join('\n')
+          } catch {
+            skeleton = html
+          }
+          stepOk('extractSkeleton')
+        } else {
+          const src = (fs.readdirSync(dir).find((n)=>/^source\./i.test(n))||'')
+          if (src) { skeleton = fs.readFileSync(path.join(dir, src), 'utf-8'); stepOk('readTemplate'); stepOk('extractSkeleton') }
+          else if (fs.existsSync(path.join(dir,'template.hbs'))) { skeleton = fs.readFileSync(path.join(dir,'template.hbs'),'utf-8'); stepOk('readTemplate'); stepOk('extractSkeleton') }
+        }
       }
     } catch { /* ignore; skeleton may be empty */ }
 
     // Build prompt
     stepStart('buildPrompt')
-      const prompt = `You are a senior TypeScript engineer and document automation specialist. Recreate this template faithfully while preserving layout, headers/footers, spacing, lists, tables, images, hyperlinks, and emphasis.\n\nOutput: ONLY TypeScript code that returns raw WordprocessingML (WML).\n\nExport exactly:\nexport async function generate(\n  toolkit: { json: (prompt: string) => Promise<any>; text: (prompt: string) => Promise<string>; query?: (prompt: string) => Promise<any>; getSkeleton?: (kind?: 'html'|'text') => Promise<string> },\n  builder: any,\n  context?: Record<string, any>\n): Promise<{ wml: string }>;\n\nHard requirements:\n- Return ONLY { wml } containing the inner <w:body> children (<w:p>, <w:tbl>, ...). Do NOT include <w:sectPr> or any package-level parts.\n- Mirror the TEMPLATE SKELETON (prefer HTML skeleton) for headings/order/grouping.\n- Apply formatting in WML: run properties (color, size, bold/italic/underline/strike, font) and paragraph properties (alignment, spacing, indents), table widths/styles, list/numbering with <w:numPr> matching template numbering.\n- Use STYLES, THEME, and NUMBERING XML excerpts to choose brand colors, fonts, and list styles. Convert theme colors to hex where needed.\n- Do NOT output HTML, Markdown, or a DOCX buffer. No external imports or file I/O.\n- Do NOT add any sections, paragraphs, tables, or content that are not present in the provided skeleton; if unsure, omit rather than invent.\n- Preserve styling exactly; do not change fonts, colors, sizes, spacing, numbering, or table properties beyond what the skeleton and excerpts imply.\n\nTEMPLATE ARTIFACTS (HTML skeleton + XML excerpts):\n${skeleton}`
+      const prompt = isExcel
+        ? `You are a senior TypeScript engineer and spreadsheet automation specialist. Recreate this Excel template faithfully while preserving existing colors and formatting (fonts, fills, borders, number formats, alignment), sheet order, headers, merged ranges, column widths, and general layout.\n\nOutput: ONLY TypeScript code.\n\nExport exactly:\nexport async function generate(\n  toolkit: { json: (prompt: string) => Promise<any>; text: (prompt: string) => Promise<string>; query?: (prompt: string) => Promise<any>; getSkeleton?: (kind?: 'text') => Promise<string> },\n  builder: any,\n  context?: Record<string, any>\n): Promise<{ sheets: Array<{ name: string; insertRows?: Array<{ at: number; count: number; copyStyleFromRow?: number }>; cells?: Array<{ ref: string; v: string|number|boolean; numFmt?: string; bold?: boolean; italic?: boolean; underline?: boolean; strike?: boolean; color?: string; bg?: string; align?: 'left'|'center'|'right'; wrap?: boolean }>; ranges?: Array<{ start: string; values: any[][]; numFmt?: string }> }> }>;\n\nHard requirements:\n- Mirror the EXCEL TEMPLATE SKELETON for sheet names/order and structure. You MAY add new sheets when necessary to represent additional, clearly-related data, but do not remove or reorder existing sheets.\n- You MAY append or insert new rows when necessary to accommodate variable-length data. Prefer preserving existing row/column styles; use insertRows with copyStyleFromRow when appropriate.\n- If the template has a merged and centered header row, do not break its merge; write data starting below it unless the header text itself must be updated.\n- Populate values and, only when required, formatting (number formats, bold/italic/underline/strike, font color via hex, background fill, horizontal alignment, wrap).\n- Use A1 references in 'cells' and a 2D array for 'ranges' anchored at 'start'.\n- No imports or file I/O. Encode any workspace/context-derived knowledge directly in the returned structure.\n- Do not invent content unrelated to the skeleton/context; if unknown, leave blank.\n\nEXCEL TEMPLATE ARTIFACTS (includes merges, column widths, and alignment samples):\n${skeleton}`
+        : `You are a senior TypeScript engineer and document automation specialist. Recreate this template faithfully while preserving layout, headers/footers, spacing, lists, tables, images, hyperlinks, and emphasis.\n\nOutput: ONLY TypeScript code that returns raw WordprocessingML (WML).\n\nExport exactly:\nexport async function generate(\n  toolkit: { json: (prompt: string) => Promise<any>; text: (prompt: string) => Promise<string>; query?: (prompt: string) => Promise<any>; getSkeleton?: (kind?: 'html'|'text') => Promise<string> },\n  builder: any,\n  context?: Record<string, any>\n): Promise<{ wml: string }>;\n\nHard requirements:\n- Return ONLY { wml } containing the inner <w:body> children (<w:p>, <w:tbl>, ...). Do NOT include <w:sectPr> or any package-level parts.\n- Mirror the TEMPLATE SKELETON (prefer HTML skeleton) for headings/order/grouping.\n- Apply formatting in WML: run properties (color, size, bold/italic/underline/strike, font) and paragraph properties (alignment, spacing, indents), table widths/styles, list/numbering with <w:numPr> matching template numbering.\n- Use STYLES, THEME, and NUMBERING XML excerpts to choose brand colors, fonts, and list styles. Convert theme colors to hex where needed.\n- Do NOT output HTML, Markdown, or a DOCX buffer. No external imports or file I/O.\n- Do NOT add any sections, paragraphs, tables, or content that are not present in the provided skeleton; if unsure, omit rather than invent.\n- Preserve styling exactly; do not change fonts, colors, sizes, spacing, numbering, or table properties beyond what the skeleton and excerpts imply.\n\nTEMPLATE ARTIFACTS (HTML skeleton + XML excerpts):\n${skeleton}`
     stepOk('buildPrompt')
 
     // AI request

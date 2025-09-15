@@ -34,4 +34,10 @@ export const A = {
   chatWorkspace: (slug: string, body: any) => jpost(`/api/anythingllm/workspace/${encodeURIComponent(slug)}/chat`, body),
   chatThread: (slug: string, threadSlug: string, body: any) => jpost(`/api/anythingllm/workspace/${encodeURIComponent(slug)}/thread/${encodeURIComponent(threadSlug)}/chat`, body),
   streamThread: (slug: string, threadSlug: string, body: any, signal?: AbortSignal) => fetch(`/api/anythingllm/workspace/${encodeURIComponent(slug)}/thread/${encodeURIComponent(threadSlug)}/stream-chat`, { method: 'POST', headers: { 'Accept': 'text/event-stream', 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal }),
+  // Gen cards persistence
+  genCardsByWorkspace: (slug: string) => jget<{ cards: any[] }>(`/api/generate/cards/by-workspace/${encodeURIComponent(slug)}`),
+  upsertGenCard: (card: { id: string; workspaceSlug?: string; customerId?: number; side?: 'user'|'assistant'; template?: string; jobId: string; jobStatus?: string; filename?: string; aiContext?: string; timestamp?: number }) => jpost(`/api/generate/cards`, card),
+  deleteGenCardsByWorkspace: (slug: string) => jdel(`/api/generate/cards/by-workspace/${encodeURIComponent(slug)}`),
+  deleteGenCardsByCustomer: (id: number) => jdel(`/api/generate/cards/by-customer/${encodeURIComponent(String(id))}`),
+  deleteGenCardsByJob: (jobId: string) => jdel(`/api/generate/cards/by-job/${encodeURIComponent(jobId)}`),
 };

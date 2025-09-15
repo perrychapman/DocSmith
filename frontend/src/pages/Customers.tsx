@@ -53,6 +53,10 @@ export function CustomersPage() {
   const [genProgress, setGenProgress] = React.useState<number | null>(null);
   const [genJobId, setGenJobId] = React.useState<string | null>(null);
   const [genError, setGenError] = React.useState<string | null>(null);
+  // External chat cards to display generation metadata in chat
+  const [chatCards, setChatCards] = React.useState<Array<{ id: string; template?: string; jobId?: string; jobStatus?: 'running'|'done'|'error'|'cancelled'; filename?: string; aiContext?: string; timestamp?: number }>>([]);
+
+  // No localStorage persistence; cards are saved to SQL via backend
   const [panelMode, setPanelMode] = React.useState<'split'|'chat'|'docs'>('split');
   const [docQuery, setDocQuery] = React.useState<string>("");
   const rowsClass = panelMode === 'split'
@@ -242,7 +246,19 @@ export function CustomersPage() {
             if (data.outfile) extras.push(`outfile:${String(data.outfile)}`)
             if (data.signature) extras.push(`signature:${String(data.signature)}`)
             if (extras.length) setGenLogs((prev) => ([...(prev||[]), ...extras]))
-            if (data.jobId) setGenJobId(String(data.jobId))
+            if (data.jobId) {
+              const jid = String(data.jobId)
+              setGenJobId(jid)
+              // Inject a chat card for this job (running)
+              setChatCards((prev) => {
+                const next = prev.filter((c) => c.id !== jid)
+                const card = { id: jid, side: 'user' as const, template: selectedTemplate || undefined, jobId: jid, jobStatus: 'running' as const, aiContext: genInstructions || undefined, timestamp: Date.now() }
+                next.push(card)
+                // Save to backend
+                if (wsSlug) { A.upsertGenCard({ id: jid, workspaceSlug: wsSlug, side: 'user', template: selectedTemplate || undefined, jobId: jid, jobStatus: 'running', aiContext: genInstructions || undefined, timestamp: card.timestamp }).catch(()=>{}) }
+                return next
+              })
+            }
           } else if (data?.type === 'step') {
             const name = String(data.name || '')
             const status = (String(data.status || 'start') as 'start'|'ok')
@@ -253,6 +269,10 @@ export function CustomersPage() {
             const errMsg = String(data.error||'unknown')
             setGenLogs((prev) => ([...(prev||[]), `error:${errMsg}`]))
             setGenError(errMsg)
+            if (genJobId) {
+              const jid = genJobId
+              setChatCards((prev) => prev.map((c) => c.id === jid ? { ...c, jobStatus: 'error', timestamp: Date.now() } : c))
+            }
             setGenSteps((prev)=>{
               const order = ['resolveCustomer','loadTemplate','resolveWorkspace','readGenerator','aiUpdate','transpile','execute','mergeWrite']
               const next = { ...(prev||{}) } as Record<string,'start'|'ok'|'error'>
@@ -265,6 +285,39 @@ export function CustomersPage() {
             if (data?.file?.name) fileName = String(data.file.name)
             setGenLogs((prev) => ([...(prev||[]), `done:${fileName || ''}`]))
             setGenProgress(100)
+            if (data?.jobId) {
+              const jid = String(data.jobId)
+              setChatCards((prev) => {
+                const now = Date.now();
+                const updated = prev.map((c) => c.id === jid ? { ...c, jobStatus: 'done', filename: fileName || c.filename, timestamp: now, side: 'user' as const } : c);
+                // Also append a received card announcing generation complete
+                const assistantId = `${jid}-done`;
+                if (!updated.find((c) => c.id === assistantId)) {
+                  updated.push({ id: assistantId, side: 'assistant' as const, template: selectedTemplate || undefined, jobId: jid, jobStatus: 'done', filename: fileName || undefined, timestamp: now });
+                }
+                // Persist both cards
+                if (wsSlug) {
+                  A.upsertGenCard({ id: jid, workspaceSlug: wsSlug, side: 'user', template: selectedTemplate || undefined, jobId: jid, jobStatus: 'done', filename: fileName || undefined, aiContext: genInstructions || undefined, timestamp: now }).catch(()=>{})
+                  A.upsertGenCard({ id: assistantId, workspaceSlug: wsSlug, side: 'assistant', template: selectedTemplate || undefined, jobId: jid, jobStatus: 'done', filename: fileName || undefined, timestamp: now }).catch(()=>{})
+                }
+                return updated;
+              })
+            } else if (genJobId) {
+              const jid = genJobId
+              setChatCards((prev) => {
+                const now = Date.now();
+                const updated = prev.map((c) => c.id === jid ? { ...c, jobStatus: 'done', filename: fileName || c.filename, timestamp: now, side: 'user' as const } : c);
+                const assistantId = `${jid}-done`;
+                if (!updated.find((c) => c.id === assistantId)) {
+                  updated.push({ id: assistantId, side: 'assistant' as const, template: selectedTemplate || undefined, jobId: jid, jobStatus: 'done', filename: fileName || undefined, timestamp: now });
+                }
+                if (wsSlug) {
+                  A.upsertGenCard({ id: jid, workspaceSlug: wsSlug, side: 'user', template: selectedTemplate || undefined, jobId: jid, jobStatus: 'done', filename: fileName || undefined, aiContext: genInstructions || undefined, timestamp: now }).catch(()=>{})
+                  A.upsertGenCard({ id: assistantId, workspaceSlug: wsSlug, side: 'assistant', template: selectedTemplate || undefined, jobId: jid, jobStatus: 'done', filename: fileName || undefined, timestamp: now }).catch(()=>{})
+                }
+                return updated;
+              })
+            }
             es.close(); genEventRef.current = null; setGenerating(false); setGenJobId(null)
             // Refresh uploads
             (async () => { try { const r2 = await fetch(`/api/uploads/${selectedId}`); const d2: UploadItem[] = await r2.json(); setUploads(Array.isArray(d2) ? d2 : []) } catch {} })()
@@ -276,6 +329,12 @@ export function CustomersPage() {
       es.onerror = () => {
         setGenLogs((prev) => ([...(prev||[]), 'error:stream-connection']))
         setGenError('Stream disconnected')
+        if (genJobId) {
+          const jid = genJobId
+          const now = Date.now();
+          setChatCards((prev) => prev.map((c) => c.id === jid ? { ...c, jobStatus: 'error', timestamp: now } : c))
+          if (wsSlug) { A.upsertGenCard({ id: jid, workspaceSlug: wsSlug, side: 'user', template: selectedTemplate || undefined, jobId: jid, jobStatus: 'error', aiContext: genInstructions || undefined, timestamp: now }).catch(()=>{}) }
+        }
         es.close(); genEventRef.current = null; setGenerating(false); setGenJobId(null)
         toast.error('Stream disconnected')
       }
@@ -524,6 +583,7 @@ export function CustomersPage() {
             <WorkspaceChat
               slug={wsSlug}
               className="h-full"
+              externalCards={chatCards}
               headerActions={(
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -608,7 +668,7 @@ export function CustomersPage() {
                       >
                         <Icon.Upload className="h-6 w-6 mb-1" />
                         <div className="font-medium">{file ? 'Change selected file' : 'Click to select a file'}</div>
-                        <div className="text-xs mt-1 max-w-full truncate">{file ? file.name : 'or drag and drop here'}</div>
+                        <div className="text-xs mt-1 max-w-full whitespace-normal break-all">{file ? file.name : 'or drag and drop here'}</div>
                       </button>
                       {uploading && (
                         <div className="text-xs text-muted-foreground">{embeddingMsg || "Processing..."}</div>
@@ -684,7 +744,7 @@ export function CustomersPage() {
                       </TooltipTrigger>
                       <TooltipContent side="left">Recent Jobs</TooltipContent>
                     </Tooltip>
-                    <DialogContent className="max-w-[95vw] sm:max-w-6xl">
+                    <DialogContent className="w-[95vw] sm:!max-w-6xl">
                       <DialogHeader>
                         <DialogTitle>Recent Generation Jobs</DialogTitle>
                         <DialogDescription>View recent document generation runs and their logs.</DialogDescription>

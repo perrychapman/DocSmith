@@ -1,6 +1,7 @@
 import * as React from "react";
 import { Card } from "./ui/card";
 import { Button } from "./ui/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { Textarea } from "./ui/textarea";
 import { Icon } from "./icons";
 import { A } from "../lib/api";
@@ -76,12 +77,31 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
       if (tslug) {
         const data = await A.threadChats(slug, tslug);
         const raw = Array.isArray(data?.history) ? data.history : (Array.isArray(data) ? data : []);
-        const items = sortOldestFirst(raw);
+        let items = sortOldestFirst(raw);
+        // Append persisted generation cards from backend
+        try {
+          const persisted = await A.genCardsByWorkspace(slug).catch(()=>({ cards: [] }));
+          const cards: ExternalCard[] = Array.isArray((persisted as any)?.cards) ? (persisted as any).cards : [];
+          if (cards.length) {
+            const have = new Set(items.filter((m:any)=>m && m.card).map((m:any)=>String(m.card.id)));
+            const mapped = cards.filter((c:any)=>!have.has(String(c.id))).map((c:any)=>({ role: (c.side || 'user'), content: '', sentAt: Number(c.timestamp||0)||Date.now(), card: { ...c } }));
+            items = [...items, ...mapped];
+          }
+        } catch {}
         setHistory(items);
       } else {
         const data = await A.workspaceChats(slug, 50, 'asc');
         const raw = Array.isArray(data?.history) ? data.history : (Array.isArray(data?.chats) ? data.chats : (Array.isArray(data) ? data : []));
-        const items = sortOldestFirst(raw);
+        let items = sortOldestFirst(raw);
+        try {
+          const persisted = await A.genCardsByWorkspace(slug).catch(()=>({ cards: [] }));
+          const cards: ExternalCard[] = Array.isArray((persisted as any)?.cards) ? (persisted as any).cards : [];
+          if (cards.length) {
+            const have = new Set(items.filter((m:any)=>m && m.card).map((m:any)=>String(m.card.id)));
+            const mapped = cards.filter((c:any)=>!have.has(String(c.id))).map((c:any)=>({ role: (c.side || 'user'), content: '', sentAt: Number(c.timestamp||0)||Date.now(), card: { ...c } }));
+            items = [...items, ...mapped];
+          }
+        } catch {}
         setHistory(items);
       }
     } catch {
@@ -267,13 +287,34 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
                               <a className="underline" href={`#jobs?id=${encodeURIComponent(card.jobId)}`}>View job</a>
                             ) : (
                               <>
-                                <a className="inline-flex items-center justify-center h-6 w-6 rounded hover:underline" title="Download" href={`/api/generate/jobs/${encodeURIComponent(card.jobId)}/file?download=true`}>
-                                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
-                                </a>
-                                <a className="inline-flex items-center justify-center h-6 w-6 rounded hover:underline" title="Open folder" href="#" onClick={async (e)=>{ e.preventDefault(); try { await fetch(`/api/generate/jobs/${encodeURIComponent(card.jobId)}/reveal`) } catch {} }}>
-                                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h5l2 3h9a1 1 0 0 1 1 1v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/></svg>
-                                </a>
-                                <a className="underline" href={`#jobs?id=${encodeURIComponent(card.jobId)}`}>View job</a>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Button asChild size="icon" variant="ghost" aria-label="Download" title="Download">
+                                      <a href={`/api/generate/jobs/${encodeURIComponent(card.jobId)}/file?download=true`}>
+                                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+                                      </a>
+                                    </Button>
+                                  </TooltipTrigger>
+                                  <TooltipContent>Download</TooltipContent>
+                                </Tooltip>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Button size="icon" variant="ghost" aria-label="Open folder" title="Open folder" onClick={async (e)=>{ e.preventDefault(); try { await fetch(`/api/generate/jobs/${encodeURIComponent(card.jobId)}/reveal`) } catch {} }}>
+                                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h5l2 3h9a1 1 0 0 1 1 1v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/></svg>
+                                    </Button>
+                                  </TooltipTrigger>
+                                  <TooltipContent>Open folder</TooltipContent>
+                                </Tooltip>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Button asChild size="icon" variant="ghost" aria-label="View job" title="View job">
+                                      <a href={`#jobs?id=${encodeURIComponent(card.jobId)}`}>
+                                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14L21 3"/></svg>
+                                      </a>
+                                    </Button>
+                                  </TooltipTrigger>
+                                  <TooltipContent>View job</TooltipContent>
+                                </Tooltip>
                               </>
                             )
                           ) : (
@@ -282,28 +323,7 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
                         </div>
                       </div>
                     ) : shouldHideAsCode ? (
-                      <div className="space-y-1">
-                        <div className="font-medium">{jobStatus==='running' ? 'Generating document…' : (jobStatus==='done' ? 'Document generated' : 'Document generation')}</div>
-                        {job ? (
-                          <div className="text-sm text-muted-foreground">
-                            Template: {job.template}
-                            {job.file?.name ? ` · File: ${job.file.name}` : ''}
-                          </div>
-                        ) : null}
-                        <div className="flex items-center gap-2 pt-1">
-                          {job ? (
-                            jobStatus === 'done' && job.file?.name ? (
-                              <a className="underline" href={`/api/generate/jobs/${encodeURIComponent(job.id)}/file?download=true`}>
-                                Download document
-                              </a>
-                            ) : (
-                              <a className="underline" href={`#jobs?id=${encodeURIComponent(job.id)}`}>View job</a>
-                            )
-                          ) : (
-                            <a className="underline" href="#jobs">View jobs</a>
-                          )}
-                        </div>
-                      </div>
+                      null
                     ) : (
                       <>{text}</>
                     )}

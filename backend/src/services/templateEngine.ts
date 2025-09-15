@@ -8,11 +8,12 @@ const Handlebars = require("handlebars")
 export type LoadedTemplate =
   | { kind: 'hbs'; slug: string; dir: string; compiled: any; meta: TemplateMeta }
   | { kind: 'docx'; slug: string; dir: string; templatePath: string; meta: TemplateMeta }
+  | { kind: 'excel'; slug: string; dir: string; templatePath: string; meta: TemplateMeta }
 
 export type TemplateMeta = {
   name?: string
   schema?: { fields?: Array<{ key: string; label?: string; type?: string; hint?: string }> }
-  output?: { format?: "md" | "html" | "txt" | "docx"; filenamePattern?: string }
+  output?: { format?: "md" | "html" | "txt" | "docx" | "excel"; filenamePattern?: string }
   // New: support dynamic compilation outputs
   dynamic?: {
     mode?: "dynamic" | "strict"
@@ -33,6 +34,7 @@ export function loadTemplate(slug: string, baseDir: string): LoadedTemplate | nu
   const dir = path.join(baseDir, slug)
   const hbs = path.join(dir, "template.hbs")
   const docx = path.join(dir, "template.docx")
+  const xlsx = path.join(dir, "template.xlsx")
   const metaPath = path.join(dir, "template.json")
   let meta: TemplateMeta = {}
   try { if (fs.existsSync(metaPath)) meta = JSON.parse(fs.readFileSync(metaPath, "utf-8")) } catch {}
@@ -43,6 +45,9 @@ export function loadTemplate(slug: string, baseDir: string): LoadedTemplate | nu
   }
   if (fs.existsSync(docx)) {
     return { kind: 'docx', slug, dir, templatePath: docx, meta }
+  }
+  if (fs.existsSync(xlsx)) {
+    return { kind: 'excel', slug, dir, templatePath: xlsx, meta }
   }
   return null
 }

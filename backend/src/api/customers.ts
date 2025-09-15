@@ -206,6 +206,7 @@ router.delete("/:id", (req, res) => {
                   // 4) Remove documents from the workspace, then permanently remove them; optionally delete the workspace
                   let workspaceWarning: string | undefined
                   let documentsWarning: string | undefined
+                  let wsSlugToClean: string | undefined
                   try {
                     const slug = (row as any)?.workspaceSlug
                     let resolvedSlug: string | undefined = slug || undefined
@@ -219,6 +220,7 @@ router.delete("/:id", (req, res) => {
                     }
 
                     if (resolvedSlug) {
+                      wsSlugToClean = resolvedSlug
                       try {
                         // Delete uploaded documents one by one using the same logic as per-file deletion
                         if (fs.existsSync(uploadsDir)) {
@@ -249,6 +251,15 @@ router.delete("/:id", (req, res) => {
                   } catch (e) {
                     workspaceWarning = `Failed to contact AnythingLLM: ${(e as Error).message}`
                   }
+
+                  // 5) Cleanup persisted generation cards for this customer and workspace
+                  try {
+                    const db2 = getDB()
+                    await new Promise<void>((resolve)=>{ db2.run('DELETE FROM gen_cards WHERE customerId = ?', [id], () => resolve()) })
+                    if (wsSlugToClean && shouldDeleteWorkspace) {
+                      await new Promise<void>((resolve)=>{ db2.run('DELETE FROM gen_cards WHERE workspaceSlug = ?', [wsSlugToClean], () => resolve()) })
+                    }
+                  } catch {}
 
                   return res.json({ ok: true, id, ...(warning ? { warning } : {}), ...(documentsWarning ? { documentsWarning } : {}), ...(workspaceWarning ? { workspaceWarning } : {}) })
                 })

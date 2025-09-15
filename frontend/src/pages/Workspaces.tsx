@@ -98,6 +98,8 @@ export default function WorkspacesPage() {
     if (!deleteSlug) return;
     try {
       await A.deleteWorkspace(deleteSlug);
+      // Cleanup persisted generation cards for this workspace
+      try { await A.deleteGenCardsByWorkspace(deleteSlug) } catch {}
       toast.success("Workspace deleted");
       setDeleteOpen(false);
       await load();

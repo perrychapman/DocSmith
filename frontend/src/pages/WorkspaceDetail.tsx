@@ -10,6 +10,7 @@ import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbP
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { Icon } from "../components/icons";
 import { A } from "../lib/api";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import { readSSEStream, cn } from "../lib/utils";
 import { toast } from "sonner";
 
@@ -29,6 +30,22 @@ export default function WorkspaceDetailPage({ slug }: { slug: string }) {
   const [stream, setStream] = React.useState(true);
   const [loadingChats, setLoadingChats] = React.useState(false);
   const [replying, setReplying] = React.useState(false);
+  // Jobs for this workspace (UI-only correlation to hide codey outputs)
+  type Job = {
+    id: string;
+    customerId: number;
+    customerName?: string;
+    template: string;
+    filename?: string;
+    usedWorkspace?: string;
+    startedAt: string;
+    updatedAt: string;
+    completedAt?: string;
+    status: 'running'|'done'|'error'|'cancelled';
+    file?: { path: string; name: string };
+    error?: string;
+  };
+  const [wsJobs, setWsJobs] = React.useState<Job[]>([]);
   // Modals
   const [createThreadOpen, setCreateThreadOpen] = React.useState(false);
   const [newThreadName, setNewThreadName] = React.useState("");
@@ -95,6 +112,56 @@ export default function WorkspaceDetailPage({ slug }: { slug: string }) {
   React.useEffect(() => { loadThreads(); }, []);
   React.useEffect(() => { loadChats(); }, [threadSlug, limit, order]);
   React.useEffect(() => { scrollToBottom(); }, [history, scrollToBottom]);
+  // Poll recent jobs and keep only those for this workspace
+  React.useEffect(() => {
+    let cancelled = false;
+    async function loadJobsOnce() {
+      try {
+        const r = await fetch('/api/generate/jobs');
+        const j = await r.json().catch(()=>({}));
+        const list: Job[] = Array.isArray(j?.jobs) ? j.jobs : [];
+        const filtered = list.filter((x) => String(x?.usedWorkspace || '') === String(slug));
+        // newest first
+        filtered.sort((a,b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+        if (!cancelled) setWsJobs(filtered);
+      } catch {
+        if (!cancelled) setWsJobs([]);
+      }
+    }
+    loadJobsOnce();
+    const t = setInterval(loadJobsOnce, 5000);
+    return () => { cancelled = true; clearInterval(t) };
+  }, [slug]);
+
+  // Detect prompts/responses originating from DocSmith generation jobs
+  const isGenJobPrompt = (txt: string) => {
+    const s = String(txt || '').toLowerCase();
+    if (!s) return false;
+    return (
+      (s.includes('current generator code:') && s.includes('docsmith')) ||
+      (s.includes('you are a senior typescript engineer') && s.includes('docsmith'))
+    );
+  };
+  const isGenJobResponse = (txt: string) => {
+    const s = String(txt || '');
+    if (!s) return false;
+    if (/export\s+async\s+function\s+generate\s*\(/i.test(s)) return true;
+    if (/```\s*ts[\s\S]*```/i.test(s)) return true;
+    return false;
+  };
+  // General code heuristic fallback
+  const looksLikeCode = (txt: string) => {
+    const s = String(txt || '');
+    if (!s) return false;
+    if (/```/.test(s)) return true;
+    const lines = s.split(/\r?\n/);
+    const codeKeywords = /(\bfunction\b|\bclass\b|\binterface\b|\bconst\b|\blet\b|\bexport\b|\bimport\b|<\/?[a-z][^>]*>)/i;
+    const punctScore = (s.match(/[{};<>]/g) || []).length;
+    const keywordHits = lines.reduce((acc, l) => acc + (codeKeywords.test(l) ? 1 : 0), 0);
+    return lines.length >= 6 && (keywordHits >= 3 || punctScore >= 6);
+  };
+
+  const latestRelevantJob = () => wsJobs[0];
   const showTyping = React.useMemo(() => {
     if (!replying) return false;
     let lastUser = -1, lastAssistant = -1;
@@ -322,10 +389,54 @@ export default function WorkspaceDetailPage({ slug }: { slug: string }) {
               {history.map((m, idx) => {
                 const isUser = (m.role || '').toLowerCase() === 'user';
                 const text = String(m.content || m.message || m.text || '');
+                const shouldHideAsCode = (isGenJobPrompt(text) || isGenJobResponse(text) || (!isUser && looksLikeCode(text)));
+                const job = shouldHideAsCode ? latestRelevantJob() : null;
+                const jobStatus = job?.status;
                 return (
                   <div key={idx} className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
                     <div className={`max-w-[75%] whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 ${isUser ? 'bg-primary text-primary-foreground rounded-br-md' : 'bg-card border rounded-bl-md'}`}>
-                      {text}
+                      {shouldHideAsCode ? (
+                        <div className="space-y-1">
+                          <div className="font-medium">{jobStatus==='running' ? 'Generating document…' : (jobStatus==='done' ? 'Document generated' : 'Document generation')}</div>
+                          {job ? (
+                            <div className="text-sm text-muted-foreground">
+                              Template: {job.template}
+                              {job.file?.name ? ` · File: ${job.file.name}` : ''}
+                            </div>
+                          ) : null}
+                          <div className="flex items-center gap-2 pt-1">
+                            {job ? (
+                              jobStatus === 'done' && job.file?.name ? (
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Button asChild size="icon" variant="ghost" aria-label="Download" title="Download">
+                                      <a href={`/api/generate/jobs/${encodeURIComponent(job.id)}/file?download=true`}>
+                                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+                                      </a>
+                                    </Button>
+                                  </TooltipTrigger>
+                                  <TooltipContent>Download</TooltipContent>
+                                </Tooltip>
+                              ) : (
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Button asChild size="icon" variant="ghost" aria-label="View job" title="View job">
+                                      <a href={`#jobs?id=${encodeURIComponent(job.id)}`}>
+                                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14L21 3"/></svg>
+                                      </a>
+                                    </Button>
+                                  </TooltipTrigger>
+                                  <TooltipContent>View job</TooltipContent>
+                                </Tooltip>
+                              )
+                            ) : (
+                              <a className="underline" href="#jobs">View jobs</a>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        <>{text}</>
+                      )}
                     </div>
                   </div>
                 );

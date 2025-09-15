@@ -101,7 +101,9 @@ router.post("/", async (req, res) => {
                 const userAddendum = instructions && String(instructions).trim().length
                   ? `\n\nUSER ADDITIONAL INSTRUCTIONS (prioritize when choosing workspace data):\n${String(instructions).trim()}\n`
                   : ''
-                const aiPrompt = `You are a senior TypeScript engineer. Update the following DocSmith generator function to incorporate customer-specific data from THIS WORKSPACE. Keep the EXACT export signature. Compose the final output as raw WordprocessingML (WML) via return { wml }. Do not import external modules or do file I/O. Maintain formatting with runs (color/size/bold/italic/underline/strike/font) and paragraph props (align/spacing/indents).\n\nSTRICT CONSTRAINTS:\n- PRESERVE ALL EXISTING WML STRUCTURE AND STYLING from the CURRENT GENERATOR CODE: do not alter fonts, colors, sizes, spacing, numbering, table properties, headers/footers, or section settings.\n- ONLY substitute text content (and list/table cell values) with workspace-derived strings.\n- DO NOT add, remove, or reorder sections/paragraphs/tables/runs unless absolutely necessary. If no data is found, keep the section and leave values empty rather than inventing content.\n- No boilerplate or extra headings; do not add content beyond what the template structure implies.\n- IMPORTANT: At runtime, toolkit.json/query/text are DISABLED. Do not rely on them. Encode all workspace-informed content directly in the returned WML or via the provided context parameter.\n- Use minimal LLM calls (within this single update).${userAddendum}\n\nOnly output TypeScript code with the updated generate implementation.\n\nCURRENT GENERATOR CODE:\n\n\`\`\`ts\n${tsCode}\n\`\`\``
+                const aiPrompt = ((tpl as any).kind === 'excel')
+                  ? `You are a senior TypeScript engineer and spreadsheet specialist. Update the following DocSmith Excel generator function to incorporate customer-specific data inferred from THIS WORKSPACE and the provided user instructions. Keep the EXACT export signature. Compose the final output by returning { sheets } (sheet ops). Do not import external modules or do file I/O.\n\nSTRICT CONSTRAINTS:\n- PRESERVE EXISTING SHEET STRUCTURE AND FORMATTING from the CURRENT GENERATOR CODE: do not alter existing fonts, colors, fills, borders, number formats, alignment, merged ranges, column widths, or sheet order unless absolutely necessary.\n- You MAY append or insert new rows to accommodate variable-length data. Use insertRows with copyStyleFromRow when appropriate to preserve formatting. You MAY add new sheets when clearly necessary, but do not remove or reorder existing sheets.\n- Prefer preserving existing row/column styles; only specify formatting (numFmt, bold/italic/underline/strike, font color via hex, background fill, horizontal alignment, wrap) for new or dynamically added content.\n- If the template has a merged and centered header row, do not break its merge; write data starting below it unless the header text itself must be updated.\n- At runtime, toolkit.json/query/text are DISABLED. Encode workspace-informed content directly into the returned { sheets } or via the provided context parameter.\n- Use minimal LLM calls (within this single update).${userAddendum}\n\nReturn type reminder:\nPromise<{ sheets: Array<{ name: string; insertRows?: Array<{ at: number; count: number; copyStyleFromRow?: number }>; cells?: Array<{ ref: string; v: string|number|boolean; numFmt?: string; bold?: boolean; italic?: boolean; underline?: boolean; strike?: boolean; color?: string; bg?: string; align?: 'left'|'center'|'right'; wrap?: boolean }>; ranges?: Array<{ start: string; values: any[][]; numFmt?: string }> }> }>;\n\nOnly output TypeScript code with the updated generate implementation.\n\nCURRENT GENERATOR CODE:\n\n\`\`\`ts\n${tsCode}\n\`\`\``
+                  : `You are a senior TypeScript engineer. Update the following DocSmith generator function to incorporate customer-specific data from THIS WORKSPACE. Keep the EXACT export signature. Compose the final output as raw WordprocessingML (WML) via return { wml }. Do not import external modules or do file I/O. Maintain formatting with runs (color/size/bold/italic/underline/strike/font) and paragraph props (align/spacing/indents).\n\nSTRICT CONSTRAINTS:\n- PRESERVE ALL EXISTING WML STRUCTURE AND STYLING from the CURRENT GENERATOR CODE: do not alter fonts, colors, sizes, spacing, numbering, table properties, headers/footers, or section settings.\n- ONLY substitute text content (and list/table cell values) with workspace-derived strings.\n- DO NOT add, remove, or reorder sections/paragraphs/tables/runs unless absolutely necessary. If no data is found, keep the section and leave values empty rather than inventing content.\n- No boilerplate or extra headings; do not add content beyond what the template structure implies.\n- IMPORTANT: At runtime, toolkit.json/query/text are DISABLED. Do not rely on them. Encode all workspace-informed content directly in the returned WML or via the provided context parameter.\n- Use minimal LLM calls (within this single update).${userAddendum}\n\nOnly output TypeScript code with the updated generate implementation.\n\nCURRENT GENERATOR CODE:\n\n\`\`\`ts\n${tsCode}\n\`\`\``
                 stepStartRec('aiUpdate')
                 const r = await anythingllmRequest<any>(`/workspace/${encodeURIComponent(wsForGen)}/chat`, 'POST', { message: aiPrompt, mode: 'query' })
                 const t = String(r?.textResponse || r?.message || r || '')
@@ -344,28 +346,52 @@ router.post("/", async (req, res) => {
                 }
                 if (isCancelled(job.id)) { logAndPush('cancelled'); return res.status(499).json({ error: 'cancelled', jobId: job.id }) }
                 const result = await generateFull(toolkit, builder, context)
-                if ((tpl as any).kind !== 'docx') { markJobError(job.id, 'Template must be DOCX for WML merge'); return res.status(400).json({ error: 'Template must be DOCX for WML merge', jobId: job.id }) }
-                if (!result || (!('wml' in (result as any)) && !('bodyXml' in (result as any)))) {
-                  logAndPush('error:no-wml')
-                  markJobError(job.id, 'Full generator did not return WML/bodyXml')
-                  return res.status(502).json({ error: 'Full generator did not return WML/bodyXml', jobId: job.id })
+                if ((tpl as any).kind === 'docx') {
+                  if (!result || (!('wml' in (result as any)) && !('bodyXml' in (result as any)))) {
+                    logAndPush('error:no-wml')
+                    markJobError(job.id, 'Full generator did not return WML/bodyXml')
+                    return res.status(502).json({ error: 'Full generator did not return WML/bodyXml', jobId: job.id })
+                  }
+                  const inner = String((result as any).wml || (result as any).bodyXml || '')
+                  if (isCancelled(job.id)) { logAndPush('cancelled'); return res.status(499).json({ error: 'cancelled', jobId: job.id }) }
+                  const merged = (await import('../services/docxCompose')).mergeWmlIntoDocxTemplate(fs.readFileSync((tpl as any).templatePath), inner)
+                  // Default filename: {Customer}_{TemplateName}_{YYYYMMDD_HHmmss}
+                  const dt = new Date()
+                  const dtStr = `${dt.getFullYear()}${String(dt.getMonth()+1).padStart(2,'0')}${String(dt.getDate()).padStart(2,'0')}_${String(dt.getHours()).padStart(2,'0')}${String(dt.getMinutes()).padStart(2,'0')}${String(dt.getSeconds()).padStart(2,'0')}`
+                  const templateName = safeFileName(String(displayNameFromSlug(String(slug))))
+                  const customerName = safeFileName(String(row.name))
+                  const defaultBase = `${customerName}_${templateName}_${dtStr}`
+                  const baseName = filename || defaultBase
+                  const fnameLocal = baseName
+                  const outPathLocal = path.join(docsDir, fnameLocal + '.docx')
+                  try { jobLog(job.id, `outfile:${path.basename(outPathLocal)}`) } catch {}
+                  fs.writeFileSync(outPathLocal, merged)
+                  markJobDone(job.id, { path: outPathLocal, name: path.basename(outPathLocal) }, { usedWorkspace })
+                  return res.status(201).json({ ok: true, file: { path: outPathLocal, name: path.basename(outPathLocal) }, ...(usedWorkspace ? { usedWorkspace } : {}), logs: [...logs, 'fullgen:ok'], jobId: job.id })
+                } else if ((tpl as any).kind === 'excel') {
+                  if (!result || !('sheets' in (result as any))) {
+                    logAndPush('error:no-sheets')
+                    markJobError(job.id, 'Full generator did not return sheets for Excel')
+                    return res.status(502).json({ error: 'Full generator did not return sheets for Excel', jobId: job.id })
+                  }
+                  if (isCancelled(job.id)) { logAndPush('cancelled'); return res.status(499).json({ error: 'cancelled', jobId: job.id }) }
+                  const mergedBuf = await (await import('../services/excelCompose')).mergeOpsIntoExcelTemplate(fs.readFileSync((tpl as any).templatePath), result)
+                  const dt = new Date()
+                  const dtStr = `${dt.getFullYear()}${String(dt.getMonth()+1).padStart(2,'0')}${String(dt.getDate()).padStart(2,'0')}_${String(dt.getHours()).padStart(2,'0')}${String(dt.getMinutes()).padStart(2,'0')}${String(dt.getSeconds()).padStart(2,'0')}`
+                  const templateName = safeFileName(String(displayNameFromSlug(String(slug))))
+                  const customerName = safeFileName(String(row.name))
+                  const defaultBase = `${customerName}_${templateName}_${dtStr}`
+                  const baseName = filename || defaultBase
+                  const fnameLocal = baseName
+                  const outPathLocal = path.join(docsDir, fnameLocal + '.xlsx')
+                  try { jobLog(job.id, `outfile:${path.basename(outPathLocal)}`) } catch {}
+                  fs.writeFileSync(outPathLocal, mergedBuf)
+                  markJobDone(job.id, { path: outPathLocal, name: path.basename(outPathLocal) }, { usedWorkspace })
+                  return res.status(201).json({ ok: true, file: { path: outPathLocal, name: path.basename(outPathLocal) }, ...(usedWorkspace ? { usedWorkspace } : {}), logs: [...logs, 'fullgen:ok'], jobId: job.id })
+                } else {
+                  markJobError(job.id, 'Unsupported template kind for generation')
+                  return res.status(400).json({ error: 'Unsupported template kind for generation', jobId: job.id })
                 }
-                const inner = String((result as any).wml || (result as any).bodyXml || '')
-                if (isCancelled(job.id)) { logAndPush('cancelled'); return res.status(499).json({ error: 'cancelled', jobId: job.id }) }
-                const merged = (await import('../services/docxCompose')).mergeWmlIntoDocxTemplate(fs.readFileSync((tpl as any).templatePath), inner)
-                // Default filename: {Customer}_{TemplateName}_{YYYYMMDD_HHmmss}
-                const dt = new Date()
-                const dtStr = `${dt.getFullYear()}${String(dt.getMonth()+1).padStart(2,'0')}${String(dt.getDate()).padStart(2,'0')}_${String(dt.getHours()).padStart(2,'0')}${String(dt.getMinutes()).padStart(2,'0')}${String(dt.getSeconds()).padStart(2,'0')}`
-                const templateName = safeFileName(String(displayNameFromSlug(String(slug))))
-                const customerName = safeFileName(String(row.name))
-                const defaultBase = `${customerName}_${templateName}_${dtStr}`
-                const baseName = filename || defaultBase
-                const fnameLocal = baseName
-                const outPathLocal = path.join(docsDir, fnameLocal + '.docx')
-                try { jobLog(job.id, `outfile:${path.basename(outPathLocal)}`) } catch {}
-                fs.writeFileSync(outPathLocal, merged)
-                markJobDone(job.id, { path: outPathLocal, name: path.basename(outPathLocal) }, { usedWorkspace })
-                return res.status(201).json({ ok: true, file: { path: outPathLocal, name: path.basename(outPathLocal) }, ...(usedWorkspace ? { usedWorkspace } : {}), logs: [...logs, 'fullgen:ok'], jobId: job.id })
               }
             } catch (e:any) {
               const em = `Full generator failed: ${e?.message || e}`
@@ -479,7 +505,9 @@ router.get("/stream", async (req, res) => {
           const userAddendum = instructions && String(instructions).trim().length
             ? `\n\nUSER ADDITIONAL INSTRUCTIONS (prioritize when choosing workspace data):\n${String(instructions).trim()}\n`
             : ''
-          const aiPrompt = `You are a senior TypeScript engineer. Update the following document generator function to incorporate customer-specific data from THIS WORKSPACE. Keep the EXACT export signature. Compose the final output as raw WordprocessingML (WML) via return { wml }. Do not import external modules or do file I/O. Maintain formatting with runs (color/size/bold/italic/underline/strike/font) and paragraph props (align/spacing/indents).\n\nSTRICT CONSTRAINTS:\n- PRESERVE ALL EXISTING WML STRUCTURE AND STYLING from the CURRENT GENERATOR CODE: do not alter fonts, colors, sizes, spacing, numbering, table properties, headers/footers, or section settings.\n- ONLY substitute text content (and list/table cell values) with workspace-derived strings.\n- DO NOT add, remove, or reorder sections/paragraphs/tables/runs unless absolutely necessary. If no data is found, keep the section and leave values empty rather than inventing content.\n- No boilerplate or extra headings; do not add content beyond what the template structure implies.\n- IMPORTANT: At runtime, toolkit.json/query/text are DISABLED. Do not rely on them. Encode all workspace-informed content directly in the returned WML or via the provided context parameter.\n- Use minimal LLM calls (within this single update).${userAddendum}\n\nOnly output TypeScript code with the updated generate implementation.\n\nCURRENT GENERATOR CODE:\n\n\`\`\`ts\n${tsCode}\n\`\`\``
+          const aiPrompt = ((tpl as any).kind === 'excel')
+            ? `You are a senior TypeScript engineer and spreadsheet specialist. Update the following DocSmith Excel generator function to incorporate customer-specific data inferred from THIS WORKSPACE and the provided user instructions. Keep the EXACT export signature. Compose the final output by returning { sheets } (sheet ops). Do not import external modules or do file I/O.\n\nSTRICT CONSTRAINTS:\n- PRESERVE EXISTING SHEET STRUCTURE AND FORMATTING from the CURRENT GENERATOR CODE: do not alter existing fonts, colors, fills, borders, number formats, alignment, merged ranges, column widths, or sheet order unless absolutely necessary.\n- You MAY append or insert new rows to accommodate variable-length data. Use insertRows with copyStyleFromRow when appropriate to preserve formatting. You MAY add new sheets when clearly necessary, but do not remove or reorder existing sheets.\n- Prefer preserving existing row/column styles; only specify formatting (numFmt, bold/italic/underline/strike, font color via hex, background fill, horizontal alignment, wrap) for new or dynamically added content.\n- If the template has a merged and centered header row, do not break its merge; write data starting below it unless the header text itself must be updated.\n- At runtime, toolkit.json/query/text are DISABLED. Encode workspace-informed content directly into the returned { sheets } or via the provided context parameter.\n- Use minimal LLM calls (within this single update).${userAddendum}\n\nReturn type reminder:\nPromise<{ sheets: Array<{ name: string; insertRows?: Array<{ at: number; count: number; copyStyleFromRow?: number }>; cells?: Array<{ ref: string; v: string|number|boolean; numFmt?: string; bold?: boolean; italic?: boolean; underline?: boolean; strike?: boolean; color?: string; bg?: string; align?: 'left'|'center'|'right'; wrap?: boolean }>; ranges?: Array<{ start: string; values: any[][]; numFmt?: string }> }> }>;\n\nOnly output TypeScript code with the updated generate implementation.\n\nCURRENT GENERATOR CODE:\n\n\`\`\`ts\n${tsCode}\n\`\`\``
+            : `You are a senior TypeScript engineer. Update the following document generator function to incorporate customer-specific data from THIS WORKSPACE. Keep the EXACT export signature. Compose the final output as raw WordprocessingML (WML) via return { wml }. Do not import external modules or do file I/O. Maintain formatting with runs (color/size/bold/italic/underline/strike/font) and paragraph props (align/spacing/indents).\n\nSTRICT CONSTRAINTS:\n- PRESERVE ALL EXISTING WML STRUCTURE AND STYLING from the CURRENT GENERATOR CODE: do not alter fonts, colors, sizes, spacing, numbering, table properties, headers/footers, or section settings.\n- ONLY substitute text content (and list/table cell values) with workspace-derived strings.\n- DO NOT add, remove, or reorder sections/paragraphs/tables/runs unless absolutely necessary. If no data is found, keep the section and leave values empty rather than inventing content.\n- No boilerplate or extra headings; do not add content beyond what the template structure implies.\n- IMPORTANT: At runtime, toolkit.json/query/text are DISABLED. Do not rely on them. Encode all workspace-informed content directly in the returned WML or via the provided context parameter.\n- Use minimal LLM calls (within this single update).${userAddendum}\n\nOnly output TypeScript code with the updated generate implementation.\n\nCURRENT GENERATOR CODE:\n\n\`\`\`ts\n${tsCode}\n\`\`\``
           const r = await anythingllmRequest<any>(`/workspace/${encodeURIComponent(wsForGen)}/chat`, 'POST', { message: aiPrompt, mode: 'query' })
           const t = String(r?.textResponse || r?.message || r || '')
           const m = t.match(/```[a-z]*\s*([\s\S]*?)```/i)
@@ -562,30 +590,52 @@ router.get("/stream", async (req, res) => {
       const result = await generateFull(toolkit, builder, context)
       logAndPush('generate:ok')
       stepOkRec('execute')
-      if ((tpl as any).kind !== 'docx') { jobLog(job.id, 'error:template-kind'); markJobError(job.id, 'Template must be DOCX for WML merge'); send({ type: 'error', error: 'Template must be DOCX for WML merge' }); return res.end() }
-      if (!result || (!('wml' in (result as any)) && !('bodyXml' in (result as any)))) { jobLog(job.id, 'error:no-wml'); markJobError(job.id, 'Full generator did not return WML/bodyXml'); send({ type: 'error', error: 'Full generator did not return WML/bodyXml' }); return res.end() }
-      const inner = String((result as any).wml || (result as any).bodyXml || '')
-      if (isCancelled(job.id)) { jobLog(job.id, 'cancelled'); send({ type: 'error', error: 'cancelled' }); return res.end() }
-      logAndPush('merge:start')
-      stepStartRec('mergeWrite')
-      const merged = (await import('../services/docxCompose')).mergeWmlIntoDocxTemplate(fs.readFileSync((tpl as any).templatePath), inner)
-      logAndPush('merge:ok')
-      // Default filename: {Customer}_{TemplateName}_{YYYYMMDD_HHmmss}
-      const dt2 = new Date()
-      const dtStr2 = `${dt2.getFullYear()}${String(dt2.getMonth()+1).padStart(2,'0')}${String(dt2.getDate()).padStart(2,'0')}_${String(dt2.getHours()).padStart(2,'0')}${String(dt2.getMinutes()).padStart(2,'0')}${String(dt2.getSeconds()).padStart(2,'0')}`
-      const templateName2 = safeFileName(String(displayNameFromSlug(String(slug))))
-      const customerName2 = safeFileName(String(row.name))
-      const defaultBase2 = `${customerName2}_${templateName2}_${dtStr2}`
-      const baseName2 = filename || defaultBase2
-      const fnameLocal = baseName2
-      // Emit SSE info with resolved names
-      try { send({ type: 'info', templateName: templateName2, customerName: customerName2, outfile: fnameLocal + '.docx' }) } catch {}
-      const outPathLocal = path.join(docsDir, fnameLocal + '.docx')
-      try { jobLog(job.id, `outfile:${path.basename(outPathLocal)}`) } catch {}
-      fs.writeFileSync(outPathLocal, merged)
-      stepOkRec('mergeWrite')
-      markJobDone(job.id, { path: outPathLocal, name: path.basename(outPathLocal) }, { usedWorkspace: wsForGen })
-      send({ type: 'done', file: { path: outPathLocal, name: path.basename(outPathLocal) }, usedWorkspace: wsForGen, jobId: job.id })
+      if ((tpl as any).kind === 'docx') {
+        if (!result || (!('wml' in (result as any)) && !('bodyXml' in (result as any)))) { jobLog(job.id, 'error:no-wml'); markJobError(job.id, 'Full generator did not return WML/bodyXml'); send({ type: 'error', error: 'Full generator did not return WML/bodyXml' }); return res.end() }
+        const inner = String((result as any).wml || (result as any).bodyXml || '')
+        if (isCancelled(job.id)) { jobLog(job.id, 'cancelled'); send({ type: 'error', error: 'cancelled' }); return res.end() }
+        logAndPush('merge:start')
+        stepStartRec('mergeWrite')
+        const merged = (await import('../services/docxCompose')).mergeWmlIntoDocxTemplate(fs.readFileSync((tpl as any).templatePath), inner)
+        logAndPush('merge:ok')
+        const dt2 = new Date()
+        const dtStr2 = `${dt2.getFullYear()}${String(dt2.getMonth()+1).padStart(2,'0')}${String(dt2.getDate()).padStart(2,'0')}_${String(dt2.getHours()).padStart(2,'0')}${String(dt2.getMinutes()).padStart(2,'0')}${String(dt2.getSeconds()).padStart(2,'0')}`
+        const templateName2 = safeFileName(String(displayNameFromSlug(String(slug))))
+        const customerName2 = safeFileName(String(row.name))
+        const defaultBase2 = `${customerName2}_${templateName2}_${dtStr2}`
+        const baseName2 = filename || defaultBase2
+        const fnameLocal = baseName2
+        try { send({ type: 'info', templateName: templateName2, customerName: customerName2, outfile: fnameLocal + '.docx' }) } catch {}
+        const outPathLocal = path.join(docsDir, fnameLocal + '.docx')
+        try { jobLog(job.id, `outfile:${path.basename(outPathLocal)}`) } catch {}
+        fs.writeFileSync(outPathLocal, merged)
+        stepOkRec('mergeWrite')
+        markJobDone(job.id, { path: outPathLocal, name: path.basename(outPathLocal) }, { usedWorkspace: wsForGen })
+        send({ type: 'done', file: { path: outPathLocal, name: path.basename(outPathLocal) }, usedWorkspace: wsForGen, jobId: job.id })
+      } else if ((tpl as any).kind === 'excel') {
+        if (!result || !('sheets' in (result as any))) { jobLog(job.id, 'error:no-sheets'); markJobError(job.id, 'Full generator did not return sheets for Excel'); send({ type: 'error', error: 'Full generator did not return sheets for Excel' }); return res.end() }
+        if (isCancelled(job.id)) { jobLog(job.id, 'cancelled'); send({ type: 'error', error: 'cancelled' }); return res.end() }
+        logAndPush('merge:start')
+        stepStartRec('mergeWrite')
+        const mergedBuf = await (await import('../services/excelCompose')).mergeOpsIntoExcelTemplate(fs.readFileSync((tpl as any).templatePath), result)
+        logAndPush('merge:ok')
+        const dt2 = new Date()
+        const dtStr2 = `${dt2.getFullYear()}${String(dt2.getMonth()+1).padStart(2,'0')}${String(dt2.getDate()).padStart(2,'0')}_${String(dt2.getHours()).padStart(2,'0')}${String(dt2.getMinutes()).padStart(2,'0')}${String(dt2.getSeconds()).padStart(2,'0')}`
+        const templateName2 = safeFileName(String(displayNameFromSlug(String(slug))))
+        const customerName2 = safeFileName(String(row.name))
+        const defaultBase2 = `${customerName2}_${templateName2}_${dtStr2}`
+        const baseName2 = filename || defaultBase2
+        const fnameLocal = baseName2
+        try { send({ type: 'info', templateName: templateName2, customerName: customerName2, outfile: fnameLocal + '.xlsx' }) } catch {}
+        const outPathLocal = path.join(docsDir, fnameLocal + '.xlsx')
+        try { jobLog(job.id, `outfile:${path.basename(outPathLocal)}`) } catch {}
+        fs.writeFileSync(outPathLocal, mergedBuf)
+        stepOkRec('mergeWrite')
+        markJobDone(job.id, { path: outPathLocal, name: path.basename(outPathLocal) }, { usedWorkspace: wsForGen })
+        send({ type: 'done', file: { path: outPathLocal, name: path.basename(outPathLocal) }, usedWorkspace: wsForGen, jobId: job.id })
+      } else {
+        jobLog(job.id, 'error:template-kind'); markJobError(job.id, 'Unsupported template kind for generation'); send({ type: 'error', error: 'Unsupported template kind for generation' }); return res.end()
+      }
       return res.end()
     } catch (e:any) {
       const msg = String(e?.message || e)
@@ -663,4 +713,107 @@ router.get("/jobs/:id/reveal", (req, res) => {
   } catch (e:any) {
     return res.status(500).json({ error: String(e?.message || e) })
   }
+})
+
+// --- Persisted generation chat cards ---------------------------------------------------------
+// Upsert a card by `cardId`
+router.post("/cards", (req, res) => {
+  const db = getDB()
+  const body = req.body || {}
+  const cardId = String(body.id || body.cardId || '').trim()
+  const side = String(body.side || 'user').trim()
+  const jobId = String(body.jobId || '').trim()
+  const template = body.template != null ? String(body.template) : null
+  const jobStatus = body.jobStatus != null ? String(body.jobStatus) : null
+  const filename = body.filename != null ? String(body.filename) : null
+  const aiContext = body.aiContext != null ? String(body.aiContext) : null
+  const timestamp = Number(body.timestamp || Date.now())
+  let workspaceSlug = body.workspaceSlug != null ? String(body.workspaceSlug) : null
+  const customerId = body.customerId != null ? Number(body.customerId) : null
+
+  if (!cardId || !jobId) return res.status(400).json({ error: 'cardId and jobId required' })
+  if (!workspaceSlug && !customerId) return res.status(400).json({ error: 'workspaceSlug or customerId required' })
+
+  const upsert = () => {
+    db.run(
+      `INSERT INTO gen_cards (cardId, workspaceSlug, customerId, side, template, jobId, jobStatus, filename, aiContext, timestamp)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(cardId) DO UPDATE SET
+         workspaceSlug=excluded.workspaceSlug,
+         customerId=excluded.customerId,
+         side=excluded.side,
+         template=excluded.template,
+         jobId=excluded.jobId,
+         jobStatus=excluded.jobStatus,
+         filename=excluded.filename,
+         aiContext=excluded.aiContext,
+         timestamp=excluded.timestamp,
+         updatedAt=CURRENT_TIMESTAMP
+      `,
+      [cardId, workspaceSlug, customerId, side, template, jobId, jobStatus, filename, aiContext, timestamp],
+      function (err) {
+        if (err) return res.status(500).json({ error: err.message })
+        return res.json({ ok: true, id: cardId })
+      }
+    )
+  }
+
+  if (!workspaceSlug && customerId) {
+    db.get<{ workspaceSlug?: string }>(
+      'SELECT workspaceSlug FROM customers WHERE id = ?',
+      [customerId],
+      (err, row) => {
+        if (err) return res.status(500).json({ error: err.message })
+        workspaceSlug = row?.workspaceSlug || null
+        upsert()
+      }
+    )
+    return
+  }
+  upsert()
+})
+
+// List cards by workspace slug
+router.get('/cards/by-workspace/:slug', (req, res) => {
+  const db = getDB()
+  const slug = String(req.params.slug)
+  db.all(
+    'SELECT cardId as id, workspaceSlug, customerId, side, template, jobId, jobStatus, filename, aiContext, timestamp, createdAt, updatedAt FROM gen_cards WHERE workspaceSlug = ? ORDER BY COALESCE(timestamp, 0), datetime(createdAt) ASC',
+    [slug],
+    (err, rows) => {
+      if (err) return res.status(500).json({ error: err.message })
+      return res.json({ cards: rows || [] })
+    }
+  )
+})
+
+// Delete cards by workspace slug
+router.delete('/cards/by-workspace/:slug', (req, res) => {
+  const db = getDB()
+  const slug = String(req.params.slug)
+  db.run('DELETE FROM gen_cards WHERE workspaceSlug = ?', [slug], function (err) {
+    if (err) return res.status(500).json({ error: err.message })
+    return res.json({ ok: true, deleted: this.changes || 0 })
+  })
+})
+
+// Delete cards by customer id
+router.delete('/cards/by-customer/:id', (req, res) => {
+  const db = getDB()
+  const id = Number(req.params.id)
+  if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: 'Invalid id' })
+  db.run('DELETE FROM gen_cards WHERE customerId = ?', [id], function (err) {
+    if (err) return res.status(500).json({ error: err.message })
+    return res.json({ ok: true, deleted: this.changes || 0 })
+  })
+})
+
+// Delete cards by job id
+router.delete('/cards/by-job/:jobId', (req, res) => {
+  const db = getDB()
+  const jobId = String(req.params.jobId)
+  db.run('DELETE FROM gen_cards WHERE jobId = ?', [jobId], function (err) {
+    if (err) return res.status(500).json({ error: err.message })
+    return res.json({ ok: true, deleted: this.changes || 0 })
+  })
 })

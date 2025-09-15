@@ -25,11 +25,11 @@ export default function TemplatesPage() {
   const [compiling, setCompiling] = React.useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
   const [deleteSlug, setDeleteSlug] = React.useState<string | null>(null);
-  
+
   // cleaned: no separate code state; use modal
   const [codeModal, setCodeModal] = React.useState<{ title: string; code: string } | null>(null);
   const [compLogs, setCompLogs] = React.useState<string[] | null>(null);
-  const [compSteps, setCompSteps] = React.useState<Record<string, 'start'|'ok'>>({});
+  const [compSteps, setCompSteps] = React.useState<Record<string, 'start' | 'ok'>>({});
   const [compProgress, setCompProgress] = React.useState<number | null>(null);
   const [compJobId, setCompJobId] = React.useState<string | null>(null);
   const compEsRef = React.useRef<EventSource | null>(null);
@@ -49,7 +49,7 @@ export default function TemplatesPage() {
   }
   React.useEffect(() => { load(); }, []);
 
-  
+
 
   // Only Full Generator is supported now
 
@@ -59,7 +59,7 @@ export default function TemplatesPage() {
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(String(j?.error || r.status));
       setCodeModal({ title: 'Full Document Generator (generator.full.ts)', code: String(j.code || '') });
-    } catch (e:any) { toast.error(e?.message ? String(e.message) : 'Failed to load full generator') }
+    } catch (e: any) { toast.error(e?.message ? String(e.message) : 'Failed to load full generator') }
   }
 
   // Rebuild Full Generator removed; compile consolidates this flow
@@ -73,7 +73,7 @@ export default function TemplatesPage() {
   }
 
   async function copyPath(p?: string) {
-    try { await navigator.clipboard.writeText(String(p||'')); toast.success('Path copied'); }
+    try { await navigator.clipboard.writeText(String(p || '')); toast.success('Path copied'); }
     catch { toast.error('Copy failed'); }
   }
 
@@ -85,31 +85,31 @@ export default function TemplatesPage() {
       compEsRef.current = es
       es.onmessage = (ev) => {
         try {
-          const data = JSON.parse(ev.data||'{}')
+          const data = JSON.parse(ev.data || '{}')
           if (data?.type === 'info') {
-            if (data.usedWorkspace) setCompLogs((prev)=> ([...(prev||[]), `workspace:${String(data.usedWorkspace)}`]))
+            if (data.usedWorkspace) setCompLogs((prev) => ([...(prev || []), `workspace:${String(data.usedWorkspace)}`]))
             if (data.jobId) setCompJobId(String(data.jobId))
           } else if (data?.type === 'log') {
-            setCompLogs((prev)=> ([...(prev||[]), String(data.message||'')]))
+            setCompLogs((prev) => ([...(prev || []), String(data.message || '')]))
           } else if (data?.type === 'step') {
-            const name = String(data.name||'')
-            const status = String(data.status||'start') as 'start'|'ok'
+            const name = String(data.name || '')
+            const status = String(data.status || 'start') as 'start' | 'ok'
             const p = typeof data.progress === 'number' ? Math.max(0, Math.min(100, Math.floor(data.progress))) : null
-            setCompSteps((prev)=> ({ ...(prev||{}), [name]: status }))
+            setCompSteps((prev) => ({ ...(prev || {}), [name]: status }))
             if (p != null) setCompProgress(p)
           } else if (data?.type === 'done') {
-            setCompLogs((prev)=> ([...(prev||[]), 'done']))
+            setCompLogs((prev) => ([...(prev || []), 'done']))
             if (compEsRef.current) { compEsRef.current.close(); compEsRef.current = null }
             setCompiling(null); setCompProgress(100); setCompJobId(null)
             load()
           } else if (data?.type === 'error') {
-            setCompLogs((prev)=> ([...(prev||[]), `error:${String(data.error||'unknown')}`]))
+            setCompLogs((prev) => ([...(prev || []), `error:${String(data.error || 'unknown')}`]))
             if (compEsRef.current) { compEsRef.current.close(); compEsRef.current = null }
             setCompiling(null); setCompJobId(null)
           }
-        } catch {}
+        } catch { }
       }
-      es.onerror = () => { setCompLogs((prev)=> ([...(prev||[]), 'error:stream'])); if (compEsRef.current) { compEsRef.current.close(); compEsRef.current = null }; setCompiling(null); setCompJobId(null) }
+      es.onerror = () => { setCompLogs((prev) => ([...(prev || []), 'error:stream'])); if (compEsRef.current) { compEsRef.current.close(); compEsRef.current = null }; setCompiling(null); setCompJobId(null) }
     } catch {
       setCompiling(null)
     }
@@ -121,11 +121,11 @@ export default function TemplatesPage() {
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(String(j?.error || r.status));
       toast.success('Opened folder');
-    } catch (e:any) { toast.error(e?.message || 'Failed to open folder'); }
+    } catch (e: any) { toast.error(e?.message || 'Failed to open folder'); }
   }
 
   async function copyPath(p?: string) {
-    try { await navigator.clipboard.writeText(String(p||'')); toast.success('Path copied'); }
+    try { await navigator.clipboard.writeText(String(p || '')); toast.success('Path copied'); }
     catch { toast.error('Copy failed'); }
   }
 
@@ -179,7 +179,7 @@ export default function TemplatesPage() {
     }
   }
 
-  
+
 
   return (
     <div className="space-y-6 animate-in fade-in-0 slide-in-from-top-2">
@@ -203,7 +203,7 @@ export default function TemplatesPage() {
         <div className="flex items-center gap-2">
           <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
             <DialogTrigger asChild>
-              <Button><Icon.Upload className="h-4 w-4 mr-2"/>Upload</Button>
+              <Button><Icon.Upload className="h-4 w-4 mr-2" />Upload</Button>
             </DialogTrigger>
             <DialogContent>
               <DialogHeader><DialogTitle>Upload Template Source</DialogTitle></DialogHeader>
@@ -242,20 +242,21 @@ export default function TemplatesPage() {
               </DialogFooter>
             </DialogContent>
           </Dialog>
-          <Button variant="secondary" onClick={load}><Icon.Refresh className="h-4 w-4 mr-2"/>Refresh</Button>
+          <Button variant="secondary" onClick={load}><Icon.Refresh className="h-4 w-4 mr-2" />Refresh</Button>
         </div>
       </div>
 
       <div className="grid grid-cols-12 gap-4 min-h-0">
         {/* Cards list full width */}
         <div className="col-span-12">
-          <Card className="p-4 h-[calc(100vh-220px)] overflow-y-auto">
+          <Card className="p-4 h-[calc(100vh-220px)] flex flex-col">
             {loading ? (
               <div className="text-sm text-muted-foreground">Loading templates…</div>
             ) : items.length ? (
               <>
-                <div className="flex items-center gap-2 mb-2">
-                  <Input placeholder="Search templates" value={q} onChange={(e)=>setQ(e.target.value)} className="w-[260px]" />
+                {/* Fixed search/filter bar at top */}
+                <div className="flex items-center gap-2 mb-4 flex-shrink-0">
+                  <Input placeholder="Search templates" value={q} onChange={(e) => setQ(e.target.value)} className="w-[260px]" />
                   <Select value={typeFilter} onValueChange={setTypeFilter}>
                     <SelectTrigger className="w-[160px]"><SelectValue placeholder="Type" /></SelectTrigger>
                     <SelectContent>
@@ -273,92 +274,93 @@ export default function TemplatesPage() {
                     </SelectContent>
                   </Select>
                 </div>
-                <div className="space-y-2">
-                {items
-                  .filter((t)=> !q || (t.name||t.slug).toLowerCase().includes(q.toLowerCase()) || t.slug.toLowerCase().includes(q.toLowerCase()))
-                  .filter((t)=> typeFilter==='all' ? true : (typeFilter==='docx' ? !!t.hasDocx : (typeFilter==='excel' ? !!(t as any).hasExcel : !t.hasDocx && !((t as any).hasExcel))))
-                  .sort((a,b)=> sortBy==='name' ? String(a.name||a.slug).localeCompare(String(b.name||b.slug)) : (new Date(b.updatedAt||0).getTime() - new Date(a.updatedAt||0).getTime()))
-                  .map((t) => (
-                  <div key={t.slug} className="rounded-md border bg-card/50 transition px-4 py-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>
-                        <div className="font-medium">{t.name || t.slug}</div>
-                        <div className="text-xs text-muted-foreground">{t.slug}</div>
-                      </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <span className={`text-xs px-2 py-0.5 rounded border ${t.hasFullGen ? 'bg-green-50 text-green-700 border-green-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>{t.hasFullGen ? 'Compiled' : 'Not compiled'}</span>
-                          </TooltipTrigger>
-                          <TooltipContent>{t.hasFullGen ? 'Template has a generated FullGen script' : 'Template has not been compiled yet'}</TooltipContent>
-                        </Tooltip>
-                        <span className="text-xs px-2 py-0.5 rounded border">{t.hasDocx ? 'Word' : (t.hasExcel ? 'Excel' : 'Text')}</span>
-                      </div>
-                    </div>
-                    <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
-                      <div>
-                        <div className="text-muted-foreground">Workspace</div>
-                        <div>{t.workspaceSlug || '—'}</div>
-                      </div>
-                      <div>
-                        <div className="text-muted-foreground">Compiled</div>
-                        <div>{t.compiledAt ? new Date(t.compiledAt).toLocaleString() : '—'}</div>
-                      </div>
-                      <div>
-                        <div className="text-muted-foreground">Updated</div>
-                        <div>{t.updatedAt ? new Date(t.updatedAt).toLocaleString() : '—'}</div>
-                      </div>
-                    </div>
-                    <div className="mt-2 flex items-center gap-2 flex-wrap justify-end">
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button size="icon" variant="ghost" aria-label="Open folder" title="Open Folder" onClick={async ()=>{
-                            try {
-                              const r = await fetch(`/api/templates/${encodeURIComponent(t.slug)}/open-folder`, { method: 'POST' });
-                              if (!r.ok) throw new Error(String(r.status));
-                              toast.success('Opened folder');
-                            } catch { toast.error('Failed to open folder') }
-                          }}>
-                            <Icon.Folder className="h-4 w-4" />
+
+                {/* Scrollable content area */}
+                <div className="flex-1 overflow-y-auto space-y-2">
+                  {items
+                    .filter((t) => !q || (t.name || t.slug).toLowerCase().includes(q.toLowerCase()) || t.slug.toLowerCase().includes(q.toLowerCase()))
+                    .filter((t) => typeFilter === 'all' ? true : (typeFilter === 'docx' ? !!t.hasDocx : (typeFilter === 'excel' ? !!(t as any).hasExcel : !t.hasDocx && !((t as any).hasExcel))))
+                    .sort((a, b) => sortBy === 'name' ? String(a.name || a.slug).localeCompare(String(b.name || b.slug)) : (new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime()))
+                    .map((t) => (
+                      <div key={t.slug} className="rounded-md border bg-card/50 transition px-4 py-3">
+                        {/* ... rest of your template item content stays the same ... */}
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <div className="font-medium">{t.name || t.slug}</div>
+                            <div className="text-xs text-muted-foreground">{t.slug}</div>
+                          </div>
+                          <div className="flex items-center gap-2 shrink-0">
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span className={`text-xs px-2 py-0.5 rounded border ${t.hasFullGen ? 'bg-green-50 text-green-700 border-green-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>{t.hasFullGen ? 'Compiled' : 'Not compiled'}</span>
+                              </TooltipTrigger>
+                              <TooltipContent>{t.hasFullGen ? 'Template has a generated FullGen script' : 'Template has not been compiled yet'}</TooltipContent>
+                            </Tooltip>
+                            <span className="text-xs px-2 py-0.5 rounded border">{t.hasDocx ? 'Word' : (t.hasExcel ? 'Excel' : 'Text')}</span>
+                          </div>
+                        </div>
+                        <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
+                          <div>
+                            <div className="text-muted-foreground">Workspace</div>
+                            <div>{t.workspaceSlug || '—'}</div>
+                          </div>
+                          <div>
+                            <div className="text-muted-foreground">Compiled</div>
+                            <div>{t.compiledAt ? new Date(t.compiledAt).toLocaleString() : '—'}</div>
+                          </div>
+                          <div>
+                            <div className="text-muted-foreground">Updated</div>
+                            <div>{t.updatedAt ? new Date(t.updatedAt).toLocaleString() : '—'}</div>
+                          </div>
+                        </div>
+                        <div className="mt-2 flex items-center gap-2 flex-wrap justify-end">
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button size="icon" variant="ghost" aria-label="Open folder" title="Open Folder" onClick={async () => {
+                                try {
+                                  const r = await fetch(`/api/templates/${encodeURIComponent(t.slug)}/open-folder`, { method: 'POST' });
+                                  if (!r.ok) throw new Error(String(r.status));
+                                  toast.success('Opened folder');
+                                } catch { toast.error('Failed to open folder') }
+                              }}>
+                                <Icon.Folder className="h-4 w-4" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Open Folder</TooltipContent>
+                          </Tooltip>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button size="icon" variant="ghost" aria-label="Compile" title={compiling === t.slug ? 'Compiling' : (t.hasFullGen ? 'Recompile' : 'Compile')} onClick={() => compile(t.slug)} disabled={compiling === t.slug}>
+                                <Icon.Refresh className="h-4 w-4" />
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>{compiling === t.slug ? 'Compiling' : (t.hasFullGen ? 'Recompile' : 'Compile')}</TooltipContent>
+                          </Tooltip>
+                          {t.hasFullGen ? (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button size="icon" variant="ghost" aria-label="View FullGen" title="View FullGen" onClick={() => viewFullGen(t.slug)}>
+                                  <Icon.File className="h-4 w-4" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>View FullGen</TooltipContent>
+                            </Tooltip>
+                          ) : null}
+                          <Button size="icon" variant="destructive" aria-label="Delete" title="Delete" onClick={() => startDelete(t.slug)}>
+                            <Icon.Trash className="h-4 w-4" />
                           </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>Open Folder</TooltipContent>
-                      </Tooltip>
-                      {/* Update action removed */}
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <Button size="icon" variant="ghost" aria-label="Compile" title={compiling === t.slug ? 'Compiling' : (t.hasFullGen ? 'Recompile' : 'Compile')} onClick={() => compile(t.slug)} disabled={compiling === t.slug}>
-                            <Icon.Refresh className="h-4 w-4" />
-                          </Button>
-                        </TooltipTrigger>
-                        <TooltipContent>{compiling === t.slug ? 'Compiling' : (t.hasFullGen ? 'Recompile' : 'Compile')}</TooltipContent>
-                      </Tooltip>
-                      {t.hasFullGen ? (
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button size="icon" variant="ghost" aria-label="View FullGen" title="View FullGen" onClick={() => viewFullGen(t.slug)}>
-                              <Icon.File className="h-4 w-4" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent>View FullGen</TooltipContent>
-                        </Tooltip>
-                      ) : null}
-                      <Button size="icon" variant="destructive" aria-label="Delete" title="Delete" onClick={() => startDelete(t.slug)}>
-                        <Icon.Trash className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  </div>
-                ))}
-              </div>
+                        </div>
+                      </div>
+                    ))}
+                </div>
               </>
             ) : (
               <div className="text-sm text-muted-foreground">No templates yet. Upload one to get started.</div>
             )}
           </Card>
         </div>
-
-        {/* Right preview removed: cards are full width */}
       </div>
+
 
       {/* Delete Template Confirm */}
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
@@ -374,20 +376,20 @@ export default function TemplatesPage() {
       </AlertDialog>
 
       {/* Code Modal */}
-      <Dialog open={!!codeModal} onOpenChange={(v)=>{ if(!v) setCodeModal(null) }}>
+      <Dialog open={!!codeModal} onOpenChange={(v) => { if (!v) setCodeModal(null) }}>
         <DialogContent className="sm:max-w-3xl">
           <DialogHeader><DialogTitle>{codeModal?.title || 'Code'}</DialogTitle></DialogHeader>
           <div className="border rounded-md bg-muted/30 px-3 py-2 h-96 overflow-auto text-sm">
             <pre className="whitespace-pre-wrap">{codeModal?.code || ''}</pre>
           </div>
           <DialogFooter>
-            <Button variant="secondary" onClick={()=>setCodeModal(null)}>Close</Button>
+            <Button variant="secondary" onClick={() => setCodeModal(null)}>Close</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-  {/* Compile Logs */}
-  <Dialog open={!!compLogs} onOpenChange={(v)=>{ if(!v){ setCompLogs(null); setCompSteps({}); setCompProgress(null); setCompJobId(null); if (compEsRef.current) { compEsRef.current.close(); compEsRef.current = null } } }}>
+      {/* Compile Logs */}
+      <Dialog open={!!compLogs} onOpenChange={(v) => { if (!v) { setCompLogs(null); setCompSteps({}); setCompProgress(null); setCompJobId(null); if (compEsRef.current) { compEsRef.current.close(); compEsRef.current = null } } }}>
         <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>Compile Logs</DialogTitle>
@@ -404,28 +406,28 @@ export default function TemplatesPage() {
             </div>
             <div className="border rounded-md bg-muted/30 px-3 py-2 h-40 overflow-auto text-sm">
               <ul className="text-sm space-y-1">
-                {['resolveTemplate','resolveWorkspace','readTemplate','extractSkeleton','buildPrompt','aiRequest','writeGenerator'].map((s)=> (
+                {['resolveTemplate', 'resolveWorkspace', 'readTemplate', 'extractSkeleton', 'buildPrompt', 'aiRequest', 'writeGenerator'].map((s) => (
                   <li key={s} className="flex items-center gap-2">
-                    <span className="w-3 h-3 rounded-full inline-block" style={{ backgroundColor: compSteps[s]==='ok' ? '#16a34a' : (compSteps[s]==='start' ? '#f59e0b' : '#d4d4d8') }} />
-                    <span className="capitalize">{s.replace(/([A-Z])/g,' $1')}</span>
+                    <span className="w-3 h-3 rounded-full inline-block" style={{ backgroundColor: compSteps[s] === 'ok' ? '#16a34a' : (compSteps[s] === 'start' ? '#f59e0b' : '#d4d4d8') }} />
+                    <span className="capitalize">{s.replace(/([A-Z])/g, ' $1')}</span>
                   </li>
                 ))}
               </ul>
             </div>
             <div className="border rounded-md bg-muted/30 px-3 py-2 h-40 overflow-auto text-sm">
-              <pre className="whitespace-pre-wrap">{(compLogs||[]).join('\n')}</pre>
+              <pre className="whitespace-pre-wrap">{(compLogs || []).join('\n')}</pre>
             </div>
           </div>
           <DialogFooter>
             {compiling && compJobId ? (
-              <Button variant="destructive" onClick={async ()=>{ try{ await fetch(`/api/templates/compile/jobs/${encodeURIComponent(compJobId)}/cancel`, { method: 'POST' }); setCompLogs((prev)=> ([...(prev||[]), 'cancel:requested'])) } catch {} }}>Cancel</Button>
+              <Button variant="destructive" onClick={async () => { try { await fetch(`/api/templates/compile/jobs/${encodeURIComponent(compJobId)}/cancel`, { method: 'POST' }); setCompLogs((prev) => ([...(prev || []), 'cancel:requested'])) } catch { } }}>Cancel</Button>
             ) : null}
             <DialogClose asChild>
               <Button variant="secondary">Close</Button>
             </DialogClose>
           </DialogFooter>
         </DialogContent>
-  </Dialog>
+      </Dialog>
     </div>
   );
 }

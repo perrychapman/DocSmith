@@ -1,7 +1,7 @@
 import * as React from "react";
 import { Badge } from "./ui/badge";
 import { ScrollArea } from "./ui/scroll-area";
-import { Button } from "./ui/Button";
+import { Button } from "./ui/button";
 import { Icon } from "./icons";
 import { toast } from "sonner";
 

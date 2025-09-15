@@ -1,6 +1,7 @@
 // backend/src/api/anythingllm.ts
 import { Router } from "express";
 import { anythingllmRequest } from "../services/anythingllm";
+import { readSettings } from "../services/settings";
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const multer = require("multer");
 
@@ -10,12 +11,14 @@ const router = Router();
 router.get("/debug", (_req, res) => res.json({ mounted: true }));
 
 /**
- * PING (proxy -> /api/ping, no /v1) — uses built-in fetch (Node 18+)
+ * PING (proxy -> /api/ping, no /v1) ΓÇö uses built-in fetch (Node 18+)
  */
 router.get("/ping", async (_req, res) => {
   try {
-    const base = process.env.ANYTHINGLLM_BASE_URL || "http://localhost:3001/api";
-    const apiKey = process.env.ANYTHINGLLM_API_KEY || "";
+    const s = readSettings();
+    const baseUrl = (String(s.anythingLLMUrl || "http://localhost:3001").trim()).replace(/\/+$/, "");
+    const base = `${baseUrl}/api`;
+    const apiKey = String(s.anythingLLMKey || "").trim();
     const r = await fetch(`${base}/ping`, {
       method: "GET",
       headers: {
@@ -39,16 +42,17 @@ router.get("/ping", async (_req, res) => {
  * Proxies: GET http://localhost:3001/api/v1/auth
  * Expects: Authorization: Bearer <API KEY> (added by service helper)
  */
+
 router.get("/auth", async (_req, res) => {
   try {
     const data = await anythingllmRequest<{ authenticated: boolean }>("/auth", "GET");
     res.json(data);
   } catch (err: any) {
-    // If upstream returns 403, anythingllmRequest throws; return a clean 403 here.
     const msg = String(err?.message || "Auth check failed");
     const isForbidden = /403/.test(msg);
-    res.status(isForbidden ? 403 : 502).json({
-      message: isForbidden ? "Invalid API Key" : msg,
+    const isNotConfigured = /NotConfigured/i.test(msg) || /ANYTHINGLLM_API_KEY.*missing/i.test(msg);
+    res.status(isNotConfigured ? 400 : (isForbidden ? 403 : 502)).json({
+      message: isNotConfigured ? "Missing API Key in settings" : (isForbidden ? "Invalid API Key" : msg),
     });
   }
 });
@@ -546,14 +550,15 @@ router.post("/workspace/:slug/thread/:threadSlug/stream-chat", async (req, res) 
 
   try {
     // Build upstream URL from configured API root and ensure /api/v1 prefix
-    const apiRoot = (process.env.ANYTHINGLLM_API_URL || "http://localhost:3001").replace(/\/+$/, "");
+    const s = readSettings();
+    const apiRoot = (String(s.anythingLLMUrl || "http://localhost:3001").trim()).replace(/\/+$/, "");
     const base = `${apiRoot}/api/v1`;
-    const apiKey = process.env.ANYTHINGLLM_API_KEY || "";
-    const controller = new AbortController();
+    const apiKey = String(s.anythingLLMKey || "").trim();
 
     // Abort upstream if client disconnects
+    const controller = new AbortController();
+    // Abort upstream if client disconnects
     req.on("close", () => controller.abort());
-
     const upstream = await fetch(
       `${base}/workspace/${encodeURIComponent(slug)}/thread/${encodeURIComponent(threadSlug)}/stream-chat`,
       {
@@ -881,3 +886,5 @@ router.post("/document/upload", (req, res) => {
 
 
 export = router;
+
+

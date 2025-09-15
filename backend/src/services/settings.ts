@@ -3,7 +3,8 @@ import path from "path"
 import { libraryRoot } from "./fs"
 
 export type AppSettings = {
-  templateCompilerWorkspaceSlug?: string
+  anythingLLMUrl?: string
+  anythingLLMKey?: string
 }
 
 function settingsPath() {
@@ -28,4 +29,6 @@ export function writeSettings(next: AppSettings) {
     fs.writeFileSync(p, JSON.stringify(next || {}, null, 2), "utf-8")
   } catch {}
 }
+
+
 

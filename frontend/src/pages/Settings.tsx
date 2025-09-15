@@ -1,7 +1,9 @@
 import * as React from "react";
 import { Card } from "../components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Input } from "../components/ui/input";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "../components/ui/breadcrumb";
+import { Separator } from "../components/ui/separator";
 import { Icon } from "../components/icons";
 import { toast } from "sonner";
 import { useTheme } from "next-themes";
@@ -10,16 +12,36 @@ export default function SettingsPage() {
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = React.useState(false);
   React.useEffect(() => setMounted(true), []);
+
   const [ping, setPing] = React.useState<string>("unknown");
   const [auth, setAuth] = React.useState<string>("unknown");
   const [loading, setLoading] = React.useState(false);
-  const [wsList, setWsList] = React.useState<Array<{ name: string; slug: string }>>([]);
-  const [compilerWs, setCompilerWs] = React.useState<string>("");
-  const [saving, setSaving] = React.useState(false);
+
+  const [apiUrl, setApiUrl] = React.useState<string>("http://localhost:3001");
+  const [apiKey, setApiKey] = React.useState<string>("");
   const [lastChecked, setLastChecked] = React.useState<string>("");
+  const [urlTouched, setUrlTouched] = React.useState(false);
+  const [keyTouched, setKeyTouched] = React.useState(false);
+
+  const urlValid = React.useMemo(() => {
+    try {
+      const u = (apiUrl || '').trim();
+      if (!u) return false;
+      const parsed = new URL(u);
+      return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+    } catch { return false }
+  }, [apiUrl]);
+  const keyValid = React.useMemo(() => {
+    const v = (apiKey || '').trim();
+    return /^(?:[A-Za-z0-9]{7}-){3}[A-Za-z0-9]{7}$/.test(v);
+  }, [apiKey]);
+  const canTest = urlValid && keyValid;
 
   async function check() {
     setLoading(true);
+    try {
+      await fetch(`/api/settings`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ anythingLLMUrl: (apiUrl||'').trim() || undefined, anythingLLMKey: (apiKey||'').trim() || undefined }) });
+    } catch {}
     try {
       const pr = await fetch(`/api/anythingllm/ping`);
       setPing(pr.status === 200 ? "ok" : String(pr.status));
@@ -31,29 +53,26 @@ export default function SettingsPage() {
     setLastChecked(new Date().toLocaleString());
     setLoading(false);
   }
+
   React.useEffect(() => {
-    check();
     (async () => {
       try {
-        const ws = await fetch(`/api/anythingllm/workspaces`).then((r) => r.json()).catch(() => ({}));
-        const arr: Array<{ name: string; slug: string }> = Array.isArray(ws?.workspaces) ? ws.workspaces : (Array.isArray(ws) ? ws : []);
-        setWsList(arr);
-      } catch {}
-      try {
         const s = await fetch(`/api/settings`).then((r) => r.json()).catch(() => ({}));
-        if (s?.templateCompilerWorkspaceSlug) setCompilerWs(String(s.templateCompilerWorkspaceSlug));
+        if (s?.anythingLLMUrl) setApiUrl(String(s.anythingLLMUrl)); else setApiUrl('http://localhost:3001');
+        if (s?.anythingLLMKey) setApiKey(String(s.anythingLLMKey));
       } catch {}
+      await check();
     })();
   }, []);
 
   async function save() {
     try {
-      setSaving(true);
-      const r = await fetch(`/api/settings`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ templateCompilerWorkspaceSlug: compilerWs || undefined }) });
+      setLoading(true);
+      const r = await fetch(`/api/settings`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ anythingLLMUrl: (apiUrl||'').trim() || undefined, anythingLLMKey: (apiKey||'').trim() || undefined }) });
       if (!r.ok) throw new Error(String(r.status));
       toast.success("Settings saved");
     } catch { toast.error("Failed to save settings") }
-    finally { setSaving(false) }
+    finally { setLoading(false) }
   }
 
   return (
@@ -87,37 +106,39 @@ export default function SettingsPage() {
         </div>
       </Card>
 
-      <Card className="p-4 space-y-3">
-        <div className="font-medium">AnythingLLM Connectivity</div>
-        <div className="flex items-center gap-2">
-          <span className={`text-xs px-2 py-1 rounded-full ${ping === 'ok' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-muted text-muted-foreground'}`}>ping: {ping}</span>
-          <span className={`text-xs px-2 py-1 rounded-full ${auth === 'ok' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-muted text-muted-foreground'}`}>auth: {auth}</span>
+      <Card className="p-4 space-y-4">
+        <div className="flex items-center justify-between">
+          <div className="font-medium">AnythingLLM Connectivity</div>
+          <Button onClick={check} disabled={loading || !canTest}><Icon.Refresh className="h-4 w-4 mr-2"/>Test Connection</Button>
         </div>
-        {lastChecked ? <div className="text-xs text-muted-foreground">Last checked: {lastChecked}</div> : null}
         <div className="text-sm text-muted-foreground">
-          Configure AnythingLLM in your environment (server-side): set <code>ANYTHINGLLM_API_URL</code> and <code>ANYTHINGLLM_API_KEY</code> in your <code>.env</code>. Optionally set <code>ANYTHINGLLM_INGEST_ROOT</code> when embedding local files.
+          Configure the AnythingLLM connection here. Default URL: http://localhost:3001. Create or manage an API key in the AnythingLLM docs: <a className="underline" href="https://docs.useanything.com/features/api" target="_blank" rel="noreferrer">API guide</a>.
         </div>
-        <div>
-          <Button variant="secondary" onClick={check} disabled={loading}><Icon.Refresh className="h-4 w-4 mr-2"/>Recheck</Button>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-1">
+            <div className="text-sm">API URL</div>
+            <Input value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} onBlur={() => setUrlTouched(true)} aria-invalid={!urlValid && urlTouched} placeholder="http://localhost:3001" />
+            <div className="text-xs text-muted-foreground">Default: http://localhost:3001</div>
+            {!urlValid && urlTouched ? <div className="text-xs text-red-600">Enter a valid http(s) URL</div> : null}
+          </div>
+          <div className="space-y-1">
+            <div className="text-sm">API Key</div>
+            <Input value={apiKey} onChange={(e) => setApiKey(e.target.value)} onBlur={() => setKeyTouched(true)} aria-invalid={!keyValid && keyTouched} placeholder="XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX" />
+            <div className="text-xs text-muted-foreground">Stored server-side; used for AnythingLLM auth</div>
+            {!keyValid && keyTouched ? <div className="text-xs text-red-600">Format: XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX</div> : null}
+          </div>
         </div>
-      </Card>
-
-      <Card className="p-4 space-y-3">
-        <div className="font-medium">Template Compiler Workspace</div>
-        <div className="text-sm text-muted-foreground">Choose which AnythingLLM workspace to use for compiling templates. If none is selected, a default "TemplateCompiler" workspace will be created automatically when needed.</div>
-        <div>
-          <select className="w-full border rounded-md h-9 px-2 bg-background" value={compilerWs} onChange={(e) => setCompilerWs(e.target.value)}>
-            <option value="">(auto-create TemplateCompiler)</option>
-            {wsList.map((w) => (
-              <option key={w.slug} value={w.slug}>{w.name} ({w.slug})</option>
-            ))}
-          </select>
-        </div>
-        <div className="text-xs text-muted-foreground">{wsList.length} workspaces available. Manage workspaces under <a className="underline" href="#workspaces">Workspaces</a>.</div>
-        <div>
-          <Button onClick={save} disabled={saving}><Icon.Refresh className="h-4 w-4 mr-2"/>Save</Button>
+        <Separator />
+        <div className="space-y-2">
+          <div className="text-sm font-medium">Status</div>
+          <div className="flex items-center gap-2">
+            <span className={`text-xs px-2 py-1 rounded-full ${ping === 'ok' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-muted text-muted-foreground'}`}>ping: {ping}</span>
+            <span className={`text-xs px-2 py-1 rounded-full ${auth === 'ok' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-muted text-muted-foreground'}`}>auth: {auth}</span>
+          </div>
+          {lastChecked ? <div className="text-xs text-muted-foreground">Last checked: {lastChecked}</div> : null}
         </div>
       </Card>
     </div>
   );
 }
+

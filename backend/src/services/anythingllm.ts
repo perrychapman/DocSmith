@@ -1,10 +1,14 @@
-import { APP_CONFIG } from "../utils/config";
-
-const RAW_URL = (APP_CONFIG.anythingLLMUrl || "").trim();
-const ANYTHINGLLM_API_URL = RAW_URL ? RAW_URL.replace(/\/+$/, "") : "";
-const ANYTHINGLLM_API_KEY = (APP_CONFIG.anythingLLMKey || "").trim();
+import { readSettings } from "./settings";
 
 type HttpMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+
+function resolveAnythingLLM() {
+  const s = readSettings();
+  const rawUrl = (s.anythingLLMUrl || 'http://localhost:3001').trim();
+  const baseUrl = rawUrl ? rawUrl.replace(/\/+$/, "") : "";
+  const apiKey = (s.anythingLLMKey || '').trim();
+  return { baseUrl, apiKey };
+}
 
 export async function anythingllmRequest<T>(
   path: string,
@@ -12,16 +16,14 @@ export async function anythingllmRequest<T>(
   body?: any,
   extraHeaders: Record<string, string> = {}
 ): Promise<T> {
-  if (!ANYTHINGLLM_API_URL || !ANYTHINGLLM_API_KEY) {
-    throw new Error(
-      `AnythingLLM not configured: missing ${!ANYTHINGLLM_API_URL ? "ANYTHINGLLM_API_URL" : ""}${!ANYTHINGLLM_API_URL && !ANYTHINGLLM_API_KEY ? " and " : ""}${!ANYTHINGLLM_API_KEY ? "ANYTHINGLLM_API_KEY" : ""}`
-    );
+  const { baseUrl, apiKey } = resolveAnythingLLM();
+  if (!apiKey) {
+    throw new Error('NotConfigured: ANYTHINGLLM_API_KEY missing in settings');
   }
-  // Every call goes through /api/v1
-  const url = `${ANYTHINGLLM_API_URL}/api/v1${path}`;
+  const url = `${baseUrl}/api/v1${path}`;
 
   const headers: Record<string, string> = {
-    Authorization: `Bearer ${ANYTHINGLLM_API_KEY}`,
+    Authorization: `Bearer ${apiKey}`,
     ...extraHeaders,
   };
 
@@ -49,3 +51,5 @@ export async function anythingllmRequest<T>(
     ? ((await res.json()) as T)
     : (undefined as unknown as T);
 }
+
+

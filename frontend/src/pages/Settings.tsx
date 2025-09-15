@@ -16,6 +16,7 @@ export default function SettingsPage() {
   const [wsList, setWsList] = React.useState<Array<{ name: string; slug: string }>>([]);
   const [compilerWs, setCompilerWs] = React.useState<string>("");
   const [saving, setSaving] = React.useState(false);
+  const [lastChecked, setLastChecked] = React.useState<string>("");
 
   async function check() {
     setLoading(true);
@@ -27,6 +28,7 @@ export default function SettingsPage() {
       const ar = await fetch(`/api/anythingllm/auth`);
       setAuth(ar.status === 200 ? "ok" : (ar.status === 403 ? "invalid-key" : String(ar.status)));
     } catch { setAuth("error") }
+    setLastChecked(new Date().toLocaleString());
     setLoading(false);
   }
   React.useEffect(() => {
@@ -68,6 +70,7 @@ export default function SettingsPage() {
         </BreadcrumbList>
       </Breadcrumb>
       <h1 className="text-2xl font-semibold tracking-tight">Configuration</h1>
+
       <Card className="p-4 space-y-3">
         <div className="font-medium">Appearance</div>
         <div className="text-sm text-muted-foreground">Choose your preferred theme. "System" follows your OS setting.</div>
@@ -85,9 +88,15 @@ export default function SettingsPage() {
       </Card>
 
       <Card className="p-4 space-y-3">
-        <div className="font-medium">AnythingLLM</div>
-        <div className="text-sm">Ping: <span className={ping === 'ok' ? 'text-green-600' : 'text-muted-foreground'}>{ping}</span></div>
-        <div className="text-sm">Auth: <span className={auth === 'ok' ? 'text-green-600' : 'text-muted-foreground'}>{auth}</span></div>
+        <div className="font-medium">AnythingLLM Connectivity</div>
+        <div className="flex items-center gap-2">
+          <span className={`text-xs px-2 py-1 rounded-full ${ping === 'ok' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-muted text-muted-foreground'}`}>ping: {ping}</span>
+          <span className={`text-xs px-2 py-1 rounded-full ${auth === 'ok' ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300' : 'bg-muted text-muted-foreground'}`}>auth: {auth}</span>
+        </div>
+        {lastChecked ? <div className="text-xs text-muted-foreground">Last checked: {lastChecked}</div> : null}
+        <div className="text-sm text-muted-foreground">
+          Configure AnythingLLM in your environment (server-side): set <code>ANYTHINGLLM_API_URL</code> and <code>ANYTHINGLLM_API_KEY</code> in your <code>.env</code>. Optionally set <code>ANYTHINGLLM_INGEST_ROOT</code> when embedding local files.
+        </div>
         <div>
           <Button variant="secondary" onClick={check} disabled={loading}><Icon.Refresh className="h-4 w-4 mr-2"/>Recheck</Button>
         </div>
@@ -104,6 +113,7 @@ export default function SettingsPage() {
             ))}
           </select>
         </div>
+        <div className="text-xs text-muted-foreground">{wsList.length} workspaces available. Manage workspaces under <a className="underline" href="#workspaces">Workspaces</a>.</div>
         <div>
           <Button onClick={save} disabled={saving}><Icon.Refresh className="h-4 w-4 mr-2"/>Save</Button>
         </div>

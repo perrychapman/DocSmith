@@ -26,9 +26,11 @@ type Props = {
   className?: string;
   headerActions?: React.ReactNode;
   externalCards?: ExternalCard[];
+  onOpenLogs?: (jobId: string) => void;
+  onOpenGenerate?: () => void;
 };
 
-export default function WorkspaceChat({ slug, title = "AI Chat", className, headerActions, externalCards }: Props) {
+export default function WorkspaceChat({ slug, title = "AI Chat", className, headerActions, externalCards, onOpenLogs, onOpenGenerate }: Props) {
   const [threads, setThreads] = React.useState<Thread[]>([]);
   const [threadSlug, setThreadSlug] = React.useState<string | undefined>(undefined);
   const [history, setHistory] = React.useState<any[]>([]);
@@ -247,10 +249,7 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
     <Card className={("h-full min-h-0 p-0 flex flex-col " + (className || '')).trim()}>
       <div className="flex items-center justify-between px-2.5 py-1.5 border-b">
         <strong>{title}</strong>
-        <div className="flex items-center gap-2">
-          <div className="text-xs text-muted-foreground">{threadSlug ? 'Default thread' : 'Workspace chat'}</div>
-          {headerActions}
-        </div>
+        <div className="flex items-center gap-2">{headerActions}</div>
       </div>
       <div className="relative flex-1 min-h-0 flex">
         <div className="text-sm text-muted-foreground sr-only">{loading ? 'Loading chats.' : `${history.length} message${history.length === 1 ? '' : 's'}`}</div>
@@ -275,8 +274,8 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
                             : 'Document Generated'}
                         </div>
                         <div className="text-sm text-muted-foreground">
-                          {card.template ? <>Template: {card.template}</> : null}
-                          {!isUser && card.filename ? <> · File: {card.filename}</> : null}
+                          {card.template ? (<div>Template: {card.template}</div>) : null}
+                          {!isUser && card.filename ? (<div>File: {card.filename}</div>) : null}
                         </div>
                         {isUser && card.aiContext ? (
                           <div className="text-xs text-muted-foreground">AI Context: {card.aiContext}</div>
@@ -284,7 +283,28 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
                         <div className="flex items-center gap-2 pt-1">
                           {card.jobId ? (
                             isUser ? (
-                              <a className="underline" href={`#jobs?id=${encodeURIComponent(card.jobId)}`}>View job</a>
+                              <>
+                                <Tooltip>
+                                  <TooltipTrigger asChild>
+                                    <Button asChild size="icon" variant="ghost" aria-label="View job" title="View job">
+                                      <a href={`#jobs?id=${encodeURIComponent(card.jobId)}`}>
+                                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14L21 3"/></svg>
+                                      </a>
+                                    </Button>
+                                  </TooltipTrigger>
+                                  <TooltipContent>View job</TooltipContent>
+                                </Tooltip>
+                                {onOpenLogs ? (
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Button size="icon" variant="ghost" aria-label="View logs" title="View logs" onClick={(e)=>{ e.preventDefault(); onOpenLogs?.(card.jobId!) }}>
+                                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 4h18"/><path d="M3 10h18"/><path d="M3 16h18"/></svg>
+                                      </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>View logs</TooltipContent>
+                                  </Tooltip>
+                                ) : null}
+                              </>
                             ) : (
                               <>
                                 <Tooltip>
@@ -344,7 +364,7 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
             )}
         </div>
         {!atBottom && (
-          <Button size="sm" variant="secondary" className="absolute right-4 bottom-32 rounded-full shadow" onClick={scrollToBottom} title="Scroll to bottom">
+          <Button size="sm" variant="secondary" className="absolute right-4 bottom-4 rounded-full shadow" onClick={scrollToBottom} title="Scroll to bottom">
             <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
           </Button>
         )}
@@ -358,6 +378,22 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
             onKeyDown={(e) => { if ((e.key === 'Enter' && (e.ctrlKey || e.metaKey))) { e.preventDefault(); send(); } }}
             className="flex-1 w-full pr-12 resize-none h-14 max-h-40"
           />
+          {onOpenGenerate ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  aria-label="Generate document"
+                  title="Generate document"
+                  className="absolute right-14 top-1/2 -translate-y-1/2 rounded-full h-10 w-10"
+                  onClick={() => onOpenGenerate?.()}>
+                  <Icon.DocSparkles className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Generate</TooltipContent>
+            </Tooltip>
+          ) : null}
           <Button
             onClick={send}
             disabled={replying}

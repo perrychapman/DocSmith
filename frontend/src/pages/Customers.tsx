@@ -224,8 +224,6 @@ export function CustomersPage() {
     if (!selectedTemplate) { toast.error("Choose a template"); return; }
     try {
       setGenerating(true);
-      // Open logs modal immediately
-      setGenLogs([]);
       setGenSteps({}); setGenProgress(0); setGenError(null);
       const extra = genInstructions && genInstructions.trim().length ? `&instructions=${encodeURIComponent(genInstructions)}` : ''
       const url = `/api/generate/stream?customerId=${encodeURIComponent(String(selectedId))}&template=${encodeURIComponent(String(selectedTemplate))}${extra}`
@@ -236,7 +234,7 @@ export function CustomersPage() {
         try {
           const data = JSON.parse(ev.data || '{}')
           if (data?.type === 'log') {
-            setGenLogs((prev) => ([...(prev||[]), String(data.message||'')]))
+            // suppress auto-opening logs
           } else if (data?.type === 'info') {
             const extras: string[] = []
             if (data.usedWorkspace) extras.push(`workspace:${String(data.usedWorkspace)}`)
@@ -245,7 +243,7 @@ export function CustomersPage() {
             if (data.customerName) extras.push(`customer:${String(data.customerName)}`)
             if (data.outfile) extras.push(`outfile:${String(data.outfile)}`)
             if (data.signature) extras.push(`signature:${String(data.signature)}`)
-            if (extras.length) setGenLogs((prev) => ([...(prev||[]), ...extras]))
+            // suppress auto-opening logs
             if (data.jobId) {
               const jid = String(data.jobId)
               setGenJobId(jid)
@@ -259,6 +257,8 @@ export function CustomersPage() {
                 return next
               })
             }
+            // Close the Generate dialog once we have a job id
+            try { setGenerateOpen(false) } catch {}
           } else if (data?.type === 'step') {
             const name = String(data.name || '')
             const status = (String(data.status || 'start') as 'start'|'ok')
@@ -267,7 +267,7 @@ export function CustomersPage() {
             if (p != null) setGenProgress(p)
           } else if (data?.type === 'error') {
             const errMsg = String(data.error||'unknown')
-            setGenLogs((prev) => ([...(prev||[]), `error:${errMsg}`]))
+            // suppress auto-opening logs
             setGenError(errMsg)
             if (genJobId) {
               const jid = genJobId
@@ -283,7 +283,6 @@ export function CustomersPage() {
             es.close(); genEventRef.current = null; setGenerating(false); setGenJobId(null)
           } else if (data?.type === 'done') {
             if (data?.file?.name) fileName = String(data.file.name)
-            setGenLogs((prev) => ([...(prev||[]), `done:${fileName || ''}`]))
             setGenProgress(100)
             if (data?.jobId) {
               const jid = String(data.jobId)
@@ -322,12 +321,11 @@ export function CustomersPage() {
             // Refresh uploads
             (async () => { try { const r2 = await fetch(`/api/uploads/${selectedId}`); const d2: UploadItem[] = await r2.json(); setUploads(Array.isArray(d2) ? d2 : []) } catch {} })()
             toast.success('Document generated')
-            setGenerateOpen(false)
           }
         } catch {}
       }
       es.onerror = () => {
-        setGenLogs((prev) => ([...(prev||[]), 'error:stream-connection']))
+        // suppress auto-opening logs
         setGenError('Stream disconnected')
         if (genJobId) {
           const jid = genJobId
@@ -341,6 +339,33 @@ export function CustomersPage() {
     } catch (e) {
       toast.error("Generation failed");
       setGenerating(false)
+    }
+  }
+
+  // Open logs modal for a given job id
+  async function openLogs(jobId: string) {
+    try {
+      setGenJobId(jobId);
+      setGenError(null);
+      setGenSteps({});
+      setGenProgress(null);
+      // Fetch job details
+      const r = await fetch(`/api/generate/jobs/${encodeURIComponent(jobId)}`);
+      const j = await r.json().catch(()=>({}));
+      if (!r.ok) throw new Error(String(j?.error || r.status));
+      const logs: string[] = Array.isArray(j?.logs) ? j.logs : [];
+      const stepsArr: Array<{ name: string; status?: 'start'|'ok'|'error'; startedAt?: string; endedAt?: string; durationMs?: number }>= Array.isArray(j?.steps) ? j.steps : [];
+      const status = String(j?.status || '');
+      setGenLogs(logs);
+      const stepMap: Record<string,'start'|'ok'|'error'> = {};
+      for (const s of stepsArr) { if (s?.name && s?.status) stepMap[s.name] = s.status }
+      setGenSteps(stepMap);
+      if (status === 'done') setGenProgress(100);
+      else if (status === 'running') setGenProgress(50);
+      else if (status === 'error' || status === 'cancelled') { setGenProgress(null); setGenError(status) }
+    } catch (e:any) {
+      setGenLogs([`error:${String(e?.message || e)}`]);
+      setGenError(String(e?.message || e));
     }
   }
 
@@ -583,16 +608,46 @@ export function CustomersPage() {
             <WorkspaceChat
               slug={wsSlug}
               className="h-full"
+              onOpenLogs={openLogs}
+              onOpenGenerate={() => { if (selectedId) setGenerateOpen(true) }}
               externalCards={chatCards}
               headerActions={(
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Button size="icon" variant="ghost" onClick={() => setPanelMode(panelMode==='chat' ? 'split' : 'chat')} aria-label={panelMode==='chat' ? 'Collapse chat' : 'Expand chat'}>
-                      {panelMode==='chat' ? (<Minimize2 className="h-4 w-4" />) : (<Maximize2 className="h-4 w-4" />)}
-                    </Button>
-                  </TooltipTrigger>
-                  <TooltipContent side="left">{panelMode==='chat' ? 'Collapse chat' : 'Expand chat'}</TooltipContent>
-                </Tooltip>
+                <>
+                  <Dialog>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <DialogTrigger asChild>
+                          <Button size="icon" variant="ghost" aria-label="Recent jobs" title="Recent jobs">
+                            <Icon.History className="h-4 w-4" />
+                          </Button>
+                        </DialogTrigger>
+                      </TooltipTrigger>
+                      <TooltipContent side="left">Recent jobs</TooltipContent>
+                    </Tooltip>
+                    <DialogContent className="w-[95vw] sm:!max-w-6xl">
+                      <DialogHeader>
+                        <DialogTitle>Recent Generation Jobs</DialogTitle>
+                        <DialogDescription>View recent document generation runs and their logs.</DialogDescription>
+                      </DialogHeader>
+                      <div className="h-[70vh] min-h-[480px]">
+                        <JobsPanel customerId={selectedId || undefined} />
+                      </div>
+                      <DialogFooter>
+                        <DialogClose asChild>
+                          <Button variant="secondary">Close</Button>
+                        </DialogClose>
+                      </DialogFooter>
+                    </DialogContent>
+                  </Dialog>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button size="icon" variant="ghost" onClick={() => setPanelMode(panelMode==='chat' ? 'split' : 'chat')} aria-label={panelMode==='chat' ? 'Collapse chat' : 'Expand chat'}>
+                        {panelMode==='chat' ? (<Minimize2 className="h-4 w-4" />) : (<Maximize2 className="h-4 w-4" />)}
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="left">{panelMode==='chat' ? 'Collapse chat' : 'Expand chat'}</TooltipContent>
+                  </Tooltip>
+                </>
               )}
             />
           ) : (
@@ -683,16 +738,6 @@ export function CustomersPage() {
                   </DialogContent>
                 </Dialog>
                 <Dialog open={generateOpen} onOpenChange={setGenerateOpen}>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <DialogTrigger asChild>
-                        <Button size="icon" variant="ghost" disabled={!selectedId} aria-label="Generate document">
-                          <Icon.Plus className="h-4 w-4"/>
-                        </Button>
-                      </DialogTrigger>
-                    </TooltipTrigger>
-                    <TooltipContent side="left">Generate</TooltipContent>
-                  </Tooltip>
                   <DialogContent>
                     <DialogHeader>
                       <DialogTitle>Generate Document</DialogTitle>
@@ -732,33 +777,7 @@ export function CustomersPage() {
                       </Button>
                     </DialogFooter>
                   </DialogContent>
-                  </Dialog>
-                  <Dialog>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <DialogTrigger asChild>
-                          <Button size="icon" variant="ghost" aria-label="Recent jobs">
-                            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 12a9 9 0 1 0 9-9"/><path d="M3 5v7h7"/></svg>
-                          </Button>
-                        </DialogTrigger>
-                      </TooltipTrigger>
-                      <TooltipContent side="left">Recent Jobs</TooltipContent>
-                    </Tooltip>
-                    <DialogContent className="w-[95vw] sm:!max-w-6xl">
-                      <DialogHeader>
-                        <DialogTitle>Recent Generation Jobs</DialogTitle>
-                        <DialogDescription>View recent document generation runs and their logs.</DialogDescription>
-                      </DialogHeader>
-                      <div className="h-[70vh] min-h-[480px]">
-                        <JobsPanel customerId={selectedId || undefined} />
-                      </div>
-                      <DialogFooter>
-                        <DialogClose asChild>
-                          <Button variant="secondary">Close</Button>
-                        </DialogClose>
-                      </DialogFooter>
-                    </DialogContent>
-                  </Dialog>
+                </Dialog>
                   {/* Open uploads folder */}
                   <Tooltip>
                     <TooltipTrigger asChild>
@@ -935,7 +954,7 @@ export function CustomersPage() {
           </div>
           <DialogFooter>
             {generating && genJobId ? (
-              <Button variant="destructive" onClick={async ()=>{ try { await fetch(`/api/generate/jobs/${encodeURIComponent(genJobId)}/cancel`, { method: 'POST' }); setGenLogs((prev)=>([...(prev||[]), 'cancel:requested'])) } catch {} }}>Cancel</Button>
+              <Button variant="destructive" onClick={async ()=>{ try { await fetch(`/api/generate/jobs/${encodeURIComponent(genJobId)}/cancel`, { method: 'POST' }); } catch {} }}>Cancel</Button>
             ) : null}
             {!generating && genError ? (
               <Button variant="outline" onClick={() => { setGenLogs([]); setGenSteps({}); setGenProgress(0); setGenError(null); if (genEventRef.current) { try { genEventRef.current.close() } catch {} ; genEventRef.current = null }; generateDocument(); }}>Retry</Button>

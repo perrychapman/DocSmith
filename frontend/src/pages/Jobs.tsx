@@ -39,6 +39,15 @@ export default function JobsPage() {
   const [clearOpen, setClearOpen] = React.useState(false);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
 
+  const idFromHash = React.useCallback((): string | null => {
+    const h = location.hash || '';
+    if (!h.toLowerCase().startsWith('#jobs')) return null;
+    const q = h.split('?')[1] || '';
+    const sp = new URLSearchParams(q);
+    const id = sp.get('id');
+    return id || null;
+  }, []);
+
   async function loadJobs() {
     try {
       setLoading(true);
@@ -48,7 +57,15 @@ export default function JobsPage() {
       const j = await r.json().catch(()=>({}));
       const list: Job[] = Array.isArray(j?.jobs) ? j.jobs : [];
       setJobs(list);
-      if (!activeId && list.length) setActiveId(list[0].id);
+      if (list.length) {
+        const desired = idFromHash();
+        if (!activeId) {
+          const pick = desired && list.find(x=> x.id === desired) ? desired : list[0].id;
+          setActiveId(pick);
+        } else if (desired && activeId !== desired && list.find(x=> x.id === desired)) {
+          setActiveId(desired);
+        }
+      }
     } catch (e:any) {
       setError(String(e?.message || e));
     } finally {
@@ -72,11 +89,7 @@ export default function JobsPage() {
   // Pick up job id from hash like #jobs?id=<id>
   React.useEffect(() => {
     const parse = () => {
-      const h = location.hash || '';
-      if (!h.toLowerCase().startsWith('#jobs')) return;
-      const q = h.split('?')[1] || '';
-      const sp = new URLSearchParams(q);
-      const id = sp.get('id');
+      const id = idFromHash();
       if (id) setActiveId(id);
     };
     parse();

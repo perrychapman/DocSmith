@@ -21,7 +21,7 @@ export default function App() {
     const slug = decodeURIComponent(parts[1] || '');
     content = <WorkspaceDetailPage slug={slug} />;
   } else if (hash === '#workspaces') content = <WorkspacesPage />;
-  else if (hash === '#jobs') content = <JobsPage />;
+  else if (hash.startsWith('#jobs')) content = <JobsPage />;
   else if (hash === '#templates') content = <TemplatesPage />;
   else if (hash === '#settings') content = <SettingsPage />;
   else content = <CustomersPage />;
@@ -38,7 +38,7 @@ export default function App() {
              href="#customers">Customers</a>
           <a className={linkCls(hash.startsWith("#workspaces"))}
              href="#workspaces">Workspaces</a>
-          <a className={linkCls(hash==="#jobs")}
+          <a className={linkCls(hash.startsWith("#jobs"))}
              href="#jobs">Jobs</a>
           <a className={linkCls(hash==="#templates")}
              href="#templates">Templates</a>

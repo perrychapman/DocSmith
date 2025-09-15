@@ -455,7 +455,7 @@ export default function WorkspaceDetailPage({ slug }: { slug: string }) {
             </div>
           </Card>
           {!atBottom && (
-            <Button size="sm" variant="secondary" className="absolute right-4 bottom-20 rounded-full shadow" onClick={scrollToBottom} title="Scroll to bottom">
+            <Button size="sm" variant="secondary" className="absolute right-4 bottom-4 rounded-full shadow" onClick={scrollToBottom} title="Scroll to bottom">
               <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
             </Button>
           )}

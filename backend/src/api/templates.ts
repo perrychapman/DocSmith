@@ -100,8 +100,6 @@ router.get("/:slug/fullgen", (req, res) => {
   } catch (e) { return res.status(500).json({ error: (e as Error).message }) }
 })
 
-// Legacy docgen rebuild removed; use /:slug/fullgen/rebuild
-
 // New: Rebuild a full document generator (no placeholders). Writes generator.full.ts
 router.post("/:slug/fullgen/rebuild", async (req, res) => {
   return res.status(410).json({ error: 'Endpoint deprecated. Use POST /api/templates/:slug/compile' })
@@ -377,7 +375,7 @@ router.post("/upload", (req, res) => {
       // Ensure AnythingLLM workspace and upload template file to it
       let wsSlug: string | undefined = meta?.workspaceSlug
       try {
-        const wsName = `Template_${providedSlug}`
+        const wsName = `Template_${name}` || `Template_${providedSlug}`
         const list = await anythingllmRequest<any>("/workspaces", "GET")
         const arr: Array<{ name?: string; slug?: string }> = Array.isArray((list as any)?.workspaces) ? (list as any).workspaces : (Array.isArray(list) ? (list as any) : [])
         wsSlug = wsSlug || arr.find((w) => (w.name || "") === wsName)?.slug

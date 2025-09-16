@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Card } from "./ui/card";
-import { Button } from "./ui/button";
+import { Button } from "./ui/Button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { Textarea } from "./ui/textarea";
 import { Icon } from "./icons";

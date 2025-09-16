@@ -19,7 +19,19 @@ const vm = require('vm')
 const mammoth = require('mammoth')
 const { marked } = require('marked')
 const htmlToDocx = require('html-to-docx')
-// placeholder-based DOCX operations removed
+
+function getTemplateDisplayName(tplDir: string, slug: string): string {
+  try {
+    const metaPath = path.join(tplDir, "template.json")
+    if (fs.existsSync(metaPath)) {
+      const meta = JSON.parse(fs.readFileSync(metaPath, "utf-8"))
+      const n = String(meta?.name || "").trim()
+      if (n) return n
+    }
+  } catch {}
+  return displayNameFromSlug(String(slug))
+}
+
 
 initJobs()
 const router = Router()
@@ -358,7 +370,7 @@ router.post("/", async (req, res) => {
                   // Default filename: {Customer}_{TemplateName}_{YYYYMMDD_HHmmss}
                   const dt = new Date()
                   const dtStr = `${dt.getFullYear()}${String(dt.getMonth()+1).padStart(2,'0')}${String(dt.getDate()).padStart(2,'0')}_${String(dt.getHours()).padStart(2,'0')}${String(dt.getMinutes()).padStart(2,'0')}${String(dt.getSeconds()).padStart(2,'0')}`
-                  const templateName = safeFileName(String(displayNameFromSlug(String(slug))))
+                  const templateName = safeFileName(getTemplateDisplayName((tpl as any).dir, String(slug)))
                   const customerName = safeFileName(String(row.name))
                   const defaultBase = `${customerName}_${templateName}_${dtStr}`
                   const baseName = filename || defaultBase
@@ -378,7 +390,7 @@ router.post("/", async (req, res) => {
                   const mergedBuf = await (await import('../services/excelCompose')).mergeOpsIntoExcelTemplate(fs.readFileSync((tpl as any).templatePath), result)
                   const dt = new Date()
                   const dtStr = `${dt.getFullYear()}${String(dt.getMonth()+1).padStart(2,'0')}${String(dt.getDate()).padStart(2,'0')}_${String(dt.getHours()).padStart(2,'0')}${String(dt.getMinutes()).padStart(2,'0')}${String(dt.getSeconds()).padStart(2,'0')}`
-                  const templateName = safeFileName(String(displayNameFromSlug(String(slug))))
+                  const templateName = safeFileName(getTemplateDisplayName((tpl as any).dir, String(slug)))
                   const customerName = safeFileName(String(row.name))
                   const defaultBase = `${customerName}_${templateName}_${dtStr}`
                   const baseName = filename || defaultBase
@@ -600,7 +612,7 @@ router.get("/stream", async (req, res) => {
         logAndPush('merge:ok')
         const dt2 = new Date()
         const dtStr2 = `${dt2.getFullYear()}${String(dt2.getMonth()+1).padStart(2,'0')}${String(dt2.getDate()).padStart(2,'0')}_${String(dt2.getHours()).padStart(2,'0')}${String(dt2.getMinutes()).padStart(2,'0')}${String(dt2.getSeconds()).padStart(2,'0')}`
-        const templateName2 = safeFileName(String(displayNameFromSlug(String(slug))))
+        const templateName2 = safeFileName(getTemplateDisplayName((tpl as any).dir, String(slug)))
         const customerName2 = safeFileName(String(row.name))
         const defaultBase2 = `${customerName2}_${templateName2}_${dtStr2}`
         const baseName2 = filename || defaultBase2
@@ -621,7 +633,7 @@ router.get("/stream", async (req, res) => {
         logAndPush('merge:ok')
         const dt2 = new Date()
         const dtStr2 = `${dt2.getFullYear()}${String(dt2.getMonth()+1).padStart(2,'0')}${String(dt2.getDate()).padStart(2,'0')}_${String(dt2.getHours()).padStart(2,'0')}${String(dt2.getMinutes()).padStart(2,'0')}${String(dt2.getSeconds()).padStart(2,'0')}`
-        const templateName2 = safeFileName(String(displayNameFromSlug(String(slug))))
+        const templateName2 = safeFileName(getTemplateDisplayName((tpl as any).dir, String(slug)))
         const customerName2 = safeFileName(String(row.name))
         const defaultBase2 = `${customerName2}_${templateName2}_${dtStr2}`
         const baseName2 = filename || defaultBase2

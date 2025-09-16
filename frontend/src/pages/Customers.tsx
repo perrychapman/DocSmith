@@ -1,13 +1,13 @@
 import * as React from "react";
 import { Card } from "../components/ui/card";
-import { Button } from "@/components/ui/button";
+import { Button } from "@/components/ui/Button";
 import { Input } from "../components/ui/input";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "../components/ui/breadcrumb";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, DialogDescription, DialogClose } from "../components/ui/dialog";
 import { Icon } from "../components/icons";
 import { Maximize2, Minimize2, Search, ExternalLink, Download } from "lucide-react";
-import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "../components/ui/tooltip";
 import { A } from "../lib/api";
 import WorkspaceChat from "../components/WorkspaceChat";
 import { toast } from "sonner";
@@ -49,15 +49,15 @@ export function CustomersPage() {
   const [generating, setGenerating] = React.useState(false);
   const [genLogs, setGenLogs] = React.useState<string[] | null>(null);
   const genEventRef = React.useRef<EventSource | null>(null);
-  const [genSteps, setGenSteps] = React.useState<Record<string, 'start'|'ok'|'error'>>({});
+  const [genSteps, setGenSteps] = React.useState<Record<string, 'start' | 'ok' | 'error'>>({});
   const [genProgress, setGenProgress] = React.useState<number | null>(null);
   const [genJobId, setGenJobId] = React.useState<string | null>(null);
   const [genError, setGenError] = React.useState<string | null>(null);
   // External chat cards to display generation metadata in chat
-  const [chatCards, setChatCards] = React.useState<Array<{ id: string; template?: string; jobId?: string; jobStatus?: 'running'|'done'|'error'|'cancelled'; filename?: string; aiContext?: string; timestamp?: number }>>([]);
+  const [chatCards, setChatCards] = React.useState<Array<{ id: string; template?: string; jobId?: string; jobStatus?: 'running' | 'done' | 'error' | 'cancelled'; filename?: string; aiContext?: string; timestamp?: number; side?: 'user' | 'assistant' }>>([]);
 
   // No localStorage persistence; cards are saved to SQL via backend
-  const [panelMode, setPanelMode] = React.useState<'split'|'chat'|'docs'>('split');
+  const [panelMode, setPanelMode] = React.useState<'split' | 'chat' | 'docs'>('split');
   const [docQuery, setDocQuery] = React.useState<string>("");
   const rowsClass = panelMode === 'split'
     ? 'grid grid-rows-[minmax(0,2fr)_minmax(0,1fr)]'
@@ -115,17 +115,17 @@ export function CustomersPage() {
           try {
             const r = await fetch(`/api/uploads/${c.id}`);
             const items: UploadItem[] = await r.json().catch(() => []);
-            next[c.id] = { ...(next[c.id]||{}), docs: Array.isArray(items) ? items.length : 0 };
-          } catch { next[c.id] = { ...(next[c.id]||{}), docs: 0 } }
+            next[c.id] = { ...(next[c.id] || {}), docs: Array.isArray(items) ? items.length : 0 };
+          } catch { next[c.id] = { ...(next[c.id] || {}), docs: 0 } }
           try {
             const ws = await fetch(`/api/customers/${c.id}/workspace`).then((r) => r.ok ? r.json() : Promise.reject()).catch(() => null);
             const slug = ws?.slug as string | undefined;
             if (slug) {
               const data = await A.workspaceChats(slug, 200, 'desc').catch(() => null);
               const arr = Array.isArray((data as any)?.history) ? (data as any).history : (Array.isArray((data as any)?.chats) ? (data as any).chats : (Array.isArray(data) ? (data as any) : []));
-              next[c.id] = { ...(next[c.id]||{}), chats: Array.isArray(arr) ? arr.length : 0 };
-            } else { next[c.id] = { ...(next[c.id]||{}), chats: 0 } }
-          } catch { next[c.id] = { ...(next[c.id]||{}), chats: 0 } }
+              next[c.id] = { ...(next[c.id] || {}), chats: Array.isArray(arr) ? arr.length : 0 };
+            } else { next[c.id] = { ...(next[c.id] || {}), chats: 0 } }
+          } catch { next[c.id] = { ...(next[c.id] || {}), chats: 0 } }
         }))
         if (!ignore) setCounts((prev) => ({ ...prev, ...next }));
       } finally {
@@ -152,8 +152,8 @@ export function CustomersPage() {
         const data = await A.workspaceChats(wsSlug!, 200, 'desc').catch(() => null);
         const arr = Array.isArray((data as any)?.history) ? (data as any).history : (Array.isArray((data as any)?.chats) ? (data as any).chats : (Array.isArray(data) ? (data as any) : []));
         const count = Array.isArray(arr) ? arr.length : 0;
-        if (!ignore) setCounts((prev) => ({ ...prev, [selectedId]: { ...(prev[selectedId] || {}), chats: count } }));
-      } catch {}
+        if (!ignore) setCounts((prev) => ({ ...prev, [selectedId!]: { ...(prev[selectedId!] || {}), chats: count } }));
+      } catch { }
       if (!ignore) timer = setTimeout(refreshChats, 15000);
     }
     refreshChats();
@@ -250,37 +250,48 @@ export function CustomersPage() {
               // Inject a chat card for this job (running)
               setChatCards((prev) => {
                 const next = prev.filter((c) => c.id !== jid)
-                const card = { id: jid, side: 'user' as const, template: selectedTemplate || undefined, jobId: jid, jobStatus: 'running' as const, aiContext: genInstructions || undefined, timestamp: Date.now() }
+                const card = {
+                  id: jid,
+                  side: 'user' as const,
+                  template: selectedTemplate || undefined,
+                  jobId: jid,
+                  jobStatus: 'running' as const,
+                  aiContext: genInstructions || undefined,
+                  timestamp: Date.now()
+                }
                 next.push(card)
                 // Save to backend
-                if (wsSlug) { A.upsertGenCard({ id: jid, workspaceSlug: wsSlug, side: 'user', template: selectedTemplate || undefined, jobId: jid, jobStatus: 'running', aiContext: genInstructions || undefined, timestamp: card.timestamp }).catch(()=>{}) }
+                if (wsSlug) { A.upsertGenCard({ id: jid, workspaceSlug: wsSlug, side: 'user', template: selectedTemplate || undefined, jobId: jid, jobStatus: 'running' as const, aiContext: genInstructions || undefined, timestamp: card.timestamp }).catch(() => { }) }
                 return next
               })
             }
             // Close the Generate dialog once we have a job id
-            try { setGenerateOpen(false) } catch {}
+            try { setGenerateOpen(false) } catch { }
           } else if (data?.type === 'step') {
             const name = String(data.name || '')
-            const status = (String(data.status || 'start') as 'start'|'ok')
+            const status = (String(data.status || 'start') as 'start' | 'ok')
             const p = typeof data.progress === 'number' ? Math.max(0, Math.min(100, Math.floor(data.progress))) : null
-            setGenSteps((prev) => ({ ...(prev||{}), [name]: status }))
+            setGenSteps((prev) => ({ ...(prev || {}), [name]: status }))
             if (p != null) setGenProgress(p)
           } else if (data?.type === 'error') {
-            const errMsg = String(data.error||'unknown')
+            const errMsg = String(data.error || 'unknown')
             // suppress auto-opening logs
             setGenError(errMsg)
             if (genJobId) {
               const jid = genJobId
               setChatCards((prev) => prev.map((c) => c.id === jid ? { ...c, jobStatus: 'error', timestamp: Date.now() } : c))
             }
-            setGenSteps((prev)=>{
-              const order = ['resolveCustomer','loadTemplate','resolveWorkspace','readGenerator','aiUpdate','transpile','execute','mergeWrite']
-              const next = { ...(prev||{}) } as Record<string,'start'|'ok'|'error'>
-              for (let i = order.length-1; i>=0; i--) { const s = order[i]; if (next[s]==='start') { next[s]='error'; break } }
+            setGenSteps((prev) => {
+              const order = ['resolveCustomer', 'loadTemplate', 'resolveWorkspace', 'readGenerator', 'aiUpdate', 'transpile', 'execute', 'mergeWrite']
+              const next = { ...(prev || {}) } as Record<string, 'start' | 'ok' | 'error'>
+              for (let i = order.length - 1; i >= 0; i--) { const s = order[i]; if (next[s] === 'start') { next[s] = 'error'; break } }
               return next
             })
             toast.error(`Generation failed: ${errMsg}`)
-            es.close(); genEventRef.current = null; setGenerating(false); setGenJobId(null)
+            if (es && typeof es.close === 'function') es.close();
+            genEventRef.current = null;
+            setGenerating(false);
+            setGenJobId(null);
           } else if (data?.type === 'done') {
             if (data?.file?.name) fileName = String(data.file.name)
             setGenProgress(100)
@@ -288,16 +299,16 @@ export function CustomersPage() {
               const jid = String(data.jobId)
               setChatCards((prev) => {
                 const now = Date.now();
-                const updated = prev.map((c) => c.id === jid ? { ...c, jobStatus: 'done', filename: fileName || c.filename, timestamp: now, side: 'user' as const } : c);
+                const updated = prev.map((c) => c.id === jid ? { ...c, jobStatus: 'done' as const, filename: fileName || c.filename, timestamp: now, side: 'user' as const } : c);
                 // Also append a received card announcing generation complete
                 const assistantId = `${jid}-done`;
                 if (!updated.find((c) => c.id === assistantId)) {
-                  updated.push({ id: assistantId, side: 'assistant' as const, template: selectedTemplate || undefined, jobId: jid, jobStatus: 'done', filename: fileName || undefined, timestamp: now });
+                  updated.push({ id: assistantId, side: 'assistant' as const, template: selectedTemplate || undefined, jobId: jid, jobStatus: 'done' as const, filename: fileName || undefined, timestamp: now });
                 }
                 // Persist both cards
                 if (wsSlug) {
-                  A.upsertGenCard({ id: jid, workspaceSlug: wsSlug, side: 'user', template: selectedTemplate || undefined, jobId: jid, jobStatus: 'done', filename: fileName || undefined, aiContext: genInstructions || undefined, timestamp: now }).catch(()=>{})
-                  A.upsertGenCard({ id: assistantId, workspaceSlug: wsSlug, side: 'assistant', template: selectedTemplate || undefined, jobId: jid, jobStatus: 'done', filename: fileName || undefined, timestamp: now }).catch(()=>{})
+                  A.upsertGenCard({ id: jid, workspaceSlug: wsSlug, side: 'user', template: selectedTemplate || undefined, jobId: jid, jobStatus: 'done' as const, filename: fileName || undefined, aiContext: genInstructions || undefined, timestamp: now }).catch(() => { })
+                  A.upsertGenCard({ id: assistantId, workspaceSlug: wsSlug, side: 'assistant', template: selectedTemplate || undefined, jobId: jid, jobStatus: 'done' as const, filename: fileName || undefined, timestamp: now }).catch(() => { })
                 }
                 return updated;
               })
@@ -305,24 +316,29 @@ export function CustomersPage() {
               const jid = genJobId
               setChatCards((prev) => {
                 const now = Date.now();
-                const updated = prev.map((c) => c.id === jid ? { ...c, jobStatus: 'done', filename: fileName || c.filename, timestamp: now, side: 'user' as const } : c);
+                const updated = prev.map((c) => c.id === jid ? { ...c, jobStatus: 'done' as const, filename: fileName || c.filename, timestamp: now, side: 'user' as const } : c);
                 const assistantId = `${jid}-done`;
                 if (!updated.find((c) => c.id === assistantId)) {
-                  updated.push({ id: assistantId, side: 'assistant' as const, template: selectedTemplate || undefined, jobId: jid, jobStatus: 'done', filename: fileName || undefined, timestamp: now });
+                  updated.push({ id: assistantId, side: 'assistant' as const, template: selectedTemplate || undefined, jobId: jid, jobStatus: 'done' as const, filename: fileName || undefined, timestamp: now });
                 }
                 if (wsSlug) {
-                  A.upsertGenCard({ id: jid, workspaceSlug: wsSlug, side: 'user', template: selectedTemplate || undefined, jobId: jid, jobStatus: 'done', filename: fileName || undefined, aiContext: genInstructions || undefined, timestamp: now }).catch(()=>{})
-                  A.upsertGenCard({ id: assistantId, workspaceSlug: wsSlug, side: 'assistant', template: selectedTemplate || undefined, jobId: jid, jobStatus: 'done', filename: fileName || undefined, timestamp: now }).catch(()=>{})
+                  A.upsertGenCard({ id: jid, workspaceSlug: wsSlug, side: 'user', template: selectedTemplate || undefined, jobId: jid, jobStatus: 'done' as const, filename: fileName || undefined, aiContext: genInstructions || undefined, timestamp: now }).catch(() => { })
+                  A.upsertGenCard({ id: assistantId, workspaceSlug: wsSlug, side: 'assistant', template: selectedTemplate || undefined, jobId: jid, jobStatus: 'done' as const, filename: fileName || undefined, timestamp: now }).catch(() => { })
                 }
                 return updated;
               })
             }
-            es.close(); genEventRef.current = null; setGenerating(false); setGenJobId(null)
-            // Refresh uploads
-            (async () => { try { const r2 = await fetch(`/api/uploads/${selectedId}`); const d2: UploadItem[] = await r2.json(); setUploads(Array.isArray(d2) ? d2 : []) } catch {} })()
+            if (es) {
+              es.close();
+              genEventRef.current = null;
+              setGenerating(false);
+              setGenJobId(null);
+            }
+              // Refresh uploads
+              (async () => { try { const r2 = await fetch(`/api/uploads/${selectedId}`); const d2: UploadItem[] = await r2.json(); setUploads(Array.isArray(d2) ? d2 : []) } catch { } })()
             toast.success('Document generated')
           }
-        } catch {}
+        } catch { }
       }
       es.onerror = () => {
         // suppress auto-opening logs
@@ -331,7 +347,7 @@ export function CustomersPage() {
           const jid = genJobId
           const now = Date.now();
           setChatCards((prev) => prev.map((c) => c.id === jid ? { ...c, jobStatus: 'error', timestamp: now } : c))
-          if (wsSlug) { A.upsertGenCard({ id: jid, workspaceSlug: wsSlug, side: 'user', template: selectedTemplate || undefined, jobId: jid, jobStatus: 'error', aiContext: genInstructions || undefined, timestamp: now }).catch(()=>{}) }
+          if (wsSlug) { A.upsertGenCard({ id: jid, workspaceSlug: wsSlug, side: 'user', template: selectedTemplate || undefined, jobId: jid, jobStatus: 'error', aiContext: genInstructions || undefined, timestamp: now }).catch(() => { }) }
         }
         es.close(); genEventRef.current = null; setGenerating(false); setGenJobId(null)
         toast.error('Stream disconnected')
@@ -351,19 +367,19 @@ export function CustomersPage() {
       setGenProgress(null);
       // Fetch job details
       const r = await fetch(`/api/generate/jobs/${encodeURIComponent(jobId)}`);
-      const j = await r.json().catch(()=>({}));
+      const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(String(j?.error || r.status));
       const logs: string[] = Array.isArray(j?.logs) ? j.logs : [];
-      const stepsArr: Array<{ name: string; status?: 'start'|'ok'|'error'; startedAt?: string; endedAt?: string; durationMs?: number }>= Array.isArray(j?.steps) ? j.steps : [];
+      const stepsArr: Array<{ name: string; status?: 'start' | 'ok' | 'error'; startedAt?: string; endedAt?: string; durationMs?: number }> = Array.isArray(j?.steps) ? j.steps : [];
       const status = String(j?.status || '');
       setGenLogs(logs);
-      const stepMap: Record<string,'start'|'ok'|'error'> = {};
+      const stepMap: Record<string, 'start' | 'ok' | 'error'> = {};
       for (const s of stepsArr) { if (s?.name && s?.status) stepMap[s.name] = s.status }
       setGenSteps(stepMap);
       if (status === 'done') setGenProgress(100);
       else if (status === 'running') setGenProgress(50);
       else if (status === 'error' || status === 'cancelled') { setGenProgress(null); setGenError(status) }
-    } catch (e:any) {
+    } catch (e: any) {
       setGenLogs([`error:${String(e?.message || e)}`]);
       setGenError(String(e?.message || e));
     }
@@ -380,7 +396,7 @@ export function CustomersPage() {
         if (!r.ok) throw new Error(String(r.status));
         const data: UploadItem[] = await r.json();
         if (!ignore) setUploads(Array.isArray(data) ? data : []);
-      } catch {}
+      } catch { }
       if (!ignore) timer = setTimeout(refresh, 15000);
     }
     refresh();
@@ -391,7 +407,7 @@ export function CustomersPage() {
     const n = name.trim();
     if (!n) return;
     try {
-      await fetch(`/api/customers`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: n })});
+      await fetch(`/api/customers`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: n }) });
       toast.success("Customer added");
       setName("");
       const r = await fetch(`/api/customers`);
@@ -422,7 +438,7 @@ export function CustomersPage() {
         toast.warning?.((json as any).embeddingWarning) ?? toast.success("Uploaded; embedding may still be processing");
       } else {
         // Treat completion of the request as embed completion signal
-        if (toastId && toast.success) (toast as any).success("Embedding completed", { id: toastId });
+        if (toastId) (toast as any).success("Embedding completed", { id: toastId });
         else toast.success("Embedding completed");
       }
       setUploadOpen(false);
@@ -447,7 +463,7 @@ export function CustomersPage() {
       const d2: UploadItem[] = await r2.json();
       setUploads(d2);
       const removed = Array.isArray((json as any)?.removedNames) ? (json as any).removedNames : [];
-      if (removed.length) toast.success(`Removed ${removed.length} document${removed.length>1?'s':''}`);
+      if (removed.length) toast.success(`Removed ${removed.length} document${removed.length > 1 ? 's' : ''}`);
       if ((json as any)?.documentsWarning) toast.warning?.((json as any).documentsWarning);
       if (loadingId && (toast as any).success) (toast as any).success("Removed", { id: loadingId });
       else toast.success("Removed");
@@ -486,7 +502,6 @@ export function CustomersPage() {
       if (selectedId === deleteId) {
         const next = data[0]?.id ?? null;
         setSelectedId(next);
-        setDocs([]);
       }
     } catch {
       toast.error("Failed to delete customer");
@@ -521,149 +536,188 @@ export function CustomersPage() {
           <div className="text-lg font-semibold">Add your first customer</div>
           <div className="text-sm text-muted-foreground">Create a customer to start chatting and uploading documents.</div>
           <div className="flex items-center gap-2 w-full max-w-md">
-            <Input placeholder="Customer name" value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e)=>{ if (e.key==='Enter') add(); }} />
-            <Button onClick={add}><Icon.Plus className="h-4 w-4 mr-2"/>Add</Button>
+            <Input placeholder="Customer name" value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') add(); }} />
+            <Button onClick={add}><Icon.Plus className="h-4 w-4 mr-2" />Add</Button>
           </div>
         </Card>
       ) : (
-      <div className="grid grid-cols-12 gap-2 min-h-0">
-        {/* Left: Customers list full-height */}
-        <div className="col-span-12 md:col-span-4">
-          <div className="sticky top-0">
-            <Card className="h-[calc(100vh-160px)] overflow-hidden p-0">
-              <div className="h-full p-4 space-y-3 overflow-y-auto">
-                {/* Add form in panel */}
-                {customers.length > 0 && (
-                  <div className="flex items-center gap-2">
-                    <Input placeholder="Customer name" value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e)=>{ if (e.key==='Enter') add(); }} />
-                    <Button onClick={add}><Icon.Plus className="h-4 w-4 mr-2"/>Add</Button>
-                  </div>
-                )}
-                {loadingCustomers ? (
-                  <div className="text-muted-foreground text-sm">Loading.</div>
-                ) : customers.length ? (
-                  <ul className="space-y-1">
-                    {customers.map((c) => (
-                      <li key={c.id} className="flex items-center gap-2">
-                        <button
-                          className={
-                            "flex-1 text-left px-3 py-2 rounded-md border hover:bg-accent/40 transition " +
-                            (selectedId === c.id ? "bg-accent text-accent-foreground" : "")
-                          }
-                          onClick={() => setSelectedId(c.id)}
-                          title={new Date(c.createdAt).toLocaleString()}
-                        >
-                          <div className="font-medium">{c.name}</div>
-                          {counts[c.id]?.docs == null && counts[c.id]?.chats == null ? (
-                            <div className="flex items-center gap-2 mt-0.5">
-                              <div className="h-2 w-16 rounded bg-muted animate-pulse" />
-                              <div className="h-2 w-16 rounded bg-muted animate-pulse" />
-                            </div>
-                          ) : (
-                            <div className="text-xs text-muted-foreground">
-                              {(() => {
-                                const d = counts[c.id]?.docs;
-                                const cm = counts[c.id]?.chats;
-                                const dText = (d == null) ? '… docs' : `${d} doc${d===1?'':'s'}`;
-                                const cText = (cm == null) ? '… chats' : `${cm} chat${cm===1?'':'s'}`;
-                                return `${dText} • ${cText}`;
-                              })()}
-                            </div>
-                          )}
-                        </button>
-                        <Button size="sm" variant="destructive" onClick={() => startDelete(c)} title="Delete customer" aria-label="Delete customer">
-                          <Icon.Trash className="h-4 w-4" />
-                        </Button>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <div className="text-muted-foreground text-sm">No customers yet.</div>
-                )}
-              </div>
-            </Card>
-          </div>
-        </div>
-
-        {/* Right: Chat and Documents with smooth expand/collapse */}
-        <div
-          className={`col-span-12 md:col-span-8 ${rowsClass} gap-2 h-[calc(100vh-160px)] min-h-0`}
-          style={{
-            transition: 'grid-template-rows 300ms ease',
-            gridTemplateRows: panelMode === 'split'
-              ? 'minmax(0,2fr) minmax(0,1fr)'
-              : (panelMode === 'chat'
-                ? 'minmax(0,1fr) minmax(0,0fr)'
-                : 'minmax(0,0fr) minmax(0,1fr)')
-          }}
-        >
-          {/* AI Chat */}
-          <div className="h-full min-h-0 overflow-hidden transition-all duration-300 ease-in-out">
-          
-          {panelMode==='docs' ? null : (!selectedId ? (
-            <Card className="p-4 text-sm text-muted-foreground h-full">Select a customer to open chat.</Card>
-          ) : wsLoading ? (
-            <Card className="p-4 text-sm text-muted-foreground h-full">Resolving workspace…</Card>
-          ) : wsSlug ? (
-            <WorkspaceChat
-              slug={wsSlug}
-              className="h-full"
-              onOpenLogs={openLogs}
-              onOpenGenerate={() => { if (selectedId) setGenerateOpen(true) }}
-              externalCards={chatCards}
-              headerActions={(
-                <>
-                  <Dialog>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                        <DialogTrigger asChild>
-                          <Button size="icon" variant="ghost" aria-label="Recent jobs" title="Recent jobs">
-                            <Icon.History className="h-4 w-4" />
-                          </Button>
-                        </DialogTrigger>
-                      </TooltipTrigger>
-                      <TooltipContent side="left">Recent jobs</TooltipContent>
-                    </Tooltip>
-                    <DialogContent className="w-[95vw] sm:!max-w-6xl">
-                      <DialogHeader>
-                        <DialogTitle>Recent Generation Jobs</DialogTitle>
-                        <DialogDescription>View recent document generation runs and their logs.</DialogDescription>
-                      </DialogHeader>
-                      <div className="h-[70vh] min-h-[480px]">
-                        <JobsPanel customerId={selectedId || undefined} />
-                      </div>
-                      <DialogFooter>
-                        <DialogClose asChild>
-                          <Button variant="secondary">Close</Button>
-                        </DialogClose>
-                      </DialogFooter>
-                    </DialogContent>
-                  </Dialog>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button size="icon" variant="ghost" onClick={() => setPanelMode(panelMode==='chat' ? 'split' : 'chat')} aria-label={panelMode==='chat' ? 'Collapse chat' : 'Expand chat'}>
-                        {panelMode==='chat' ? (<Minimize2 className="h-4 w-4" />) : (<Maximize2 className="h-4 w-4" />)}
+        <div className="grid grid-cols-12 gap-2 min-h-0">
+          {/* Left: Customers list full-height */}
+          <div className="col-span-12 md:col-span-4">
+            <div className="sticky top-0">
+              <Card className="h-[calc(100vh-160px)] overflow-hidden p-0">
+                <div className="h-full p-4 space-y-3 overflow-y-auto">
+                  {/* Add form in panel */}
+                  {customers.length > 0 && (
+                    <div className="flex items-center gap-2">
+                      <Input
+                        placeholder="Customer name"
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") add();
+                        }}
+                      />
+                      <Button onClick={add}>
+                        <Icon.Plus className="h-4 w-4 mr-2" />
+                        Add
                       </Button>
-                    </TooltipTrigger>
-                    <TooltipContent side="left">{panelMode==='chat' ? 'Collapse chat' : 'Expand chat'}</TooltipContent>
-                  </Tooltip>
-                </>
-              )}
-            />
-          ) : (
-            <Card className="p-4 text-sm text-muted-foreground h-full">No workspace found for this customer.</Card>
-          ))}
+                    </div>
+                  )}
+
+                  {loadingCustomers ? (
+                    <div className="text-muted-foreground text-sm">Loading.</div>
+                  ) : customers.length ? (
+                    <ul className="space-y-1">
+                      {customers.map((c) => (
+                        <li key={c.id}>
+                          <div
+                            role="button"
+                            tabIndex={0}
+                            className={
+                              "flex items-center justify-between gap-2 px-3 py-2 rounded-md border hover:bg-accent/40 transition " +
+                              (selectedId === c.id ? "bg-accent text-accent-foreground" : "")
+                            }
+                            onClick={() => setSelectedId(c.id)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") setSelectedId(c.id);
+                            }}
+                            title={new Date(c.createdAt).toLocaleString()}
+                          >
+                            {/* Left: name + counts */}
+                            <div className="min-w-0">
+                              <div className="font-medium truncate">{c.name}</div>
+                              {counts[c.id]?.docs == null && counts[c.id]?.chats == null ? (
+                                <div className="flex items-center gap-2 mt-0.5">
+                                  <div className="h-2 w-16 rounded bg-muted animate-pulse" />
+                                  <div className="h-2 w-16 rounded bg-muted animate-pulse" />
+                                </div>
+                              ) : (
+                                <div className="text-xs text-muted-foreground">
+                                  {(() => {
+                                    const d = counts[c.id]?.docs;
+                                    const cm = counts[c.id]?.chats;
+                                    const dText = d == null ? "… docs" : `${d} doc${d === 1 ? "" : "s"}`;
+                                    const cText = cm == null ? "… chats" : `${cm} chat${cm === 1 ? "" : "s"}`;
+                                    return `${dText} • ${cText}`;
+                                  })()}
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Right: actions (delete) */}
+                            <div className="flex items-center gap-2 shrink-0">
+                              <Tooltip>
+                                <TooltipTrigger>
+                                  <Button
+                                    size="icon"
+                                    variant="destructive"
+                                    disabled={deleting === c.name}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      e.preventDefault();
+                                      startDelete(c);
+                                    }}
+                                    aria-label={`Delete ${c.name}`}
+                                    title={`Delete ${c.name}`}
+                                  >
+                                    {deleting === c.name ? "." : <Icon.Trash className="h-4 w-4" />}
+                                  </Button>
+                                </TooltipTrigger>
+                              </Tooltip>
+                            </div>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <div className="text-muted-foreground text-sm">No customers yet.</div>
+                  )}
+                </div>
+              </Card>
+            </div>
           </div>
 
-          {/* Documents */}
-          <Card className={`p-4 h-full flex flex-col overflow-hidden`}>
+
+
+
+          {/* Right: Chat and Documents with smooth expand/collapse */}
+          <div
+            className={`col-span-12 md:col-span-8 ${rowsClass} gap-2 h-[calc(100vh-160px)] min-h-0`}
+            style={{
+              transition: 'grid-template-rows 300ms ease',
+              gridTemplateRows: panelMode === 'split'
+                ? 'minmax(0,2fr) minmax(0,1fr)'
+                : (panelMode === 'chat'
+                  ? 'minmax(0,1fr) minmax(0,0fr)'
+                  : 'minmax(0,0fr) minmax(0,1fr)')
+            }}
+          >
+            {/* AI Chat */}
+            <div className="h-full min-h-0 overflow-hidden transition-all duration-300 ease-in-out">
+
+              {panelMode === 'docs' ? null : (!selectedId ? (
+                <Card className="p-4 text-sm text-muted-foreground h-full">Select a customer to open chat.</Card>
+              ) : wsLoading ? (
+                <Card className="p-4 text-sm text-muted-foreground h-full">Resolving workspace…</Card>
+              ) : wsSlug ? (
+                <WorkspaceChat
+                  slug={wsSlug}
+                  className="h-full"
+                  onOpenLogs={openLogs}
+                  onOpenGenerate={() => { if (selectedId) setGenerateOpen(true) }}
+                  externalCards={chatCards}
+                  headerActions={(
+                    <>
+                      <Dialog>
+                        <Tooltip>
+                          <TooltipTrigger>
+                            <DialogTrigger asChild>
+                              <Button size="icon" variant="ghost" aria-label="Recent jobs" title="Recent jobs">
+                                <Icon.History className="h-4 w-4" />
+                              </Button>
+                            </DialogTrigger>
+                          </TooltipTrigger>
+                        </Tooltip>
+                        <DialogContent className="w-[95vw] sm:!max-w-6xl">
+                          <DialogHeader>
+                            <DialogTitle>Recent Generation Jobs</DialogTitle>
+                            <DialogDescription>View recent document generation runs and their logs.</DialogDescription>
+                          </DialogHeader>
+                          <div className="h-[70vh] min-h-[480px]">
+                            <JobsPanel customerId={selectedId || undefined} />
+                          </div>
+                          <DialogFooter>
+                            <DialogClose asChild>
+                              <Button variant="secondary">Close</Button>
+                            </DialogClose>
+                          </DialogFooter>
+                        </DialogContent>
+                      </Dialog>
+                      <Tooltip>
+                        <TooltipTrigger>
+                          <Button size="icon" variant="ghost" onClick={() => setPanelMode(panelMode === 'chat' ? 'split' : 'chat')} aria-label={panelMode === 'chat' ? 'Collapse chat' : 'Expand chat'}>
+                            {panelMode === 'chat' ? (<Minimize2 className="h-4 w-4" />) : (<Maximize2 className="h-4 w-4" />)}
+                          </Button>
+                        </TooltipTrigger>
+                      </Tooltip>
+                    </>
+                  )}
+                />
+              ) : (
+                <Card className="p-4 text-sm text-muted-foreground h-full">No workspace found for this customer.</Card>
+              ))}
+            </div>
+
+            {/* Documents */}
+            <Card className={`p-4 h-full flex flex-col overflow-hidden`}>
               <div className="flex items-center gap-2 mb-3 shrink-0">
                 <div className="hidden">
                   <div className="font-medium">Documents</div>
                   <div className="text-xs text-muted-foreground">
                     {selectedId ? (
                       <>
-                        <span>{uploads.length} document{uploads.length===1?'':'s'}</span>
+                        <span>{uploads.length} document{uploads.length === 1 ? '' : 's'}</span>
                         <span className="mx-1">•</span>
                         <span>for {customers.find((x) => x.id === selectedId)?.name || 'selected customer'}</span>
                       </>
@@ -672,115 +726,114 @@ export function CustomersPage() {
                     )}
                   </div>
                 </div>
-              <div className="flex items-center gap-2 flex-1">
+                <div className="flex items-center gap-2 flex-1">
                   <div className="relative flex-1">
                     <Search className="h-4 w-4 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
                     <Input
                       placeholder="Search documents"
                       value={docQuery}
-                      onChange={(e)=> setDocQuery(e.target.value)}
+                      onChange={(e) => setDocQuery(e.target.value)}
                       className="w-full pl-8"
                     />
                   </div>
                   <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <DialogTrigger asChild>
-                        <Button disabled={!selectedId} size="icon" variant="ghost" aria-label="Upload document">
-                          <Icon.Upload className="h-4 w-4" />
-                        </Button>
-                      </DialogTrigger>
-                    </TooltipTrigger>
-                    <TooltipContent side="left">Upload</TooltipContent>
-                  </Tooltip>
-                  <DialogContent>
-                    <DialogHeader>
-                      <DialogTitle>Upload Document</DialogTitle>
-                      <DialogDescription>
-                        Attach a file to this customer's workspace.
-                      </DialogDescription>
-                    </DialogHeader>
-                    <div className="space-y-3">
-                      <div className="text-sm text-muted-foreground">Click the area below to attach a file, or drag and drop.</div>
-                      <input
-                        ref={fileInputRef}
-                        type="file"
-                        className="hidden"
-                        disabled={uploading}
-                        onChange={(e) => setFile(e.target.files?.[0] || null)}
-                      />
-                      <button
-                        type="button"
-                        onClick={() => fileInputRef.current?.click()}
-                        onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
-                        onDrop={(e) => {
-                          e.preventDefault(); e.stopPropagation();
-                          const f = e.dataTransfer?.files?.[0];
-                          if (f) setFile(f);
-                        }}
-                        disabled={uploading}
-                        className="w-full rounded-md border border-dashed p-6 text-center hover:bg-accent/40 transition flex flex-col items-center justify-center text-muted-foreground"
-                      >
-                        <Icon.Upload className="h-6 w-6 mb-1" />
-                        <div className="font-medium">{file ? 'Change selected file' : 'Click to select a file'}</div>
-                        <div className="text-xs mt-1 max-w-full whitespace-normal break-all">{file ? file.name : 'or drag and drop here'}</div>
-                      </button>
-                      {uploading && (
-                        <div className="text-xs text-muted-foreground">{embeddingMsg || "Processing..."}</div>
-                      )}
-                    </div>
-                    <DialogFooter>
-                      <Button variant="secondary" onClick={() => setUploadOpen(false)} disabled={uploading}>Cancel</Button>
-                      <Button onClick={uploadFile} disabled={!selectedId || !file || uploading} aria-label="Confirm upload">
-                        {uploading ? "Uploading..." : (<><Icon.Upload className="h-4 w-4 mr-2"/>Upload</>)}
-                      </Button>
-                    </DialogFooter>
-                  </DialogContent>
-                </Dialog>
-                <Dialog open={generateOpen} onOpenChange={setGenerateOpen}>
-                  <DialogContent>
-                    <DialogHeader>
-                      <DialogTitle>Generate Document</DialogTitle>
-                      <DialogDescription>
-                        Generate documents using this customer's workspace and selected template.
-                      </DialogDescription>
-                    </DialogHeader>
-                    <div className="space-y-3">
-                      <div>
-                        <label className="text-sm">Template</label>
-                        <select className="mt-1 w-full border rounded-md h-9 px-2 bg-background" value={selectedTemplate} onChange={(e) => setSelectedTemplate(e.target.value)} disabled={loadingTemplates}>
-                          {loadingTemplates ? <option>Loading templates...</option> : (
-                            templates.length ? templates.map((t) => (
-                              <option key={t.slug} value={t.slug}>{t.name || t.slug}</option>
-                            )) : <option value="">No templates found</option>
-                          )}
-                        </select>
-                      </div>
-                      <div>
-                        <label className="text-sm">Additional AI context (optional)</label>
-                        <Textarea
-                          className="mt-1 w-full"
-                          rows={4}
-                          placeholder="e.g., only include specific sources, reference meeting notes from last week, keep answers concise, etc."
-                          value={genInstructions}
-                          onChange={(e) => setGenInstructions(e.target.value)}
+                    <Tooltip>
+                      <TooltipTrigger>
+                        <DialogTrigger asChild>
+                          <Button disabled={!selectedId} size="icon" variant="ghost" aria-label="Upload document">
+                            <Icon.Upload className="h-4 w-4" />
+                          </Button>
+                        </DialogTrigger>
+                      </TooltipTrigger>
+                    </Tooltip>
+                    <DialogContent>
+                      <DialogHeader>
+                        <DialogTitle>Upload Document</DialogTitle>
+                        <DialogDescription>
+                          Attach a file to this customer's workspace.
+                        </DialogDescription>
+                      </DialogHeader>
+                      <div className="space-y-3">
+                        <div className="text-sm text-muted-foreground">Click the area below to attach a file, or drag and drop.</div>
+                        <input
+                          ref={fileInputRef}
+                          type="file"
+                          className="hidden"
+                          disabled={uploading}
+                          onChange={(e) => setFile(e.target.files?.[0] || null)}
                         />
+                        <button
+                          type="button"
+                          onClick={() => fileInputRef.current?.click()}
+                          onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                          onDrop={(e) => {
+                            e.preventDefault(); e.stopPropagation();
+                            const f = e.dataTransfer?.files?.[0];
+                            if (f) setFile(f);
+                          }}
+                          disabled={uploading}
+                          className="w-full rounded-md border border-dashed p-6 text-center hover:bg-accent/40 transition flex flex-col items-center justify-center text-muted-foreground"
+                        >
+                          <Icon.Upload className="h-6 w-6 mb-1" />
+                          <div className="font-medium">{file ? 'Change selected file' : 'Click to select a file'}</div>
+                          <div className="text-xs mt-1 max-w-full whitespace-normal break-all">{file ? file.name : 'or drag and drop here'}</div>
+                        </button>
+                        {uploading && (
+                          <div className="text-xs text-muted-foreground">{embeddingMsg || "Processing..."}</div>
+                        )}
                       </div>
-                      {generating ? (
-                        <div className="pt-2"><Progress indeterminate /></div>
-                      ) : null}
-                    </div>
-                    <DialogFooter>
-                      <Button variant="secondary" onClick={() => setGenerateOpen(false)} disabled={generating}>Cancel</Button>
-                      <Button onClick={generateDocument} disabled={!selectedId || !selectedTemplate || generating} aria-label="Confirm generate">
-                        {generating ? 'Generating...' : 'Generate'}
-                      </Button>
-                    </DialogFooter>
-                  </DialogContent>
-                </Dialog>
+                      <DialogFooter>
+                        <Button variant="secondary" onClick={() => setUploadOpen(false)} disabled={uploading}>Cancel</Button>
+                        <Button onClick={uploadFile} disabled={!selectedId || !file || uploading} aria-label="Confirm upload">
+                          {uploading ? "Uploading..." : (<><Icon.Upload className="h-4 w-4 mr-2" />Upload</>)}
+                        </Button>
+                      </DialogFooter>
+                    </DialogContent>
+                  </Dialog>
+                  <Dialog open={generateOpen} onOpenChange={setGenerateOpen}>
+                    <DialogContent>
+                      <DialogHeader>
+                        <DialogTitle>Generate Document</DialogTitle>
+                        <DialogDescription>
+                          Generate documents using this customer's workspace and selected template.
+                        </DialogDescription>
+                      </DialogHeader>
+                      <div className="space-y-3">
+                        <div>
+                          <label className="text-sm">Template</label>
+                          <select className="mt-1 w-full border rounded-md h-9 px-2 bg-background" value={selectedTemplate} onChange={(e) => setSelectedTemplate(e.target.value)} disabled={loadingTemplates}>
+                            {loadingTemplates ? <option>Loading templates...</option> : (
+                              templates.length ? templates.map((t) => (
+                                <option key={t.slug} value={t.slug}>{t.name || t.slug}</option>
+                              )) : <option value="">No templates found</option>
+                            )}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="text-sm">Additional AI context (optional)</label>
+                          <Textarea
+                            className="mt-1 w-full"
+                            rows={4}
+                            placeholder="e.g., only include specific sources, reference meeting notes from last week, keep answers concise, etc."
+                            value={genInstructions}
+                            onChange={(e) => setGenInstructions(e.target.value)}
+                          />
+                        </div>
+                        {generating ? (
+                          <div className="pt-2"><Progress indeterminate /></div>
+                        ) : null}
+                      </div>
+                      <DialogFooter>
+                        <Button variant="secondary" onClick={() => setGenerateOpen(false)} disabled={generating}>Cancel</Button>
+                        <Button onClick={generateDocument} disabled={!selectedId || !selectedTemplate || generating} aria-label="Confirm generate">
+                          {generating ? 'Generating...' : 'Generate'}
+                        </Button>
+                      </DialogFooter>
+                    </DialogContent>
+                  </Dialog>
                   {/* Open uploads folder */}
                   <Tooltip>
-                    <TooltipTrigger asChild>
+                    <TooltipTrigger>
                       <Button
                         size="icon"
                         variant="ghost"
@@ -800,71 +853,67 @@ export function CustomersPage() {
                         <Icon.Folder className="h-4 w-4" />
                       </Button>
                     </TooltipTrigger>
-                    <TooltipContent side="left">Open Folder</TooltipContent>
                   </Tooltip>
                   {/* Expand/Collapse Documents - right most */}
                   <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button size="icon" variant="ghost" onClick={() => setPanelMode(panelMode==='docs' ? 'split' : 'docs')} aria-label={panelMode==='docs' ? 'Collapse documents' : 'Expand documents'}>
-                        {panelMode==='docs' ? (<Minimize2 className="h-4 w-4" />) : (<Maximize2 className="h-4 w-4" />)}
+                    <TooltipTrigger>
+                      <Button size="icon" variant="ghost" onClick={() => setPanelMode(panelMode === 'docs' ? 'split' : 'docs')} aria-label={panelMode === 'docs' ? 'Collapse documents' : 'Expand documents'}>
+                        {panelMode === 'docs' ? (<Minimize2 className="h-4 w-4" />) : (<Maximize2 className="h-4 w-4" />)}
                       </Button>
                     </TooltipTrigger>
-                    <TooltipContent side="left">{panelMode==='docs' ? 'Collapse documents' : 'Expand documents'}</TooltipContent>
                   </Tooltip>
                 </div>
               </div>
 
-            <div className="flex-1 min-h-0 overflow-y-auto">
-          {!selectedId ? (
-                <div className="text-muted-foreground text-sm">Select a customer to view documents.</div>
-              ) : loadingUploads ? (
-                <div className="text-muted-foreground text-sm">Loading documents.</div>
-              ) : (docQuery.trim() ? uploads.filter((u)=> u.name.toLowerCase().includes(docQuery.trim().toLowerCase())).length : uploads.length) ? (
-                <ul className="space-y-2">
-                  {(docQuery.trim() ? uploads.filter((u)=> u.name.toLowerCase().includes(docQuery.trim().toLowerCase())) : uploads).map((u, idx) => (
-                    <li key={idx} className="border rounded-md px-3 py-2 flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <Icon.File className="h-4 w-4 text-muted-foreground" />
-                        <a
-                          href={`/api/uploads/${selectedId}/file?name=${encodeURIComponent(u.name)}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          title={u.name}
-                          className="font-medium hover:underline truncate max-w-[40ch]"
-                        >
-                          {u.name}
-                        </a>
-                        <div className="text-xs text-muted-foreground">{formatBytes(u.size)}</div>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <div className="text-xs text-muted-foreground mr-2">{new Date(u.modifiedAt).toLocaleString()}</div>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button size="icon" variant="ghost" aria-label={`Download ${u.name}`} onClick={() => { const a = document.createElement('a'); a.href = `/api/uploads/${selectedId}/file?name=${encodeURIComponent(u.name)}`; a.download = u.name; document.body.appendChild(a); a.click(); a.remove(); }}>
-                              <Download className="h-4 w-4" />
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="left">Download</TooltipContent>
-                        </Tooltip>
-                        <Tooltip>
-                          <TooltipTrigger asChild>
-                            <Button size="icon" variant="destructive" disabled={uploading || deleting === u.name} onClick={() => deleteUpload(u.name)} aria-label={`Delete ${u.name}`}>
-                              {deleting === u.name ? '.' : <Icon.Trash className="h-4 w-4" />}
-                            </Button>
-                          </TooltipTrigger>
-                          <TooltipContent side="left">Delete</TooltipContent>
-                        </Tooltip>
-                      </div>
-                    </li>
-                  ))}
-                </ul>
-              ) : (
-                <div className="text-muted-foreground text-sm">{docQuery.trim() ? 'No matching documents.' : 'No documents yet for this customer.'}</div>
-              )}
-            </div>
-          </Card>
+              <div className="flex-1 min-h-0 overflow-y-auto">
+                {!selectedId ? (
+                  <div className="text-muted-foreground text-sm">Select a customer to view documents.</div>
+                ) : loadingUploads ? (
+                  <div className="text-muted-foreground text-sm">Loading documents.</div>
+                ) : (docQuery.trim() ? uploads.filter((u) => u.name.toLowerCase().includes(docQuery.trim().toLowerCase())).length : uploads.length) ? (
+                  <ul className="space-y-2">
+                    {(docQuery.trim() ? uploads.filter((u) => u.name.toLowerCase().includes(docQuery.trim().toLowerCase())) : uploads).map((u, idx) => (
+                      <li key={idx} className="border rounded-md px-3 py-2 flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <Icon.File className="h-4 w-4 text-muted-foreground" />
+                          <a
+                            href={`/api/uploads/${selectedId}/file?name=${encodeURIComponent(u.name)}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title={u.name}
+                            className="font-medium hover:underline truncate max-w-[40ch]"
+                          >
+                            {u.name}
+                          </a>
+                          <div className="text-xs text-muted-foreground">{formatBytes(u.size)}</div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="text-xs text-muted-foreground mr-2">{new Date(u.modifiedAt).toLocaleString()}</div>
+                          <Tooltip>
+                            <TooltipTrigger>
+                              <Button size="icon" variant="ghost" aria-label={`Download ${u.name}`} onClick={() => { const a = document.createElement('a'); a.href = `/api/uploads/${selectedId}/file?name=${encodeURIComponent(u.name)}`; a.download = u.name; document.body.appendChild(a); a.click(); a.remove(); }}>
+                                <Download className="h-4 w-4" />
+                              </Button>
+                            </TooltipTrigger>
+                          </Tooltip>
+                          <Tooltip>
+                            <TooltipTrigger>
+                              <Button size="icon" variant="destructive" disabled={uploading || deleting === u.name} onClick={() => deleteUpload(u.name)} aria-label={`Delete ${u.name}`}>
+                                {deleting === u.name ? '.' : <Icon.Trash className="h-4 w-4" />}
+                              </Button>
+                            </TooltipTrigger>
+                          </Tooltip>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div className="text-muted-foreground text-sm">{docQuery.trim() ? 'No matching documents.' : 'No documents yet for this customer.'}</div>
+                )}
+              </div>
+            </Card>
+          </div>
         </div>
-      </div>
       )}
 
       {/* Delete Customer Confirm */}
@@ -888,7 +937,7 @@ export function CustomersPage() {
       </AlertDialog>
 
       {/* Generation Logs */}
-      <Dialog open={!!genLogs} onOpenChange={(v)=>{ if(!v) { setGenLogs(null); setGenSteps({}); setGenProgress(null); setGenJobId(null); setGenError(null) } }}>
+      <Dialog open={!!genLogs} onOpenChange={(v) => { if (!v) { setGenLogs(null); setGenSteps({}); setGenProgress(null); setGenJobId(null); setGenError(null) } }}>
         <DialogContent className="sm:max-w-3xl">
           <DialogHeader>
             <DialogTitle>Generation Logs</DialogTitle>
@@ -909,9 +958,9 @@ export function CustomersPage() {
             <div className="border rounded-md bg-muted/30 px-3 py-2 h-40 overflow-hidden text-sm">
               <ScrollArea className="h-full pr-2">
                 <ul className="space-y-1">
-                  {['resolveCustomer','loadTemplate','resolveWorkspace','readGenerator','aiUpdate','transpile','execute','mergeWrite'].map((s)=> {
+                  {['resolveCustomer', 'loadTemplate', 'resolveWorkspace', 'readGenerator', 'aiUpdate', 'transpile', 'execute', 'mergeWrite'].map((s) => {
                     const st = genSteps[s]
-                    const label = s.replace(/([A-Z])/g,' $1')
+                    const label = s.replace(/([A-Z])/g, ' $1')
                     let badge
                     if (st === 'ok') {
                       badge = (
@@ -948,19 +997,19 @@ export function CustomersPage() {
             </div>
             <div className="border rounded-md bg-muted/30 px-3 py-2 h-40 overflow-hidden text-sm">
               <ScrollArea className="h-full pr-2">
-                <pre className="whitespace-pre-wrap break-all font-mono w-full max-w-full">{(genLogs||[]).join('\n')}</pre>
+                <pre className="whitespace-pre-wrap break-all font-mono w-full max-w-full">{(genLogs || []).join('\n')}</pre>
               </ScrollArea>
             </div>
           </div>
           <DialogFooter>
             {generating && genJobId ? (
-              <Button variant="destructive" onClick={async ()=>{ try { await fetch(`/api/generate/jobs/${encodeURIComponent(genJobId)}/cancel`, { method: 'POST' }); } catch {} }}>Cancel</Button>
+              <Button variant="destructive" onClick={async () => { try { await fetch(`/api/generate/jobs/${encodeURIComponent(genJobId)}/cancel`, { method: 'POST' }); } catch { } }}>Cancel</Button>
             ) : null}
             {!generating && genError ? (
-              <Button variant="outline" onClick={() => { setGenLogs([]); setGenSteps({}); setGenProgress(0); setGenError(null); if (genEventRef.current) { try { genEventRef.current.close() } catch {} ; genEventRef.current = null }; generateDocument(); }}>Retry</Button>
+              <Button variant="outline" onClick={() => { setGenLogs([]); setGenSteps({}); setGenProgress(0); setGenError(null); if (genEventRef.current) { try { genEventRef.current.close() } catch { }; genEventRef.current = null }; generateDocument(); }}>Retry</Button>
             ) : null}
             <DialogClose asChild>
-              <Button variant="secondary" onClick={()=>setGenLogs(null)}>Close</Button>
+              <Button variant="secondary" onClick={() => setGenLogs(null)}>Close</Button>
             </DialogClose>
           </DialogFooter>
         </DialogContent>
@@ -975,7 +1024,7 @@ function RecentJobs({ selectedId }: { selectedId: number | null }) {
   const [jobs, setJobs] = React.useState<Array<any>>([])
   const [loading, setLoading] = React.useState(false)
   const [active, setActive] = React.useState<any | null>(null)
-  
+
   const isCompileJob = (j: any) => {
     try {
       return j?.customerId === 0 || String(j?.customerName || '').toLowerCase() === 'template' || String(j?.file?.name || '') === 'generator.full.ts'
@@ -983,7 +1032,7 @@ function RecentJobs({ selectedId }: { selectedId: number | null }) {
   }
 
   // Status badge with label (parity with Jobs page)
-  const statusBadge = (s: 'running'|'done'|'error'|'cancelled') => {
+  const statusBadge = (s: 'running' | 'done' | 'error' | 'cancelled') => {
     const label = s === 'done' ? 'Completed' : (s.charAt(0).toUpperCase() + s.slice(1))
     if (s === 'running') {
       return (
@@ -1019,33 +1068,33 @@ function RecentJobs({ selectedId }: { selectedId: number | null }) {
       const j = await r.json().catch(() => (null as any))
       if (!r.ok) throw new Error(String(j?.error || r.status))
       toast.success('Opened template folder')
-    } catch (e:any) {
+    } catch (e: any) {
       toast.error(e?.message ? String(e.message) : 'Failed to open template folder')
     }
   }
 
   React.useEffect(() => {
-    let ignore=false
+    let ignore = false
     const load = async () => {
       try {
         setLoading(true)
         const r = await fetch('/api/generate/jobs')
-        const j = await r.json().catch(()=>({}))
+        const j = await r.json().catch(() => ({}))
         if (!ignore) {
           const arr = Array.isArray(j?.jobs) ? j.jobs : []
           setJobs(arr)
-          const filtered = selectedId ? arr.filter((x:any)=> x.customerId === selectedId) : arr
-          if (!active && filtered.length) { try { await openJob(filtered[0].id) } catch {} }
+          const filtered = selectedId ? arr.filter((x: any) => x.customerId === selectedId) : arr
+          if (!active && filtered.length) { try { await openJob(filtered[0].id) } catch { } }
         }
-      } catch { if (!ignore) setJobs([]) } finally { if(!ignore) setLoading(false) }
+      } catch { if (!ignore) setJobs([]) } finally { if (!ignore) setLoading(false) }
     }
     load()
     const t = setInterval(load, 5000)
-    return ()=>{ignore=true; clearInterval(t)}
+    return () => { ignore = true; clearInterval(t) }
   }, [selectedId])
 
   async function openJob(id: string) {
-    try { const r = await fetch(`/api/generate/jobs/${encodeURIComponent(id)}`); const j = await r.json().catch(()=>({})); if (!r.ok) throw new Error(String(r.status)); setActive(j) } catch { setActive(null) }
+    try { const r = await fetch(`/api/generate/jobs/${encodeURIComponent(id)}`); const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(String(r.status)); setActive(j) } catch { setActive(null) }
   }
 
   return (
@@ -1054,16 +1103,16 @@ function RecentJobs({ selectedId }: { selectedId: number | null }) {
         <div className="border rounded-md p-2 h-[60vh] overflow-auto">
           {loading ? 'Loading...' : (
             <ul className="text-sm space-y-1 pr-2">
-              {(selectedId ? jobs.filter((j:any)=> j.customerId === selectedId) : jobs).map((j: any) => (
-                <li key={j.id} onClick={() => openJob(j.id)} className={"flex items-center gap-2 justify-between rounded px-2 py-1 cursor-pointer " + ((active?.id===j.id)?"bg-accent":"hover:bg-accent/40") }>
+              {(selectedId ? jobs.filter((j: any) => j.customerId === selectedId) : jobs).map((j: any) => (
+                <li key={j.id} onClick={() => openJob(j.id)} className={"flex items-center gap-2 justify-between rounded px-2 py-1 cursor-pointer " + ((active?.id === j.id) ? "bg-accent" : "hover:bg-accent/40")}>
                   <button className="text-left flex-1 truncate" onClick={() => openJob(j.id)}>
                     <div className="font-medium truncate">{j.template} • {j.customerName || j.customerId}</div>
                     <div className="text-xs text-muted-foreground truncate">{j.status} • {new Date(j.updatedAt).toLocaleString()} {j.file?.name ? `• ${j.file.name}` : ''}</div>
                   </button>
-                  {(() => { const s = String(j.status||''); const label = (s==='done'?'Completed':(s.charAt(0).toUpperCase()+s.slice(1))); if (s==='running') return (<Badge variant="outline" aria-label={label} title={label} className="shrink-0 h-6 w-6 p-0 grid place-items-center border-warning text-warning bg-warning/10"><Icon.Refresh className="h-3.5 w-3.5 animate-spin" /></Badge>); if (s==='done') return (<Badge variant="outline" aria-label={label} title={label} className="shrink-0 h-6 w-6 p-0 grid place-items-center border-success text-success bg-success/10"><Icon.Check className="h-3.5 w-3.5" /></Badge>); if (s==='cancelled') return (<Badge variant="outline" aria-label={label} title={label} className="shrink-0 h-6 w-6 p-0 grid place-items-center border-muted-foreground text-muted-foreground bg-muted/10"><Icon.Stop className="h-3.5 w-3.5" /></Badge>); return (<Badge variant="outline" aria-label={label} title={label} className="shrink-0 h-6 w-6 p-0 grid place-items-center border-destructive text-destructive bg-destructive/10"><Icon.X className="h-3.5 w-3.5" /></Badge>) })()}
+                  {(() => { const s = String(j.status || ''); const label = (s === 'done' ? 'Completed' : (s.charAt(0).toUpperCase() + s.slice(1))); if (s === 'running') return (<Badge variant="outline" aria-label={label} title={label} className="shrink-0 h-6 w-6 p-0 grid place-items-center border-warning text-warning bg-warning/10"><Icon.Refresh className="h-3.5 w-3.5 animate-spin" /></Badge>); if (s === 'done') return (<Badge variant="outline" aria-label={label} title={label} className="shrink-0 h-6 w-6 p-0 grid place-items-center border-success text-success bg-success/10"><Icon.Check className="h-3.5 w-3.5" /></Badge>); if (s === 'cancelled') return (<Badge variant="outline" aria-label={label} title={label} className="shrink-0 h-6 w-6 p-0 grid place-items-center border-muted-foreground text-muted-foreground bg-muted/10"><Icon.Stop className="h-3.5 w-3.5" /></Badge>); return (<Badge variant="outline" aria-label={label} title={label} className="shrink-0 h-6 w-6 p-0 grid place-items-center border-destructive text-destructive bg-destructive/10"><Icon.X className="h-3.5 w-3.5" /></Badge>) })()}
                 </li>
               ))}
-              {!(selectedId ? jobs.filter((j:any)=> j.customerId === selectedId).length : jobs.length) ? (
+              {!(selectedId ? jobs.filter((j: any) => j.customerId === selectedId).length : jobs.length) ? (
                 <li className="text-muted-foreground">No jobs yet.</li>
               ) : null}
             </ul>
@@ -1081,19 +1130,19 @@ function RecentJobs({ selectedId }: { selectedId: number | null }) {
                   <div className="font-medium">
                     {isCompileJob(active) ? `${active.template}` : `${active.template} for ${String(active.customerName || active.customerId)}`}
                   </div>
-                  <Badge variant={isCompileJob(active)?'secondary':'outline'}>{isCompileJob(active)?'Template Compile':'Document Generation'}</Badge>
+                  <Badge variant={isCompileJob(active) ? 'secondary' : 'outline'}>{isCompileJob(active) ? 'Template Compile' : 'Document Generation'}</Badge>
                 </div>
                 <div className="flex items-center gap-1">
                   {statusBadge(String(active.status) as any)}
-                  {active.status==='running' ? (
-                    <Button size="icon" variant="ghost" aria-label="Cancel" title="Cancel" onClick={async (e)=>{ e.preventDefault(); try { if (active?.id) { await fetch(`/api/generate/jobs/${encodeURIComponent(active.id)}/cancel`, { method: 'POST' }) ; await openJob(active.id) } } catch {} }}>
+                  {active.status === 'running' ? (
+                    <Button size="icon" variant="ghost" aria-label="Cancel" title="Cancel" onClick={async (e) => { e.preventDefault(); try { if (active?.id) { await fetch(`/api/generate/jobs/${encodeURIComponent(active.id)}/cancel`, { method: 'POST' }); await openJob(active.id) } } catch { } }}>
                       <Icon.Stop className="h-4 w-4" />
                     </Button>
                   ) : null}
                   {!isCompileJob(active) && active.file ? (
                     <>
                       <Button asChild size="icon" variant="ghost" aria-label="Open Folder" title="Open Folder">
-                        <a href="#" onClick={async (e)=>{ e.preventDefault(); try { await fetch(`/api/generate/jobs/${encodeURIComponent(active.id)}/reveal`) } catch {} }}>
+                        <a href="#" onClick={async (e) => { e.preventDefault(); try { await fetch(`/api/generate/jobs/${encodeURIComponent(active.id)}/reveal`) } catch { } }}>
                           <Icon.Folder className="h-4 w-4" />
                         </a>
                       </Button>
@@ -1104,7 +1153,7 @@ function RecentJobs({ selectedId }: { selectedId: number | null }) {
                       </Button>
                     </>
                   ) : null}
-                  <Button size="icon" variant="destructive" aria-label="Delete" title="Delete" onClick={(e)=>{ e.preventDefault(); /* open simple confirm */ try { if (active?.id) { fetch(`/api/generate/jobs/${encodeURIComponent(active.id)}`, { method: 'DELETE' }).then(()=> setActive(null)).catch(()=>{}) } } catch {} }}>
+                  <Button size="icon" variant="destructive" aria-label="Delete" title="Delete" onClick={(e) => { e.preventDefault(); /* open simple confirm */ try { if (active?.id) { fetch(`/api/generate/jobs/${encodeURIComponent(active.id)}`, { method: 'DELETE' }).then(() => setActive(null)).catch(() => { }) } } catch { } }}>
                     <Icon.Trash className="h-4 w-4" />
                   </Button>
                 </div>
@@ -1112,7 +1161,7 @@ function RecentJobs({ selectedId }: { selectedId: number | null }) {
               <div className="text-xs text-muted-foreground mb-2">{active.status} • {new Date(active.updatedAt).toLocaleString()}</div>
               <div className="flex flex-wrap items-center gap-2 mb-2">
                 <Badge asChild variant="outline">
-                  <a href="#" title="Reveal Template Folder" onClick={(e)=>{ e.preventDefault(); revealTemplateFolder(active.template) }}>
+                  <a href="#" title="Reveal Template Folder" onClick={(e) => { e.preventDefault(); revealTemplateFolder(active.template) }}>
                     Template: {active.template}
                   </a>
                 </Badge>
@@ -1129,7 +1178,7 @@ function RecentJobs({ selectedId }: { selectedId: number | null }) {
                 )}
               </div>
               <div className="text-xs text-muted-foreground mb-2">
-                Started {active.startedAt ? new Date(active.startedAt).toLocaleString() : '-'}  Completed {active.completedAt ? new Date(active.completedAt).toLocaleString() : '-'}  Elapsed {(() => { try { const end = active.completedAt ? new Date(active.completedAt) : new Date(); const ms = end.getTime() - new Date(active.startedAt).getTime(); const m = Math.floor(ms/60000); const s = Math.floor((ms%60000)/1000); return `${m}:${String(s).padStart(2,'0')}` } catch { return '-' } })()}
+                Started {active.startedAt ? new Date(active.startedAt).toLocaleString() : '-'}  Completed {active.completedAt ? new Date(active.completedAt).toLocaleString() : '-'}  Elapsed {(() => { try { const end = active.completedAt ? new Date(active.completedAt) : new Date(); const ms = end.getTime() - new Date(active.startedAt).getTime(); const m = Math.floor(ms / 60000); const s = Math.floor((ms % 60000) / 1000); return `${m}:${String(s).padStart(2, '0')}` } catch { return '-' } })()}
               </div>
               {Array.isArray(active.steps) && active.steps.length ? (
                 <div className="max-h-56 min-h-[6rem] flex flex-col min-h-0">
@@ -1140,9 +1189,9 @@ function RecentJobs({ selectedId }: { selectedId: number | null }) {
                         <li key={idx} className="flex items-center justify-between border rounded px-2 py-1">
                           <div>
                             <div className="text-sm">{s.name}</div>
-                            <div className="text-xs text-muted-foreground">{s.status || '-'} {s.durationMs ? ` ${(() => { const ms = s.durationMs||0; const m = Math.floor(ms/60000); const ss = Math.floor((ms%60000)/1000); return `${m}:${String(ss).padStart(2,'0')}` })()}` : ''}</div>
+                            <div className="text-xs text-muted-foreground">{s.status || '-'} {s.durationMs ? ` ${(() => { const ms = s.durationMs || 0; const m = Math.floor(ms / 60000); const ss = Math.floor((ms % 60000) / 1000); return `${m}:${String(ss).padStart(2, '0')}` })()}` : ''}</div>
                           </div>
-                          <div className="text-xs text-muted-foreground">{s.startedAt ? new Date(s.startedAt).toLocaleTimeString() : ''} {s.endedAt?`\u001a ${new Date(s.endedAt).toLocaleTimeString()}`:''}</div>
+                          <div className="text-xs text-muted-foreground">{s.startedAt ? new Date(s.startedAt).toLocaleTimeString() : ''} {s.endedAt ? `\u001a ${new Date(s.endedAt).toLocaleTimeString()}` : ''}</div>
                         </li>
                       ))}
                     </ul>

@@ -1,5 +1,5 @@
 
-import { app, BrowserWindow } from 'electron';
+import { app, BrowserWindow, ipcMain } from 'electron';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import * as fs from 'fs';
@@ -82,8 +82,8 @@ function createWindow() {
   cleanupLogs();
   
   const win = new BrowserWindow({
-    width: 1200,
-    height: 800,
+    width: 600,  // Smaller width to fit card content
+    height: 750, // Increased height to fit welcome step content
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -91,14 +91,72 @@ function createWindow() {
       allowRunningInsecureContent: false,
       experimentalFeatures: false,
       autoplayPolicy: 'user-gesture-required',
+      preload: path.join(__dirname, 'preload.js'),
     },
     show: false, // Don't show until ready
+    autoHideMenuBar: true, // Start with menu bar hidden for setup
+    frame: false, // Start with no window frame for setup
+    titleBarStyle: 'hidden', // Hide title bar for setup
+    resizable: false, // Prevent resizing during setup
+    center: true, // Center the window on screen
   });
 
   // Show window when ready to reduce loading artifacts
   win.once('ready-to-show', () => {
     win.show();
     logToFile('Window shown');
+  });
+
+  // Set up IPC handlers for setup status
+  ipcMain.handle('setup-completed', () => {
+    logToFile('Setup completed - showing menu bar and restoring window functionality');
+    win.setAutoHideMenuBar(false);
+    win.setMenuBarVisibility(true);
+    win.setResizable(true);
+    
+    // Resize window to normal application size after setup
+    win.setSize(1200, 800);
+    win.center(); // Re-center the larger window
+  });
+
+  ipcMain.handle('restore-window', () => {
+    logToFile('Restoring full window functionality');
+    win.setAutoHideMenuBar(false);
+    win.setMenuBarVisibility(true);
+    win.setResizable(true);
+    // Note: Frame cannot be changed after window creation in Electron
+  });
+
+  ipcMain.handle('setup-status', () => {
+    // Check if setup is completed by trying to read from renderer
+    // This will be called when the renderer loads
+    logToFile('Setup status requested from renderer');
+  });
+
+  ipcMain.handle('get-setup-status', async () => {
+    // We can't directly access localStorage from main process
+    // This will be used by renderer to communicate setup status
+    logToFile('Get setup status called from renderer');
+    return false; // Default to false, renderer will update this
+  });
+
+  ipcMain.handle('close-app', () => {
+    logToFile('Close app requested from renderer');
+    app.quit();
+  });
+
+  ipcMain.handle('minimize-app', () => {
+    logToFile('Minimize app requested from renderer');
+    win.minimize();
+  });
+
+  ipcMain.handle('maximize-app', () => {
+    logToFile('Maximize app requested from renderer');
+    if (win.isMaximized()) {
+      win.restore();
+    } else {
+      win.maximize();
+    }
   });
 
   const distPath = path.join(__dirname, '../frontend/dist/index.html');

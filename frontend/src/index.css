@@ -185,3 +185,12 @@ body {
   width: 0;
   height: 0;
 }
+
+/* Electron window controls */
+.drag-region {
+  -webkit-app-region: drag;
+}
+
+.no-drag {
+  -webkit-app-region: no-drag;
+}

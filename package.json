@@ -13,7 +13,7 @@
     "scripts": {
         "dev:backend": "nodemon --watch backend/src --ext ts,js --exec ts-node backend/src/server.ts",
         "build:backend": "powershell -Command \"Remove-Item backend/dist -Recurse -Force -ErrorAction SilentlyContinue\" && tsc -p backend/tsconfig.json && xcopy \"backend\\src\\db\\*.sql\" \"backend\\dist\\db\\\" /Y && echo {\"type\":\"commonjs\"} > backend/dist/package.json",
-        "build:electron": "tsc electron/main.ts --outDir electron --target es2020 --module es2020 --moduleResolution node --esModuleInterop",
+        "build:electron": "tsc electron/main.ts --outDir electron --target es2020 --module es2020 --moduleResolution node --esModuleInterop && tsc electron/preload.ts --outDir electron --target es2020 --module commonjs --moduleResolution node --esModuleInterop",
         "start:backend": "node backend/dist/server.js",
         "dev": "concurrently -n backend,frontend -c yellow,cyan \"npm:dev:backend\" \"npm --workspace frontend run dev\"",
         "build": "npm run build:backend && npm run build:electron && npm --workspace frontend run build",

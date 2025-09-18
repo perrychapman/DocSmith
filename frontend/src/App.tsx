@@ -21,6 +21,14 @@ export default function App() {
     return localStorage.getItem('docsmith-setup-completed') === 'true';
   });
 
+  // Notify Electron main process about setup status on app load
+  React.useEffect(() => {
+    if (typeof window !== 'undefined' && window.electronAPI && setupCompleted) {
+      // If setup is already completed, show the menu bar immediately
+      window.electronAPI.setupCompleted().catch(console.error);
+    }
+  }, [setupCompleted]);
+
   // If setup is not completed, show the setup wizard
   if (!setupCompleted) {
     return <Setup onComplete={() => setSetupCompleted(true)} />;
@@ -40,8 +48,43 @@ export default function App() {
   const linkCls = (active: boolean) =>
     "sidebar-link " + (active ? "is-active" : "");
 
+  const isElectron = typeof window !== 'undefined' && window.electronAPI;
+
   return (
-    <div className="grid grid-cols-[260px_1fr] h-screen bg-background">
+    <div className="h-screen bg-background flex flex-col">
+      {/* Custom title bar for Electron */}
+      {isElectron && (
+        <div className="flex justify-between items-center h-8 bg-background border-b border-border/50 drag-region">
+          <div className="flex items-center px-4 text-sm text-muted-foreground">
+            DocSmith
+          </div>
+          <div className="flex items-center space-x-1 pr-2 no-drag">
+            <button
+              onClick={() => window.electronAPI?.minimizeApp()}
+              className="w-6 h-6 flex items-center justify-center hover:bg-accent rounded text-muted-foreground hover:text-foreground transition-colors"
+              title="Minimize"
+            >
+              <Icon.Minus className="w-3 h-3" />
+            </button>
+            <button
+              onClick={() => window.electronAPI?.maximizeApp()}
+              className="w-6 h-6 flex items-center justify-center hover:bg-accent rounded text-muted-foreground hover:text-foreground transition-colors"
+              title="Maximize"
+            >
+              <Icon.Plus className="w-3 h-3" />
+            </button>
+            <button
+              onClick={() => window.electronAPI?.closeApp()}
+              className="w-6 h-6 flex items-center justify-center hover:bg-destructive hover:text-destructive-foreground rounded text-muted-foreground transition-colors"
+              title="Close"
+            >
+              <Icon.X className="w-3 h-3" />
+            </button>
+          </div>
+        </div>
+      )}
+      
+      <div className="grid grid-cols-[260px_1fr] flex-1 bg-background">
       <aside className="app-sidebar border-r">
         {/* Brand/Logo Area */}
         <div className="p-6 border-b border-border/50">
@@ -97,6 +140,7 @@ export default function App() {
           {content}
         </div>
       </main>
+      </div>
     </div>
   );
 }

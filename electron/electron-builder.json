@@ -8,7 +8,8 @@
   "files": [
     "frontend/dist/**",
     "backend/dist/**",
-    "electron/main.js"
+    "electron/main.js",
+    "electron/preload.js"
   ],
   "win": {
     "target": "nsis"

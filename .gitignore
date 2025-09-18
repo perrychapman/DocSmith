@@ -30,6 +30,7 @@ frontend/dist/
 *.tsbuildinfo
 *.asar
 *.yaml
+*.exe
 
 ############################################
 # Environment files

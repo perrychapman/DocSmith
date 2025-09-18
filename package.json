@@ -4,6 +4,7 @@
     "description": "DocSmith: Document management and workspace collaboration app.",
     "author": "Perry Chapman",
     "main": "electron/main.js",
+    "type": "module",
     "private": true,
     "workspaces": [
         "backend",
@@ -11,7 +12,7 @@
     ],
     "scripts": {
         "dev:backend": "nodemon --watch backend/src --ext ts,js --exec ts-node backend/src/server.ts",
-        "build:backend": "tsc -p backend/tsconfig.json && xcopy \"backend\\src\\db\\*.sql\" \"backend\\dist\\db\\\" /Y",
+        "build:backend": "powershell -Command \"Remove-Item backend/dist -Recurse -Force -ErrorAction SilentlyContinue\" && tsc -p backend/tsconfig.json && xcopy \"backend\\src\\db\\*.sql\" \"backend\\dist\\db\\\" /Y && echo {\"type\":\"commonjs\"} > backend/dist/package.json",
         "build:electron": "tsc electron/main.ts --outDir electron --target es2020 --module es2020 --moduleResolution node --esModuleInterop",
         "start:backend": "node backend/dist/server.js",
         "dev": "concurrently -n backend,frontend -c yellow,cyan \"npm:dev:backend\" \"npm --workspace frontend run dev\"",
@@ -54,11 +55,12 @@
         "productName": "DocSmith",
         "directories": {
             "buildResources": "build",
-            "output": "release"
+            "output": "dist-release"
         },
         "files": [
             "frontend/dist/**",
             "backend/dist/**",
+            "backend/package.json",
             "electron/main.js"
         ],
         "asarUnpack": [

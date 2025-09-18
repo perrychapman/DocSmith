@@ -5,6 +5,7 @@ import JobsPage from "./pages/Jobs";
 import WorkspaceDetailPage from "./pages/WorkspaceDetail";
 import TemplatesPage from "./pages/Templates";
 import SettingsPage from "./pages/Settings";
+import Setup from "./components/Setup";
 import { Separator } from "./components/ui/separator";
 
 function useHashRoute() {
@@ -15,6 +16,15 @@ function useHashRoute() {
 
 export default function App() {
   const hash = useHashRoute();
+  const [setupCompleted, setSetupCompleted] = React.useState<boolean>(() => {
+    return localStorage.getItem('docsmith-setup-completed') === 'true';
+  });
+
+  // If setup is not completed, show the setup wizard
+  if (!setupCompleted) {
+    return <Setup onComplete={() => setSetupCompleted(true)} />;
+  }
+
   let content: React.ReactNode = null;
   if (hash.startsWith('#workspaces/')) {
     const parts = hash.replace(/^#/, '').split('/');

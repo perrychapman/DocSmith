@@ -139,6 +139,39 @@ export default function SettingsPage() {
           {lastChecked ? <div className="text-xs text-muted-foreground">Last checked: {lastChecked}</div> : null}
         </div>
       </Card>
+
+      {/* Development Tools */}
+      <Card className="p-6">
+        <div className="space-y-4">
+          <div>
+            <h3 className="text-lg font-medium">Development Tools</h3>
+            <p className="text-sm text-muted-foreground">
+              Tools for testing and debugging DocSmith
+            </p>
+          </div>
+          <Separator />
+          <div className="space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm font-medium">Reset Setup Wizard</div>
+                <div className="text-xs text-muted-foreground">
+                  Clear setup completion status to test the first-time setup experience
+                </div>
+              </div>
+              <Button 
+                variant="outline" 
+                size="sm"
+                onClick={() => {
+                  localStorage.removeItem('docsmith-setup-completed');
+                  toast.success("Setup status cleared. Refresh the page to see the setup wizard.");
+                }}
+              >
+                Reset Setup
+              </Button>
+            </div>
+          </div>
+        </div>
+      </Card>
     </div>
   );
 }

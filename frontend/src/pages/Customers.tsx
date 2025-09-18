@@ -918,7 +918,7 @@ export function CustomersPage() {
                       <div className="text-sm text-muted-foreground">Loading uploaded documents…</div>
                     </div>
                   ) : (docQuery.trim() ? uploads.filter((u) => u.name.toLowerCase().includes(docQuery.trim().toLowerCase())).length : uploads.length) ? (
-                    <div className="flex-1 overflow-y-auto">
+                    <ScrollArea className="flex-1 min-h-0">
                       <div className="p-4 space-y-2">
                         {(docQuery.trim() ? uploads.filter((u) => u.name.toLowerCase().includes(docQuery.trim().toLowerCase())) : uploads).map((u, idx) => (
                           <div key={idx} className="rounded-md border bg-card/50 transition px-4 py-3">
@@ -957,7 +957,7 @@ export function CustomersPage() {
                           </div>
                         ))}
                       </div>
-                    </div>
+                    </ScrollArea>
                   ) : (
                     <div className="p-4">
                       <div className="text-muted-foreground text-sm">{docQuery.trim() ? 'No matching uploaded documents.' : 'No uploaded documents yet for this customer.'}</div>
@@ -975,7 +975,7 @@ export function CustomersPage() {
                       <div className="text-sm text-muted-foreground">Loading generated documents…</div>
                     </div>
                   ) : (docQuery.trim() ? generatedDocs.filter((d) => d.name.toLowerCase().includes(docQuery.trim().toLowerCase())).length : generatedDocs.length) ? (
-                    <div className="flex-1 overflow-y-auto">
+                    <ScrollArea className="flex-1 min-h-0">
                       <div className="p-4 space-y-2">
                         {(docQuery.trim() ? generatedDocs.filter((d) => d.name.toLowerCase().includes(docQuery.trim().toLowerCase())) : generatedDocs).map((d, idx) => (
                           <div key={idx} className="rounded-md border bg-card/50 transition px-4 py-3">
@@ -1007,7 +1007,7 @@ export function CustomersPage() {
                           </div>
                         ))}
                       </div>
-                    </div>
+                    </ScrollArea>
                   ) : (
                     <div className="p-4">
                       <div className="text-muted-foreground text-sm">{docQuery.trim() ? 'No matching generated documents.' : 'No generated documents yet for this customer.'}</div>

@@ -17,6 +17,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Maximize/restore the application
   maximizeApp: () => ipcRenderer.invoke('maximize-app'),
   
+  // Get current window state
+  getWindowState: () => ipcRenderer.invoke('get-window-state'),
+  
+  // Reveal application logs in file manager
+  revealLogs: () => ipcRenderer.invoke('reveal-logs'),
+  
+  // Clean up temporary files
+  cleanupTempFiles: () => ipcRenderer.invoke('cleanup-temp-files'),
+  
+  // Listen for window state changes
+  onWindowStateChanged: (callback: (state: { isMaximized: boolean }) => void) => {
+    ipcRenderer.on('window-state-changed', (_: any, state: { isMaximized: boolean }) => callback(state));
+    
+    // Return cleanup function
+    return () => ipcRenderer.removeAllListeners('window-state-changed');
+  },
+  
   // Restore window functionality after setup
   restoreWindow: () => ipcRenderer.invoke('restore-window'),
   
@@ -35,7 +52,10 @@ declare global {
       closeApp: () => Promise<void>;
       minimizeApp: () => Promise<void>;
       maximizeApp: () => Promise<void>;
+      getWindowState: () => Promise<{ isMaximized: boolean; isMinimized: boolean; isFullScreen: boolean }>;
+      onWindowStateChanged: (callback: (state: { isMaximized: boolean }) => void) => () => void;
       restoreWindow: () => Promise<void>;
+      revealLogs: () => Promise<{ success: boolean; error?: string }>;
       isElectron: boolean;
     };
   }

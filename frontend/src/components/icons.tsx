@@ -162,5 +162,28 @@ export const Icon = {
       <line x1="5" y1="12" x2="19" y2="12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   ),
+  Minimize: (props: React.SVGProps<SVGSVGElement>) => (
+    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" {...props}>
+      <line x1="6" y1="19" x2="18" y2="19" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  Maximize: (props: React.SVGProps<SVGSVGElement>) => (
+    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" {...props}>
+      <rect x="3" y="3" width="18" height="18" rx="2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  Restore: (props: React.SVGProps<SVGSVGElement>) => (
+    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" {...props}>
+      <rect x="3" y="5" width="12" height="12" rx="2" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M9 3h12a2 2 0 0 1 2 2v12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+    </svg>
+  ),
+  HelpCircle: (props: React.SVGProps<SVGSVGElement>) => (
+    <svg viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" {...props}>
+      <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" />
+      <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="12" cy="17" r="1" fill="currentColor" />
+    </svg>
+  ),
 };
 

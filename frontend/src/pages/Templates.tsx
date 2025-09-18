@@ -67,18 +67,7 @@ export default function TemplatesPage() {
 
   // Rebuild Full Generator removed; compile consolidates this flow
 
-  async function openFolder(sl: string) {
-    try {
-      const r = await apiFetch(`/api/templates/${encodeURIComponent(sl)}/reveal`);
-      if (!r.ok) throw new Error(String(r.status));
-      toast.success('Opened folder');
-    } catch { toast.error('Failed to open folder'); }
-  }
 
-  async function copyPath(p?: string) {
-    try { await navigator.clipboard.writeText(String(p || '')); toast.success('Path copied'); }
-    catch { toast.error('Copy failed'); }
-  }
 
   async function compile(sl: string) {
     try {
@@ -257,6 +246,56 @@ export default function TemplatesPage() {
         </div>
       </div>
 
+      {(!loading && items.length === 0) ? (
+        <Card className="p-10 flex flex-col items-center justify-center text-center space-y-3">
+          <Icon.FileText className="h-10 w-10 text-muted-foreground" />
+          <div className="text-lg font-semibold">Upload your first template</div>
+          <div className="text-sm text-muted-foreground">Templates are used to generate customized documents with AI assistance.</div>
+          <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
+            <DialogTrigger asChild>
+              <Button><Icon.Upload className="h-4 w-4 mr-2" />Upload Template</Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Upload Template</DialogTitle>
+                <DialogDescription>Upload a ZIP file containing your template files.</DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4 py-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Template name</label>
+                  <Input 
+                    placeholder="My Template" 
+                    value={name} 
+                    onChange={(e) => setName(e.target.value)} 
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Slug (used in URLs)</label>
+                  <Input 
+                    placeholder="my-template" 
+                    value={slug} 
+                    onChange={(e) => setSlug(e.target.value)} 
+                  />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">ZIP file</label>
+                  <input 
+                    type="file" 
+                    accept=".zip" 
+                    ref={fileInputRef}
+                    onChange={(e) => setFile(e.target.files?.[0] || null)} 
+                    className="block w-full text-sm text-muted-foreground file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-primary file:text-primary-foreground hover:file:bg-primary/80"
+                  />
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="secondary" onClick={() => setUploadOpen(false)} disabled={uploading}>Cancel</Button>
+                <Button onClick={doUpload} disabled={!file || uploading}>{uploading ? 'Uploading...' : 'Upload'}</Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        </Card>
+      ) : (
       <div className="grid grid-cols-12 gap-4 min-h-0">
         {/* Cards list full width */}
         <div className="col-span-12">
@@ -386,6 +425,7 @@ export default function TemplatesPage() {
           </Card>
         </div>
       </div>
+      )}
 
 
       {/* Delete Template Confirm */}

@@ -13,6 +13,18 @@ contextBridge.exposeInMainWorld('electronAPI', {
     minimizeApp: () => ipcRenderer.invoke('minimize-app'),
     // Maximize/restore the application
     maximizeApp: () => ipcRenderer.invoke('maximize-app'),
+    // Get current window state
+    getWindowState: () => ipcRenderer.invoke('get-window-state'),
+    // Reveal application logs in file manager
+    revealLogs: () => ipcRenderer.invoke('reveal-logs'),
+    // Clean up temporary files
+    cleanupTempFiles: () => ipcRenderer.invoke('cleanup-temp-files'),
+    // Listen for window state changes
+    onWindowStateChanged: (callback) => {
+        ipcRenderer.on('window-state-changed', (_, state) => callback(state));
+        // Return cleanup function
+        return () => ipcRenderer.removeAllListeners('window-state-changed');
+    },
     // Restore window functionality after setup
     restoreWindow: () => ipcRenderer.invoke('restore-window'),
     // Check if we're running in Electron (useful for conditional logic)

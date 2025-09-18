@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain } from 'electron';
+import { app, BrowserWindow, ipcMain, shell } from 'electron';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
 import * as fs from 'fs';
@@ -13,25 +13,56 @@ const MAX_LOG_SIZE = 5 * 1024 * 1024; // 5MB
 const MAX_LOG_LINES = 10000; // Keep last 10,000 lines
 function cleanupLogs() {
     try {
-        // Clean up old log files (older than 7 days)
+        // Clean up various temporary files that DocSmith and related tools might create
         const tempDir = os.tmpdir();
         const files = fs.readdirSync(tempDir);
         const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
+        const threeDaysAgo = Date.now() - (3 * 24 * 60 * 60 * 1000);
+        let deletedCount = 0;
+        let deletedSize = 0;
         files.forEach(file => {
-            if (file.startsWith('docsmith-electron') && file.endsWith('.log')) {
-                const filePath = path.join(tempDir, file);
-                try {
-                    const stats = fs.statSync(filePath);
-                    if (stats.mtime.getTime() < sevenDaysAgo) {
-                        fs.unlinkSync(filePath);
-                        console.log(`Deleted old log file: ${file}`);
-                    }
+            const filePath = path.join(tempDir, file);
+            try {
+                const stats = fs.statSync(filePath);
+                // Clean up DocSmith-specific files older than 7 days
+                if (file.startsWith('docsmith-electron') && file.endsWith('.log') && stats.mtime.getTime() < sevenDaysAgo) {
+                    fs.unlinkSync(filePath);
+                    deletedCount++;
+                    deletedSize += stats.size;
+                    logToFile(`Deleted old DocSmith log: ${file} (${(stats.size / 1024).toFixed(1)}KB)`);
+                    return;
                 }
-                catch (err) {
-                    // Ignore errors for individual files
+                // Clean up Pandoc temp directories older than 3 days
+                if (file.startsWith('docsmith-pandoc-') && stats.isDirectory() && stats.mtime.getTime() < threeDaysAgo) {
+                    fs.rmSync(filePath, { recursive: true, force: true });
+                    deletedCount++;
+                    logToFile(`Deleted old Pandoc temp dir: ${file}`);
+                    return;
+                }
+                // Clean up old ts-node cache directories older than 7 days (from development)
+                if (file.startsWith('.ts-node') && stats.isDirectory() && stats.mtime.getTime() < sevenDaysAgo) {
+                    fs.rmSync(filePath, { recursive: true, force: true });
+                    deletedCount++;
+                    logToFile(`Deleted old ts-node cache: ${file}`);
+                    return;
+                }
+                // Clean up Node.js compile cache if very old (14 days)
+                const fourteenDaysAgo = Date.now() - (14 * 24 * 60 * 60 * 1000);
+                if ((file === 'node-compile-cache' || file === 'node-jiti') && stats.isDirectory() && stats.mtime.getTime() < fourteenDaysAgo) {
+                    fs.rmSync(filePath, { recursive: true, force: true });
+                    deletedCount++;
+                    logToFile(`Deleted old Node.js cache: ${file}`);
+                    return;
                 }
             }
+            catch (err) {
+                // Ignore errors for individual files (might be in use, permission issues, etc.)
+            }
         });
+        if (deletedCount > 0) {
+            logToFile(`Cleanup completed: ${deletedCount} items deleted (${(deletedSize / 1024).toFixed(1)}KB freed)`);
+        }
+        // Handle current log file rotation
         if (!fs.existsSync(LOG_PATH)) {
             logToFile('Log cleanup completed - new log file created');
             return;
@@ -48,17 +79,17 @@ function cleanupLogs() {
             const trimmedContent = trimmedLines.join('\n');
             fs.writeFileSync(LOG_PATH, trimmedContent);
             const reason = needsSizeTrim ? 'size limit' : 'line limit';
-            logToFile(`Log cleanup completed - trimmed from ${lines.length} to ${trimmedLines.length} lines (${reason})`);
+            logToFile(`Log rotation completed - trimmed from ${lines.length} to ${trimmedLines.length} lines (${reason})`);
         }
         else {
-            logToFile(`Log cleanup completed - current size: ${(stats.size / 1024).toFixed(1)}KB, lines: ${lines.length}`);
+            logToFile(`Log check completed - current size: ${(stats.size / 1024).toFixed(1)}KB, lines: ${lines.length}`);
         }
     }
     catch (error) {
-        console.error('Failed to cleanup logs:', error);
+        console.error('Failed to cleanup temp files:', error);
         // Create a simple log entry even if cleanup failed
         try {
-            logToFile('Log cleanup failed but logging continues');
+            logToFile('Temp cleanup failed but logging continues');
         }
         catch (logError) {
             console.error('Failed to write to log:', logError);
@@ -96,50 +127,12 @@ function createWindow() {
         win.show();
         logToFile('Window shown');
     });
-    // Set up IPC handlers for setup status
-    ipcMain.handle('setup-completed', () => {
-        logToFile('Setup completed - showing menu bar and restoring window functionality');
-        win.setAutoHideMenuBar(false);
-        win.setMenuBarVisibility(true);
-        win.setResizable(true);
-        // Resize window to normal application size after setup
-        win.setSize(1200, 800);
-        win.center(); // Re-center the larger window
+    // Window state change listeners
+    win.on('maximize', () => {
+        win.webContents.send('window-state-changed', { isMaximized: true });
     });
-    ipcMain.handle('restore-window', () => {
-        logToFile('Restoring full window functionality');
-        win.setAutoHideMenuBar(false);
-        win.setMenuBarVisibility(true);
-        win.setResizable(true);
-        // Note: Frame cannot be changed after window creation in Electron
-    });
-    ipcMain.handle('setup-status', () => {
-        // Check if setup is completed by trying to read from renderer
-        // This will be called when the renderer loads
-        logToFile('Setup status requested from renderer');
-    });
-    ipcMain.handle('get-setup-status', async () => {
-        // We can't directly access localStorage from main process
-        // This will be used by renderer to communicate setup status
-        logToFile('Get setup status called from renderer');
-        return false; // Default to false, renderer will update this
-    });
-    ipcMain.handle('close-app', () => {
-        logToFile('Close app requested from renderer');
-        app.quit();
-    });
-    ipcMain.handle('minimize-app', () => {
-        logToFile('Minimize app requested from renderer');
-        win.minimize();
-    });
-    ipcMain.handle('maximize-app', () => {
-        logToFile('Maximize app requested from renderer');
-        if (win.isMaximized()) {
-            win.restore();
-        }
-        else {
-            win.maximize();
-        }
+    win.on('unmaximize', () => {
+        win.webContents.send('window-state-changed', { isMaximized: false });
     });
     const distPath = path.join(__dirname, '../frontend/dist/index.html');
     let backendProcess;
@@ -313,6 +306,173 @@ function createWindow() {
         }
     });
 }
+// Set up IPC handlers
+ipcMain.handle('setup-completed', () => {
+    const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
+    if (win) {
+        logToFile('Setup completed - showing menu bar and restoring window functionality');
+        win.setAutoHideMenuBar(false);
+        win.setMenuBarVisibility(true);
+        win.setResizable(true);
+        // Resize window to normal application size after setup
+        win.setSize(1200, 800);
+        win.center(); // Re-center the larger window
+    }
+});
+ipcMain.handle('restore-window', () => {
+    const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
+    if (win) {
+        logToFile('Restoring full window functionality');
+        win.setAutoHideMenuBar(false);
+        win.setMenuBarVisibility(true);
+        win.setResizable(true);
+        // Note: Frame cannot be changed after window creation in Electron
+    }
+});
+ipcMain.handle('setup-status', () => {
+    // Check if setup is completed by trying to read from renderer
+    // This will be called when the renderer loads
+    logToFile('Setup status requested from renderer');
+});
+ipcMain.handle('get-setup-status', async () => {
+    // We can't directly access localStorage from main process
+    // This will be used by renderer to communicate setup status
+    logToFile('Get setup status called from renderer');
+    return false; // Default to false, renderer will update this
+});
+ipcMain.handle('close-app', () => {
+    logToFile('Close app requested from renderer');
+    app.quit();
+});
+ipcMain.handle('minimize-app', () => {
+    const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
+    if (win) {
+        logToFile('Minimize app requested from renderer');
+        win.minimize();
+    }
+});
+ipcMain.handle('maximize-app', () => {
+    const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
+    if (win) {
+        logToFile('Maximize app requested from renderer');
+        if (win.isMaximized()) {
+            win.restore();
+        }
+        else {
+            win.maximize();
+        }
+    }
+});
+ipcMain.handle('get-window-state', () => {
+    const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
+    if (win) {
+        return {
+            isMaximized: win.isMaximized(),
+            isMinimized: win.isMinimized(),
+            isFullScreen: win.isFullScreen()
+        };
+    }
+    return { isMaximized: false, isMinimized: false, isFullScreen: false };
+});
+ipcMain.handle('reveal-logs', () => {
+    try {
+        logToFile(`Attempting to reveal logs at: ${LOG_PATH}`);
+        // Ensure log file exists
+        if (!fs.existsSync(LOG_PATH)) {
+            logToFile('Log file does not exist, creating it');
+            // Create the log file if it doesn't exist
+            fs.writeFileSync(LOG_PATH, `DocSmith Electron Log\nCreated: ${new Date().toISOString()}\n\n`);
+        }
+        // Check if file exists after creation
+        if (fs.existsSync(LOG_PATH)) {
+            logToFile('Log file exists, attempting to reveal in file manager');
+            // Show the log file in the system's file manager
+            shell.showItemInFolder(LOG_PATH);
+            logToFile('Log file revealed in file manager successfully');
+            return { success: true };
+        }
+        else {
+            logToFile('Log file still does not exist after creation attempt');
+            return { success: false, error: 'Could not create or find log file' };
+        }
+    }
+    catch (error) {
+        const errorMsg = `Error revealing log file: ${error}`;
+        logToFile(errorMsg);
+        console.error(errorMsg);
+        return { success: false, error: `Failed to reveal log file: ${error instanceof Error ? error.message : String(error)}` };
+    }
+});
+ipcMain.handle('cleanup-temp-files', () => {
+    try {
+        logToFile('Manual temp file cleanup requested');
+        const tempDir = os.tmpdir();
+        const files = fs.readdirSync(tempDir);
+        const threeDaysAgo = Date.now() - (3 * 24 * 60 * 60 * 1000);
+        const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
+        let deletedCount = 0;
+        let deletedSize = 0;
+        const deletedItems = [];
+        files.forEach(file => {
+            const filePath = path.join(tempDir, file);
+            try {
+                const stats = fs.statSync(filePath);
+                let shouldDelete = false;
+                let reason = '';
+                // Clean up Pandoc temp directories older than 1 hour (more aggressive for manual cleanup)
+                if (file.startsWith('docsmith-pandoc-') && stats.isDirectory()) {
+                    const oneHourAgo = Date.now() - (60 * 60 * 1000);
+                    if (stats.mtime.getTime() < oneHourAgo) {
+                        shouldDelete = true;
+                        reason = 'Old Pandoc temp directory';
+                    }
+                }
+                // Clean up ts-node cache directories older than 3 days
+                else if (file.startsWith('.ts-node') && stats.isDirectory() && stats.mtime.getTime() < threeDaysAgo) {
+                    shouldDelete = true;
+                    reason = 'Old ts-node cache';
+                }
+                // Clean up old DocSmith logs
+                else if (file.startsWith('docsmith-electron') && file.endsWith('.log') && stats.mtime.getTime() < sevenDaysAgo) {
+                    shouldDelete = true;
+                    reason = 'Old DocSmith log';
+                }
+                if (shouldDelete) {
+                    if (stats.isDirectory()) {
+                        fs.rmSync(filePath, { recursive: true, force: true });
+                    }
+                    else {
+                        fs.unlinkSync(filePath);
+                    }
+                    deletedCount++;
+                    deletedSize += stats.size || 0;
+                    deletedItems.push(`${file} (${reason})`);
+                }
+            }
+            catch (err) {
+                // Ignore errors for individual files
+            }
+        });
+        const sizeFreedMB = (deletedSize / (1024 * 1024)).toFixed(2);
+        const resultMsg = `Manual cleanup completed: ${deletedCount} items deleted, ${sizeFreedMB}MB freed`;
+        logToFile(resultMsg);
+        if (deletedItems.length > 0) {
+            logToFile(`Deleted items: ${deletedItems.join(', ')}`);
+        }
+        return {
+            success: true,
+            deletedCount,
+            sizeFreedMB: parseFloat(sizeFreedMB),
+            message: resultMsg
+        };
+    }
+    catch (error) {
+        const errorMsg = `Error during manual cleanup: ${error}`;
+        logToFile(errorMsg);
+        console.error(errorMsg);
+        return { success: false, error: `Failed to cleanup temp files: ${error instanceof Error ? error.message : String(error)}` };
+    }
+});
 app.whenReady().then(() => {
     createWindow();
     app.on('activate', () => {

@@ -6,6 +6,8 @@ interface ElectronAPI {
   closeApp: () => Promise<void>;
   minimizeApp: () => Promise<void>;
   maximizeApp: () => Promise<void>;
+  getWindowState: () => Promise<{ isMaximized: boolean; isMinimized: boolean; isFullScreen: boolean }>;
+  onWindowStateChanged: (callback: (state: { isMaximized: boolean }) => void) => () => void;
   restoreWindow: () => Promise<void>;
   isElectron: boolean;
 }

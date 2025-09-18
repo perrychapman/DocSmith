@@ -107,6 +107,44 @@ export default function SettingsPage() {
     }
   }
 
+  function revealLogs() {
+    if (typeof window !== 'undefined' && window.electronAPI && (window.electronAPI as any).revealLogs) {
+      (window.electronAPI as any).revealLogs().then((result: any) => {
+        if (result.success) {
+          toast.success("Application logs revealed in file manager");
+        } else {
+          toast.error(result.error || "Failed to reveal logs");
+        }
+      }).catch((error: any) => {
+        console.error('revealLogs error:', error);
+        toast.error("Failed to reveal logs");
+      });
+    } else {
+      toast.error("Log reveal is only available in the desktop app");
+    }
+  }
+
+  function cleanupTempFiles() {
+    if (typeof window !== 'undefined' && window.electronAPI && (window.electronAPI as any).cleanupTempFiles) {
+      toast.promise(
+        (window.electronAPI as any).cleanupTempFiles(),
+        {
+          loading: 'Cleaning up temporary files...',
+          success: (result: any) => {
+            if (result.success) {
+              return `Cleanup completed: ${result.deletedCount} items deleted, ${result.sizeFreedMB}MB freed`;
+            } else {
+              throw new Error(result.error || 'Cleanup failed');
+            }
+          },
+          error: (error: any) => `Failed to cleanup: ${error.message || error}`
+        }
+      );
+    } else {
+      toast.error("Temp file cleanup is only available in the desktop app");
+    }
+  }
+
   return (
     <div className="space-y-6 animate-in fade-in-0 slide-in-from-top-2">
       <Breadcrumb>
@@ -214,6 +252,42 @@ export default function SettingsPage() {
                 }}
               >
                 Reset Setup
+              </Button>
+            </div>
+            
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm font-medium">View Application Logs</div>
+                <div className="text-xs text-muted-foreground">
+                  Open the application log file for troubleshooting and debugging
+                </div>
+              </div>
+              <Button 
+                variant="outline" 
+                size="sm"
+                onClick={revealLogs}
+                disabled={typeof window === 'undefined' || !window.electronAPI}
+              >
+                <Icon.ExternalLink className="h-4 w-4 mr-2" />
+                View Logs
+              </Button>
+            </div>
+            
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm font-medium">Clean Temporary Files</div>
+                <div className="text-xs text-muted-foreground">
+                  Remove old temporary files created by DocSmith, Pandoc, and development tools
+                </div>
+              </div>
+              <Button 
+                variant="outline" 
+                size="sm"
+                onClick={cleanupTempFiles}
+                disabled={typeof window === 'undefined' || !window.electronAPI}
+              >
+                <Icon.Trash className="h-4 w-4 mr-2" />
+                Clean Temp
               </Button>
             </div>
             

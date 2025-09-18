@@ -227,9 +227,9 @@ export default function JobsPage() {
       </div>
       {error ? (<div className="text-sm text-red-600">Failed to load jobs: {error}</div>) : null}
 
-      <div className="flex gap-6 flex-1 min-h-[calc(100vh-200px)]">
+      <div className="grid grid-cols-12 gap-2 flex-1 min-h-[calc(100vh-200px)]">
         {/* Left: Jobs list */}
-        <div className="w-1/4 xl:w-1/5">
+        <div className="col-span-12 md:col-span-4">
           <Card className="flex-1 h-full overflow-hidden border-0 shadow-lg">
             <div className="p-4 border-b border-border/40 bg-muted/20">
               <div className="flex items-center gap-3 mb-3">
@@ -303,7 +303,7 @@ export default function JobsPage() {
         </div>
 
         {/* Right: Job details */}
-        <div className="w-3/4 xl:w-4/5">
+        <div className="col-span-12 md:col-span-8">
           <Card className="flex-1 h-full overflow-hidden border-0 shadow-lg">
             {!active ? (
               <div className="p-8 text-center h-full flex items-center justify-center">

@@ -110,11 +110,19 @@ See `backend/src/db/schema.sql` for full schema. Key tables:
 - **Job logs**: Persistent in `.jobs/` and database
 
 ## Security
-- **ContextBridge**: Electron IPC exposes only safe methods
-- **File system**: Customer data isolated by folder
-- **Database**: No ORM, direct SQL, input validation
-- **Frontend**: No direct file system access in browser
-- **API**: Auth for AnythingLLM, CORS controlled
+
+DocSmith is designed with multiple layers of security controls:
+
+- **SQL Injection Protection**: All database queries use parameterized statements; no direct string interpolation. Raw SQL is validated and never built from user input.
+- **Path Traversal Prevention**: All file/folder operations sanitize user-supplied names and restrict access to canonical customer directories. No user input is used for direct file system paths.
+- **Electron IPC Safety**: Only safe, whitelisted IPC channels are exposed to the renderer via contextBridge. No arbitrary file system or OS access is possible from the frontend.
+- **Log & Temp File Management**: Logs and temp files are stored in isolated locations, auto-rotated, and cleaned up regularly. No sensitive data (secrets, tokens, passwords) is written to logs or temp files.
+- **Dependency Audits**: Regular `npm audit` checks are performed. All known vulnerabilities are patched promptly; upgrade instructions are provided for any moderate/high issues.
+- **Customer Data Isolation**: All customer files are stored in separate, sanitized folders. No cross-customer access is possible.
+- **AnythingLLM API Security**: API keys and URLs are stored securely and never exposed to the frontend. All requests are authenticated.
+- **Frontend Browser Safety**: No direct file system access from the browser. All uploads and downloads are routed through secure backend endpoints.
+
+For a full security review, see the technical documentation or contact the maintainers.
 
 ## Testing
 - **Backend**: HTTP tests in `backend/tests.http`

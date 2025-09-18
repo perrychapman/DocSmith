@@ -8,6 +8,7 @@ Thumbs.db
 *.swo
 *.tmp
 ~*
+.github/
 
 ############################################
 # Node / Package Managers
@@ -31,6 +32,7 @@ frontend/dist/
 *.asar
 *.yaml
 *.exe
+*.diff
 
 ############################################
 # Environment files

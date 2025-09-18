@@ -5,7 +5,6 @@ import { Input } from "../components/ui/input";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "../components/ui/breadcrumb";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, DialogDescription, DialogClose } from "../components/ui/dialog";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Icon } from "../components/icons";
 import { Maximize2, Minimize2, Search, ExternalLink, Download } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "../components/ui/tooltip";
@@ -39,7 +38,6 @@ export function CustomersPage() {
   const [deleteName, setDeleteName] = React.useState<string>("");
   const [alsoDeleteWorkspace, setAlsoDeleteWorkspace] = React.useState<boolean>(false);
   const [uploadOpen, setUploadOpen] = React.useState(false);
-  const [addCustomerOpen, setAddCustomerOpen] = React.useState(false);
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
   const [counts, setCounts] = React.useState<Record<number, { docs?: number; chats?: number }>>({});
   const [countsLoading, setCountsLoading] = React.useState(false);
@@ -524,176 +522,120 @@ export function CustomersPage() {
         </BreadcrumbList>
       </Breadcrumb>
 
-      <div className="flex items-center justify-between">
-        <div className="space-y-1">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
-              <Icon.Users className="h-5 w-5" />
-            </div>
-            <div>
-              <h1 className="text-2xl font-bold tracking-tight">Customers</h1>
-              <p className="text-muted-foreground">Manage your customers and their documents</p>
-            </div>
-          </div>
+      <div className="flex items-end justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-semibold">Customers</h1>
+          <p className="text-sm text-muted-foreground">Manage your customers and their documents</p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button size="sm" onClick={() => setAddCustomerOpen(true)}>
-            <Icon.Plus className="h-4 w-4 mr-2" />
-            Add Customer
-          </Button>
-        </div>
+        {/* Header add removed; add form moved to customers panel */}
       </div>
 
       {(!loadingCustomers && customers.length === 0) ? (
-        <Card className="relative overflow-hidden">
-          <div className="p-12 flex flex-col items-center justify-center text-center space-y-6">
-            <div className="relative">
-              <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-gradient-to-br from-primary/20 to-primary/5 border border-primary/20">
-                <Icon.Users className="h-8 w-8 text-primary" />
-              </div>
-              <div className="absolute -top-1 -right-1 h-6 w-6 bg-primary/10 rounded-full flex items-center justify-center">
-                <Icon.Plus className="h-3 w-3 text-primary" />
-              </div>
-            </div>
-            <div className="space-y-2 max-w-md">
-              <h3 className="text-xl font-semibold">Add your first customer</h3>
-              <p className="text-muted-foreground leading-relaxed">
-                Create a customer to start chatting and uploading documents. Each customer gets their own workspace for organized collaboration.
-              </p>
-            </div>
-            <div className="w-full max-w-sm space-y-3">
-              <Input 
-                placeholder="Enter customer name" 
-                value={name} 
-                onChange={(e) => setName(e.target.value)} 
-                onKeyDown={(e) => { if (e.key === 'Enter') add(); }}
-                className="text-center"
-              />
-              <Button onClick={add} className="w-full" size="lg">
-                <Icon.Plus className="h-4 w-4 mr-2" />
-                Create Customer
-              </Button>
-            </div>
+        <Card className="p-10 flex flex-col items-center justify-center text-center space-y-3">
+          <Icon.Folder className="h-10 w-10 text-muted-foreground" />
+          <div className="text-lg font-semibold">Add your first customer</div>
+          <div className="text-sm text-muted-foreground">Create a customer to start chatting and uploading documents.</div>
+          <div className="flex items-center gap-2 w-full max-w-md">
+            <Input placeholder="Customer name" value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') add(); }} />
+            <Button onClick={add}><Icon.Plus className="h-4 w-4 mr-2" />Add</Button>
           </div>
         </Card>
       ) : (
-        <div className="grid grid-cols-12 gap-6 min-h-0">
-          {/* Left: Customers list */}
-          <div className="col-span-12 lg:col-span-4">
-            <Card className="h-[calc(100vh-160px)] overflow-hidden border-0 shadow-lg">
-              <div className="p-4 border-b border-border/40 bg-muted/20">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="relative flex-1">
-                    <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                    <Input 
-                      placeholder="Search customers..." 
-                      className="pl-9 h-9 bg-background/50 border-border/50 focus:bg-background"
-                    />
-                  </div>
-                  <Badge variant="secondary" className="text-xs font-medium px-3 py-1 bg-primary/10 text-primary border-primary/20 shrink-0">
-                    {customers.length}
-                  </Badge>
-                </div>
-              </div>
-              <ScrollArea className="h-full">
-                <div className="p-4">
-                  {loadingCustomers ? (
-                    <div className="space-y-3">
-                      {Array.from({ length: 3 }).map((_, i) => (
-                        <div key={i} className="rounded-lg border p-3 space-y-2">
-                          <div className="h-4 bg-muted rounded animate-pulse" />
-                          <div className="h-3 bg-muted rounded w-2/3 animate-pulse" />
-                        </div>
-                      ))}
+        <div className="grid grid-cols-12 gap-2 min-h-0">
+          {/* Left: Customers list full-height */}
+          <div className="col-span-12 md:col-span-4">
+            <div className="sticky top-0">
+              <Card className="h-[calc(100vh-160px)] overflow-hidden p-0">
+                <div className="h-full p-4 space-y-3 overflow-y-auto">
+                  {/* Add form in panel */}
+                  {customers.length > 0 && (
+                    <div className="flex items-center gap-2">
+                      <Input
+                        placeholder="Customer name"
+                        value={name}
+                        onChange={(e) => setName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") add();
+                        }}
+                      />
+                      <Button onClick={add}>
+                        <Icon.Plus className="h-4 w-4 mr-2" />
+                        Add
+                      </Button>
                     </div>
+                  )}
+
+                  {loadingCustomers ? (
+                    <div className="text-muted-foreground text-sm">Loading.</div>
                   ) : customers.length ? (
-                    <div className="space-y-2">
+                    <ul className="space-y-1">
                       {customers.map((c) => (
-                        <div
-                          key={c.id}
-                          role="button"
-                          tabIndex={0}
-                          className={
-                            "group relative rounded-lg border p-3 transition-all duration-200 cursor-pointer hover:shadow-md " +
-                            (selectedId === c.id 
-                              ? "bg-primary/10 border-primary/50 shadow-sm" 
-                              : "hover:bg-accent/50 hover:border-accent")
-                          }
-                          onClick={() => setSelectedId(c.id)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" || e.key === " ") setSelectedId(c.id);
-                          }}
-                          title={new Date(c.createdAt).toLocaleString()}
-                        >
-                          <div className="flex items-start justify-between">
-                            <div className="min-w-0 flex-1">
-                              <div className="font-medium truncate text-sm">{c.name}</div>
+                        <li key={c.id}>
+                          <div
+                            role="button"
+                            tabIndex={0}
+                            className={
+                              "flex items-center justify-between gap-2 px-3 py-2 rounded-md border hover:bg-accent/40 transition " +
+                              (selectedId === c.id ? "bg-accent text-accent-foreground" : "")
+                            }
+                            onClick={() => setSelectedId(c.id)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" || e.key === " ") setSelectedId(c.id);
+                            }}
+                            title={new Date(c.createdAt).toLocaleString()}
+                          >
+                            {/* Left: name + counts */}
+                            <div className="min-w-0">
+                              <div className="font-medium truncate">{c.name}</div>
                               {counts[c.id]?.docs == null && counts[c.id]?.chats == null ? (
-                                <div className="flex items-center gap-2 mt-1.5">
-                                  <div className="h-2 w-12 rounded bg-muted animate-pulse" />
-                                  <div className="h-2 w-12 rounded bg-muted animate-pulse" />
+                                <div className="flex items-center gap-2 mt-0.5">
+                                  <div className="h-2 w-16 rounded bg-muted animate-pulse" />
+                                  <div className="h-2 w-16 rounded bg-muted animate-pulse" />
                                 </div>
                               ) : (
-                                <div className="text-xs text-muted-foreground mt-1">
+                                <div className="text-xs text-muted-foreground">
                                   {(() => {
                                     const d = counts[c.id]?.docs;
                                     const cm = counts[c.id]?.chats;
-                                    const dText = d == null ? "... docs" : `${d} doc${d === 1 ? "" : "s"}`;
-                                    const cText = cm == null ? "... chats" : `${cm} chat${cm === 1 ? "" : "s"}`;
-                                    return `${dText} | ${cText}`;
+                                    const dText = d == null ? "… docs" : `${d} doc${d === 1 ? "" : "s"}`;
+                                    const cText = cm == null ? "… chats" : `${cm} chat${cm === 1 ? "" : "s"}`;
+                                    return `${dText} • ${cText}`;
                                   })()}
                                 </div>
                               )}
                             </div>
-                            
+
                             {/* Right: actions (delete) */}
-                            <div className="opacity-60 group-hover:opacity-100 transition-opacity duration-200 ml-2 flex items-center">
-                              <TooltipProvider>
-                                <Tooltip>
-                                  <TooltipTrigger>
-                                    <Button
-                                      size="icon"
-                                      variant="destructive"
-                                      disabled={deleting === c.name}
-                                      onClick={(e) => {
-                                        e.stopPropagation();
-                                        e.preventDefault();
-                                        startDelete(c);
-                                      }}
-                                      aria-label={`Delete ${c.name}`}
-                                      className="h-9 w-9"
-                                    >
-                                      {deleting === c.name ? (
-                                        <div className="h-4 w-4 border border-white rounded-full animate-spin border-t-transparent" />
-                                      ) : (
-                                        <Icon.Trash className="h-4 w-4" />
-                                      )}
-                                    </Button>
-                                  </TooltipTrigger>
-                                  <TooltipContent>
-                                    <p>Delete {c.name}</p>
-                                  </TooltipContent>
-                                </Tooltip>
-                              </TooltipProvider>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <Tooltip>
+                                <TooltipTrigger>
+                                  <Button
+                                    size="icon"
+                                    variant="destructive"
+                                    disabled={deleting === c.name}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      e.preventDefault();
+                                      startDelete(c);
+                                    }}
+                                    aria-label={`Delete ${c.name}`}
+                                    title={`Delete ${c.name}`}
+                                  >
+                                    {deleting === c.name ? "." : <Icon.Trash className="h-4 w-4" />}
+                                  </Button>
+                                </TooltipTrigger>
+                              </Tooltip>
                             </div>
                           </div>
-                          
-                          {/* Selection indicator */}
-                          {selectedId === c.id && (
-                            <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-primary rounded-r" />
-                          )}
-                        </div>
+                        </li>
                       ))}
-                    </div>
+                    </ul>
                   ) : (
-                    <div className="text-center py-8 text-muted-foreground text-sm">
-                      <Icon.Users className="h-8 w-8 mx-auto mb-2 opacity-50" />
-                      No customers yet
-                    </div>
+                    <div className="text-muted-foreground text-sm">No customers yet.</div>
                   )}
                 </div>
-              </ScrollArea>
-            </Card>
+              </Card>
+            </div>
           </div>
 
 
@@ -717,7 +659,7 @@ export function CustomersPage() {
               {panelMode === 'docs' ? null : (!selectedId ? (
                 <Card className="p-4 text-sm text-muted-foreground h-full">Select a customer to open chat.</Card>
               ) : wsLoading ? (
-                <Card className="p-4 text-sm text-muted-foreground h-full">Resolving workspace...</Card>
+                <Card className="p-4 text-sm text-muted-foreground h-full">Resolving workspace…</Card>
               ) : wsSlug ? (
                 <WorkspaceChat
                   slug={wsSlug}
@@ -776,7 +718,7 @@ export function CustomersPage() {
                     {selectedId ? (
                       <>
                         <span>{uploads.length} document{uploads.length === 1 ? '' : 's'}</span>
-                        <span className="mx-1">|</span>
+                        <span className="mx-1">•</span>
                         <span>for {customers.find((x) => x.id === selectedId)?.name || 'selected customer'}</span>
                       </>
                     ) : (
@@ -858,23 +800,14 @@ export function CustomersPage() {
                       </DialogHeader>
                       <div className="space-y-3">
                         <div>
-                          <label className="text-sm font-medium">Template</label>
-                          <Select value={selectedTemplate} onValueChange={setSelectedTemplate} disabled={loadingTemplates}>
-                            <SelectTrigger className="mt-1 w-full">
-                              <SelectValue placeholder={loadingTemplates ? "Loading templates..." : "Select a template"} />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {loadingTemplates ? (
-                                <SelectItem value="loading" disabled>Loading templates...</SelectItem>
-                              ) : templates.length ? (
-                                templates.map((t) => (
-                                  <SelectItem key={t.slug} value={t.slug}>{t.name || t.slug}</SelectItem>
-                                ))
-                              ) : (
-                                <SelectItem value="no-templates" disabled>No templates found</SelectItem>
-                              )}
-                            </SelectContent>
-                          </Select>
+                          <label className="text-sm">Template</label>
+                          <select className="mt-1 w-full border rounded-md h-9 px-2 bg-background" value={selectedTemplate} onChange={(e) => setSelectedTemplate(e.target.value)} disabled={loadingTemplates}>
+                            {loadingTemplates ? <option>Loading templates...</option> : (
+                              templates.length ? templates.map((t) => (
+                                <option key={t.slug} value={t.slug}>{t.name || t.slug}</option>
+                              )) : <option value="">No templates found</option>
+                            )}
+                          </select>
                         </div>
                         <div>
                           <label className="text-sm">Additional AI context (optional)</label>
@@ -998,7 +931,7 @@ export function CustomersPage() {
           </div>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmDelete} className="!bg-destructive !text-destructive-foreground hover:!bg-destructive/90 focus:!ring-destructive">Delete</AlertDialogAction>
+            <AlertDialogAction onClick={confirmDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Delete</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -1078,62 +1011,6 @@ export function CustomersPage() {
             <DialogClose asChild>
               <Button variant="secondary" onClick={() => setGenLogs(null)}>Close</Button>
             </DialogClose>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* Add Customer Modal */}
-      <Dialog open={addCustomerOpen} onOpenChange={setAddCustomerOpen}>
-        <DialogContent className="sm:max-w-md">
-          <DialogHeader>
-            <DialogTitle>Add New Customer</DialogTitle>
-            <DialogDescription>
-              Create a new customer to start managing their documents and workspace.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-2">
-              <label htmlFor="customer-name" className="text-sm font-medium">
-                Customer Name
-              </label>
-              <Input
-                id="customer-name"
-                placeholder="Enter customer name..."
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") {
-                    e.preventDefault();
-                    if (name.trim()) {
-                      add();
-                      setAddCustomerOpen(false);
-                    }
-                  }
-                }}
-                autoFocus
-              />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setAddCustomerOpen(false);
-                setName("");
-              }}
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={() => {
-                add();
-                setAddCustomerOpen(false);
-              }}
-              disabled={!name.trim()}
-            >
-              <Icon.Plus className="h-4 w-4 mr-2" />
-              Add Customer
-            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
@@ -1229,8 +1106,8 @@ function RecentJobs({ selectedId }: { selectedId: number | null }) {
               {(selectedId ? jobs.filter((j: any) => j.customerId === selectedId) : jobs).map((j: any) => (
                 <li key={j.id} onClick={() => openJob(j.id)} className={"flex items-center gap-2 justify-between rounded px-2 py-1 cursor-pointer " + ((active?.id === j.id) ? "bg-accent" : "hover:bg-accent/40")}>
                   <button className="text-left flex-1 truncate" onClick={() => openJob(j.id)}>
-                    <div className="font-medium truncate">{j.template} | {j.customerName || j.customerId}</div>
-                    <div className="text-xs text-muted-foreground truncate">{j.status} | {new Date(j.updatedAt).toLocaleString()} {j.file?.name ? `| ${j.file.name}` : ''}</div>
+                    <div className="font-medium truncate">{j.template} • {j.customerName || j.customerId}</div>
+                    <div className="text-xs text-muted-foreground truncate">{j.status} • {new Date(j.updatedAt).toLocaleString()} {j.file?.name ? `• ${j.file.name}` : ''}</div>
                   </button>
                   {(() => { const s = String(j.status || ''); const label = (s === 'done' ? 'Completed' : (s.charAt(0).toUpperCase() + s.slice(1))); if (s === 'running') return (<Badge variant="outline" aria-label={label} title={label} className="shrink-0 h-6 w-6 p-0 grid place-items-center border-warning text-warning bg-warning/10"><Icon.Refresh className="h-3.5 w-3.5 animate-spin" /></Badge>); if (s === 'done') return (<Badge variant="outline" aria-label={label} title={label} className="shrink-0 h-6 w-6 p-0 grid place-items-center border-success text-success bg-success/10"><Icon.Check className="h-3.5 w-3.5" /></Badge>); if (s === 'cancelled') return (<Badge variant="outline" aria-label={label} title={label} className="shrink-0 h-6 w-6 p-0 grid place-items-center border-muted-foreground text-muted-foreground bg-muted/10"><Icon.Stop className="h-3.5 w-3.5" /></Badge>); return (<Badge variant="outline" aria-label={label} title={label} className="shrink-0 h-6 w-6 p-0 grid place-items-center border-destructive text-destructive bg-destructive/10"><Icon.X className="h-3.5 w-3.5" /></Badge>) })()}
                 </li>
@@ -1281,7 +1158,7 @@ function RecentJobs({ selectedId }: { selectedId: number | null }) {
                   </Button>
                 </div>
               </div>
-              <div className="text-xs text-muted-foreground mb-2">{active.status} | {new Date(active.updatedAt).toLocaleString()}</div>
+              <div className="text-xs text-muted-foreground mb-2">{active.status} • {new Date(active.updatedAt).toLocaleString()}</div>
               <div className="flex flex-wrap items-center gap-2 mb-2">
                 <Badge asChild variant="outline">
                   <a href="#" title="Reveal Template Folder" onClick={(e) => { e.preventDefault(); revealTemplateFolder(active.template) }}>
@@ -1314,7 +1191,7 @@ function RecentJobs({ selectedId }: { selectedId: number | null }) {
                             <div className="text-sm">{s.name}</div>
                             <div className="text-xs text-muted-foreground">{s.status || '-'} {s.durationMs ? ` ${(() => { const ms = s.durationMs || 0; const m = Math.floor(ms / 60000); const ss = Math.floor((ms % 60000) / 1000); return `${m}:${String(ss).padStart(2, '0')}` })()}` : ''}</div>
                           </div>
-                          <div className="text-xs text-muted-foreground">{s.startedAt ? new Date(s.startedAt).toLocaleTimeString() : ''} {s.endedAt ? `- ${new Date(s.endedAt).toLocaleTimeString()}` : ''}</div>
+                          <div className="text-xs text-muted-foreground">{s.startedAt ? new Date(s.startedAt).toLocaleTimeString() : ''} {s.endedAt ? `\u001a ${new Date(s.endedAt).toLocaleTimeString()}` : ''}</div>
                         </li>
                       ))}
                     </ul>

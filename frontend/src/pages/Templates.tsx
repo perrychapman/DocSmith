@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Card } from "../components/ui/card";
-import { Button } from "@/components/ui/button";
+import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/input";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, DialogDescription, DialogClose } from "../components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
@@ -198,12 +198,20 @@ export default function TemplatesPage() {
         </BreadcrumbList>
       </Breadcrumb>
 
-      <div className="flex items-end justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold tracking-tight">Templates</h1>
-          <p className="text-sm text-muted-foreground">Upload and compile templates for document generation.</p>
+      <div className="flex items-center justify-between">
+        <div className="space-y-1">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <Icon.FileText className="h-5 w-5" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight">Templates</h1>
+              <p className="text-muted-foreground">Upload and compile templates for document generation</p>
+            </div>
+          </div>
         </div>
         <div className="flex items-center gap-2">
+          <Button variant="secondary" onClick={load}><Icon.Refresh className="h-4 w-4 mr-2" />Refresh</Button>
           <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
             <DialogTrigger asChild>
               <Button><Icon.Upload className="h-4 w-4 mr-2" />Upload</Button>
@@ -211,8 +219,8 @@ export default function TemplatesPage() {
             <DialogContent>
               <DialogHeader><DialogTitle>Upload Template Source</DialogTitle></DialogHeader>
               <div className="space-y-3">
-                <Input placeholder="Display name (optional)" value={name} onChange={(e) => setName(e.target.value)} />
-                <Input placeholder="Slug (optional)" value={slug} onChange={(e) => setSlug(e.target.value)} />
+                <Input placeholder="Display name (optional)" className="h-9" value={name} onChange={(e) => setName(e.target.value)} />
+                <Input placeholder="Slug (optional)" className="h-9" value={slug} onChange={(e) => setSlug(e.target.value)} />
                 <div className="text-sm text-muted-foreground">Click the area below to attach a file, or drag and drop.</div>
                 <input
                   ref={fileInputRef}
@@ -245,7 +253,7 @@ export default function TemplatesPage() {
               </DialogFooter>
             </DialogContent>
           </Dialog>
-          <Button variant="secondary" onClick={load}><Icon.Refresh className="h-4 w-4 mr-2" />Refresh</Button>
+
         </div>
       </div>
 
@@ -254,7 +262,7 @@ export default function TemplatesPage() {
         <div className="col-span-12">
           <Card className="h-[calc(100vh-220px)] flex flex-col border-0 shadow-lg overflow-hidden">
             <div className="p-4 border-b border-border/40 bg-muted/20">
-              <div className="flex items-center justify-between gap-3 mb-3">
+              <div className="flex items-center gap-3">
                 <div className="relative flex-1">
                   <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                   <Input 
@@ -264,13 +272,8 @@ export default function TemplatesPage() {
                     className="pl-9 h-9 bg-background/50 border-border/50 focus:bg-background"
                   />
                 </div>
-                <Badge variant="secondary" className="text-xs font-medium px-3 py-1 bg-primary/10 text-primary border-primary/20 shrink-0">
-                  {items.length}
-                </Badge>
-              </div>
-              <div className="flex items-center gap-2">
                 <Select value={typeFilter} onValueChange={setTypeFilter}>
-                  <SelectTrigger className="w-[160px] h-8"><SelectValue placeholder="Type" /></SelectTrigger>
+                  <SelectTrigger className="w-[160px] h-9"><SelectValue placeholder="Type" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All types</SelectItem>
                     <SelectItem value="docx">Word (DOCX)</SelectItem>
@@ -279,12 +282,15 @@ export default function TemplatesPage() {
                   </SelectContent>
                 </Select>
                 <Select value={sortBy} onValueChange={setSortBy}>
-                  <SelectTrigger className="w-[180px] h-8"><SelectValue placeholder="Sort by" /></SelectTrigger>
+                  <SelectTrigger className="w-[180px] h-9"><SelectValue placeholder="Sort by" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="recent">Recently modified</SelectItem>
                     <SelectItem value="name">Name (A–Z)</SelectItem>
                   </SelectContent>
                 </Select>
+                <Badge variant="secondary" className="text-xs font-medium px-3 py-1 bg-primary/10 text-primary border-primary/20 shrink-0">
+                  {items.length}
+                </Badge>
               </div>
             </div>
             

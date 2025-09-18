@@ -15,6 +15,7 @@ import { Progress } from "../components/ui/progress";
 import { ScrollArea } from "../components/ui/scroll-area";
 import { Textarea } from "../components/ui/textarea";
 import { Badge } from "../components/ui/badge";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
 import JobsPanel from "../components/JobsPanel";
 
 type Customer = { id: number; name: string; createdAt: string };
@@ -27,6 +28,8 @@ export function CustomersPage() {
   const [selectedId, setSelectedId] = React.useState<number | null>(null);
   const [uploads, setUploads] = React.useState<UploadItem[]>([]);
   const [loadingUploads, setLoadingUploads] = React.useState(false);
+  const [generatedDocs, setGeneratedDocs] = React.useState<UploadItem[]>([]);
+  const [loadingGeneratedDocs, setLoadingGeneratedDocs] = React.useState(false);
   const [file, setFile] = React.useState<File | null>(null);
   const [uploading, setUploading] = React.useState(false);
   const [embeddingMsg, setEmbeddingMsg] = React.useState<string>("");
@@ -59,6 +62,7 @@ export function CustomersPage() {
   // No localStorage persistence; cards are saved to SQL via backend
   const [panelMode, setPanelMode] = React.useState<'split' | 'chat' | 'docs'>('split');
   const [docQuery, setDocQuery] = React.useState<string>("");
+  const [docsTab, setDocsTab] = React.useState('uploaded'); // 'uploaded' or 'generated'
   const rowsClass = panelMode === 'split'
     ? 'grid grid-rows-[minmax(0,2fr)_minmax(0,1fr)]'
     : (panelMode === 'chat'
@@ -198,6 +202,26 @@ export function CustomersPage() {
     }
     if (selectedId) loadUploads(selectedId);
     else setUploads([]);
+    return () => { ignore = true };
+  }, [selectedId]);
+
+  React.useEffect(() => {
+    let ignore = false;
+    async function loadGeneratedDocs(cid: number) {
+      setLoadingGeneratedDocs(true);
+      try {
+        const r = await apiFetch(`/api/documents/${cid}/files`);
+        if (!r.ok) throw new Error(String(r.status));
+        const data: UploadItem[] = await r.json();
+        if (!ignore) setGeneratedDocs(Array.isArray(data) ? data : []);
+      } catch {
+        if (!ignore) setGeneratedDocs([]);
+      } finally {
+        if (!ignore) setLoadingGeneratedDocs(false);
+      }
+    }
+    if (selectedId) loadGeneratedDocs(selectedId);
+    else setGeneratedDocs([]);
     return () => { ignore = true };
   }, [selectedId]);
 
@@ -522,12 +546,21 @@ export function CustomersPage() {
         </BreadcrumbList>
       </Breadcrumb>
 
-      <div className="flex items-end justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-semibold">Customers</h1>
-          <p className="text-sm text-muted-foreground">Manage your customers and their documents</p>
+      <div className="flex items-center justify-between">
+        <div className="space-y-1">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <Icon.Users className="h-5 w-5" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight">Customers</h1>
+              <p className="text-muted-foreground">Manage your customers and their documents</p>
+            </div>
+          </div>
         </div>
-        {/* Header add removed; add form moved to customers panel */}
+        <div className="flex items-center gap-2">
+          <Button variant="secondary" onClick={() => { (async () => { setLoadingCustomers(true); try { const r = await apiFetch(`/api/customers`); const data: Customer[] = await r.json(); setCustomers(data); } catch { } finally { setLoadingCustomers(false); } })(); }}><Icon.Refresh className="h-4 w-4 mr-2" />Refresh</Button>
+        </div>
       </div>
 
       {(!loadingCustomers && customers.length === 0) ? (
@@ -545,11 +578,19 @@ export function CustomersPage() {
           {/* Left: Customers list full-height */}
           <div className="col-span-12 md:col-span-4">
             <div className="sticky top-0">
-              <Card className="h-[calc(100vh-160px)] overflow-hidden p-0">
-                <div className="h-full p-4 space-y-3 overflow-y-auto">
+              <Card className="h-[calc(100vh-220px)] flex flex-col border-0 shadow-lg overflow-hidden">
+                <div className="p-4 border-b border-border/40 bg-muted/20">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium text-foreground">Customers</span>
+                    <Badge variant="secondary" className="text-xs font-medium px-3 py-1 bg-primary/10 text-primary border-primary/20 shrink-0">
+                      {customers.length}
+                    </Badge>
+                  </div>
+                </div>
+                <div className="p-4 overflow-y-auto flex-1">
                   {/* Add form in panel */}
                   {customers.length > 0 && (
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 mb-3">
                       <Input
                         placeholder="Customer name"
                         value={name}
@@ -568,24 +609,32 @@ export function CustomersPage() {
                   {loadingCustomers ? (
                     <div className="text-muted-foreground text-sm">Loading.</div>
                   ) : customers.length ? (
-                    <ul className="space-y-1">
+                    <div className="space-y-2">
                       {customers.map((c) => (
-                        <li key={c.id}>
-                          <div
-                            role="button"
-                            tabIndex={0}
-                            className={
-                              "flex items-center justify-between gap-2 px-3 py-2 rounded-md border hover:bg-accent/40 transition " +
-                              (selectedId === c.id ? "bg-accent text-accent-foreground" : "")
-                            }
-                            onClick={() => setSelectedId(c.id)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter" || e.key === " ") setSelectedId(c.id);
-                            }}
-                            title={new Date(c.createdAt).toLocaleString()}
-                          >
-                            {/* Left: name + counts */}
-                            <div className="min-w-0">
+                        <div
+                          key={c.id}
+                          role="button"
+                          tabIndex={0}
+                          className={
+                            "group relative rounded-lg border p-3 transition-all duration-200 cursor-pointer hover:shadow-md " +
+                            (selectedId === c.id 
+                              ? "bg-primary/10 border-primary/50 shadow-sm" 
+                              : "hover:bg-accent/50 hover:border-accent")
+                          }
+                          onClick={() => setSelectedId(c.id)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") setSelectedId(c.id);
+                          }}
+                          title={new Date(c.createdAt).toLocaleString()}
+                        >
+                          {/* Selection indicator */}
+                          {selectedId === c.id && (
+                            <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-primary rounded-r" />
+                          )}
+                          
+                          {/* Left: name + counts */}
+                          <div className="flex items-center justify-between">
+                            <div className="min-w-0 flex-1">
                               <div className="font-medium truncate">{c.name}</div>
                               {counts[c.id]?.docs == null && counts[c.id]?.chats == null ? (
                                 <div className="flex items-center gap-2 mt-0.5">
@@ -606,7 +655,7 @@ export function CustomersPage() {
                             </div>
 
                             {/* Right: actions (delete) */}
-                            <div className="flex items-center gap-2 shrink-0">
+                            <div className="opacity-60 group-hover:opacity-100 transition-opacity duration-200 ml-2 flex items-center gap-1">
                               <Tooltip>
                                 <TooltipTrigger>
                                   <Button
@@ -620,6 +669,7 @@ export function CustomersPage() {
                                     }}
                                     aria-label={`Delete ${c.name}`}
                                     title={`Delete ${c.name}`}
+                                    className="h-9 w-9"
                                   >
                                     {deleting === c.name ? "." : <Icon.Trash className="h-4 w-4" />}
                                   </Button>
@@ -627,9 +677,9 @@ export function CustomersPage() {
                               </Tooltip>
                             </div>
                           </div>
-                        </li>
+                        </div>
                       ))}
-                    </ul>
+                    </div>
                   ) : (
                     <div className="text-muted-foreground text-sm">No customers yet.</div>
                   )}
@@ -643,7 +693,7 @@ export function CustomersPage() {
 
           {/* Right: Chat and Documents with smooth expand/collapse */}
           <div
-            className={`col-span-12 md:col-span-8 ${rowsClass} gap-2 h-[calc(100vh-160px)] min-h-0`}
+            className={`col-span-12 md:col-span-8 ${rowsClass} gap-2 h-[calc(100vh-220px)] min-h-0`}
             style={{
               transition: 'grid-template-rows 300ms ease',
               gridTemplateRows: panelMode === 'split'
@@ -710,150 +760,142 @@ export function CustomersPage() {
             </div>
 
             {/* Documents */}
-            <Card className={`p-4 h-full flex flex-col overflow-hidden`}>
-              <div className="flex items-center gap-2 mb-3 shrink-0">
-                <div className="hidden">
-                  <div className="font-medium">Documents</div>
-                  <div className="text-xs text-muted-foreground">
-                    {selectedId ? (
+            <Card className="h-full flex flex-col border-0 shadow-lg overflow-hidden">
+              <Tabs value={docsTab} onValueChange={setDocsTab} className="h-full flex flex-col">
+                <div className="p-4 border-b border-border/40 bg-muted/20">
+                  <div className="flex items-center gap-3">
+                    <TabsList className="inline-flex h-10 items-center justify-start rounded-md bg-muted p-1 text-muted-foreground">
+                      <TabsTrigger value="uploaded">Uploaded</TabsTrigger>
+                      <TabsTrigger value="generated">Generated</TabsTrigger>
+                    </TabsList>
+                    <div className="relative flex-1">
+                      <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                      <Input
+                        placeholder={docsTab === 'uploaded' ? 'Search uploaded documents...' : 'Search generated documents...'}
+                        value={docQuery}
+                        onChange={(e) => setDocQuery(e.target.value)}
+                        className="pl-9 h-9 bg-background/50 border-border/50 focus:bg-background"
+                      />
+                    </div>
+                    
+                    {/* Context-aware action buttons */}
+                    {docsTab === 'uploaded' && (
                       <>
-                        <span>{uploads.length} document{uploads.length === 1 ? '' : 's'}</span>
-                        <span className="mx-1">•</span>
-                        <span>for {customers.find((x) => x.id === selectedId)?.name || 'selected customer'}</span>
-                      </>
-                    ) : (
-                      <>Select a customer to view documents</>
-                    )}
-                  </div>
-                </div>
-                <div className="flex items-center gap-2 flex-1">
-                  <div className="relative flex-1">
-                    <Search className="h-4 w-4 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" />
-                    <Input
-                      placeholder="Search documents"
-                      value={docQuery}
-                      onChange={(e) => setDocQuery(e.target.value)}
-                      className="w-full pl-8"
-                    />
-                  </div>
-                  <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
-                    <Tooltip>
-                      <TooltipTrigger>
-                        <DialogTrigger asChild>
-                          <Button disabled={!selectedId} size="icon" variant="ghost" aria-label="Upload document">
-                            <Icon.Upload className="h-4 w-4" />
-                          </Button>
-                        </DialogTrigger>
-                      </TooltipTrigger>
-                    </Tooltip>
-                    <DialogContent>
-                      <DialogHeader>
-                        <DialogTitle>Upload Document</DialogTitle>
-                        <DialogDescription>
-                          Attach a file to this customer's workspace.
-                        </DialogDescription>
-                      </DialogHeader>
-                      <div className="space-y-3">
-                        <div className="text-sm text-muted-foreground">Click the area below to attach a file, or drag and drop.</div>
-                        <input
-                          ref={fileInputRef}
-                          type="file"
-                          className="hidden"
-                          disabled={uploading}
-                          onChange={(e) => setFile(e.target.files?.[0] || null)}
-                        />
-                        <button
-                          type="button"
-                          onClick={() => fileInputRef.current?.click()}
-                          onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
-                          onDrop={(e) => {
-                            e.preventDefault(); e.stopPropagation();
-                            const f = e.dataTransfer?.files?.[0];
-                            if (f) setFile(f);
-                          }}
-                          disabled={uploading}
-                          className="w-full rounded-md border border-dashed p-6 text-center hover:bg-accent/40 transition flex flex-col items-center justify-center text-muted-foreground"
-                        >
-                          <Icon.Upload className="h-6 w-6 mb-1" />
-                          <div className="font-medium">{file ? 'Change selected file' : 'Click to select a file'}</div>
-                          <div className="text-xs mt-1 max-w-full whitespace-normal break-all">{file ? file.name : 'or drag and drop here'}</div>
-                        </button>
-                        {uploading && (
-                          <div className="text-xs text-muted-foreground">{embeddingMsg || "Processing..."}</div>
-                        )}
-                      </div>
-                      <DialogFooter>
-                        <Button variant="secondary" onClick={() => setUploadOpen(false)} disabled={uploading}>Cancel</Button>
-                        <Button onClick={uploadFile} disabled={!selectedId || !file || uploading} aria-label="Confirm upload">
-                          {uploading ? "Uploading..." : (<><Icon.Upload className="h-4 w-4 mr-2" />Upload</>)}
-                        </Button>
-                      </DialogFooter>
-                    </DialogContent>
-                  </Dialog>
-                  <Dialog open={generateOpen} onOpenChange={setGenerateOpen}>
-                    <DialogContent>
-                      <DialogHeader>
-                        <DialogTitle>Generate Document</DialogTitle>
-                        <DialogDescription>
-                          Generate documents using this customer's workspace and selected template.
-                        </DialogDescription>
-                      </DialogHeader>
-                      <div className="space-y-3">
-                        <div>
-                          <label className="text-sm">Template</label>
-                          <select className="mt-1 w-full border rounded-md h-9 px-2 bg-background" value={selectedTemplate} onChange={(e) => setSelectedTemplate(e.target.value)} disabled={loadingTemplates}>
-                            {loadingTemplates ? <option>Loading templates...</option> : (
-                              templates.length ? templates.map((t) => (
-                                <option key={t.slug} value={t.slug}>{t.name || t.slug}</option>
-                              )) : <option value="">No templates found</option>
+                        <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
+                          <Tooltip>
+                            <TooltipTrigger>
+                              <DialogTrigger asChild>
+                                <Button disabled={!selectedId} size="icon" variant="ghost" aria-label="Upload document">
+                                  <Icon.Upload className="h-4 w-4" />
+                                </Button>
+                              </DialogTrigger>
+                            </TooltipTrigger>
+                          </Tooltip>
+                        <DialogContent>
+                          <DialogHeader>
+                            <DialogTitle>Upload Document</DialogTitle>
+                            <DialogDescription>
+                              Attach a file to this customer's workspace.
+                            </DialogDescription>
+                          </DialogHeader>
+                          <div className="space-y-3">
+                            <div className="text-sm text-muted-foreground">Click the area below to attach a file, or drag and drop.</div>
+                            <input
+                              ref={fileInputRef}
+                              type="file"
+                              className="hidden"
+                              disabled={uploading}
+                              onChange={(e) => setFile(e.target.files?.[0] || null)}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => fileInputRef.current?.click()}
+                              onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                              onDrop={(e) => {
+                                e.preventDefault(); e.stopPropagation();
+                                const f = e.dataTransfer?.files?.[0];
+                                if (f) setFile(f);
+                              }}
+                              disabled={uploading}
+                              className="w-full rounded-md border border-dashed p-6 text-center hover:bg-accent/40 transition flex flex-col items-center justify-center text-muted-foreground"
+                            >
+                              <Icon.Upload className="h-6 w-6 mb-1" />
+                              <div className="font-medium">{file ? 'Change selected file' : 'Click to select a file'}</div>
+                              <div className="text-xs mt-1 max-w-full whitespace-normal break-all">{file ? file.name : 'or drag and drop here'}</div>
+                            </button>
+                            {uploading && (
+                              <div className="text-xs text-muted-foreground">{embeddingMsg || "Processing..."}</div>
                             )}
-                          </select>
-                        </div>
-                        <div>
-                          <label className="text-sm">Additional AI context (optional)</label>
-                          <Textarea
-                            className="mt-1 w-full"
-                            rows={4}
-                            placeholder="e.g., only include specific sources, reference meeting notes from last week, keep answers concise, etc."
-                            value={genInstructions}
-                            onChange={(e) => setGenInstructions(e.target.value)}
-                          />
-                        </div>
-                        {generating ? (
-                          <div className="pt-2"><Progress indeterminate /></div>
-                        ) : null}
-                      </div>
-                      <DialogFooter>
-                        <Button variant="secondary" onClick={() => setGenerateOpen(false)} disabled={generating}>Cancel</Button>
-                        <Button onClick={generateDocument} disabled={!selectedId || !selectedTemplate || generating} aria-label="Confirm generate">
-                          {generating ? 'Generating...' : 'Generate'}
-                        </Button>
-                      </DialogFooter>
-                    </DialogContent>
-                  </Dialog>
-                  {/* Open uploads folder */}
-                  <Tooltip>
-                    <TooltipTrigger>
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        aria-label="Open uploads folder"
-                        disabled={!selectedId}
-                        onClick={async () => {
-                          if (!selectedId) return;
-                          try {
-                            const r = await apiFetch(`/api/uploads/${selectedId}/open-folder`, { method: 'POST' });
-                            if (!r.ok) throw new Error(String(r.status));
-                            toast.success?.('Opened folder');
-                          } catch {
-                            toast.error?.('Failed to open folder');
-                          }
-                        }}
-                      >
-                        <Icon.Folder className="h-4 w-4" />
-                      </Button>
-                    </TooltipTrigger>
-                  </Tooltip>
+                          </div>
+                          <DialogFooter>
+                            <Button variant="secondary" onClick={() => setUploadOpen(false)} disabled={uploading}>Cancel</Button>
+                            <Button onClick={uploadFile} disabled={!selectedId || !file || uploading} aria-label="Confirm upload">
+                              {uploading ? "Uploading..." : (<><Icon.Upload className="h-4 w-4 mr-2" />Upload</>)}
+                            </Button>
+                          </DialogFooter>
+                        </DialogContent>
+                      </Dialog>
+                      {/* Open uploads folder */}
+                      <Tooltip>
+                        <TooltipTrigger>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            aria-label="Open uploads folder"
+                            disabled={!selectedId}
+                            onClick={async () => {
+                              if (!selectedId) return;
+                              try {
+                                const r = await apiFetch(`/api/uploads/${selectedId}/open-folder`, { method: 'POST' });
+                                if (!r.ok) throw new Error(String(r.status));
+                                toast.success?.('Opened folder');
+                              } catch {
+                                toast.error?.('Failed to open folder');
+                              }
+                            }}
+                          >
+                            <Icon.Folder className="h-4 w-4" />
+                          </Button>
+                        </TooltipTrigger>
+                      </Tooltip>
+                    </>
+                  )}
+                  
+                  {docsTab === 'generated' && (
+                    <>
+                      <Tooltip>
+                        <TooltipTrigger>
+                          <Button disabled={!selectedId} size="icon" variant="ghost" aria-label="Generate document" onClick={() => setGenerateOpen(true)}>
+                            <Icon.FileText className="h-4 w-4" />
+                          </Button>
+                        </TooltipTrigger>
+                      </Tooltip>
+                      {/* Open documents folder for generated docs */}
+                      <Tooltip>
+                        <TooltipTrigger>
+                          <Button
+                            size="icon"
+                            variant="ghost"
+                            aria-label="Open documents folder"
+                            disabled={!selectedId}
+                            onClick={async () => {
+                              if (!selectedId) return;
+                              try {
+                                const r = await apiFetch(`/api/documents/${selectedId}/open-folder`, { method: 'POST' });
+                                if (!r.ok) throw new Error(String(r.status));
+                                toast.success?.('Opened folder');
+                              } catch {
+                                toast.error?.('Failed to open folder');
+                              }
+                            }}
+                          >
+                            <Icon.Folder className="h-4 w-4" />
+                          </Button>
+                        </TooltipTrigger>
+                      </Tooltip>
+                    </>
+                  )}
+                  
                   {/* Expand/Collapse Documents - right most */}
                   <Tooltip>
                     <TooltipTrigger>
@@ -862,55 +904,117 @@ export function CustomersPage() {
                       </Button>
                     </TooltipTrigger>
                   </Tooltip>
+                  </div>
                 </div>
-              </div>
 
-              <div className="flex-1 min-h-0 overflow-y-auto">
-                {!selectedId ? (
-                  <div className="text-muted-foreground text-sm">Select a customer to view documents.</div>
-                ) : loadingUploads ? (
-                  <div className="text-muted-foreground text-sm">Loading documents.</div>
-                ) : (docQuery.trim() ? uploads.filter((u) => u.name.toLowerCase().includes(docQuery.trim().toLowerCase())).length : uploads.length) ? (
-                  <ul className="space-y-2">
-                    {(docQuery.trim() ? uploads.filter((u) => u.name.toLowerCase().includes(docQuery.trim().toLowerCase())) : uploads).map((u, idx) => (
-                      <li key={idx} className="border rounded-md px-3 py-2 flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <Icon.File className="h-4 w-4 text-muted-foreground" />
-                          <a
-                            href={`/api/uploads/${selectedId}/file?name=${encodeURIComponent(u.name)}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            title={u.name}
-                            className="font-medium hover:underline truncate max-w-[40ch]"
-                          >
-                            {u.name}
-                          </a>
-                          <div className="text-xs text-muted-foreground">{formatBytes(u.size)}</div>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <div className="text-xs text-muted-foreground mr-2">{new Date(u.modifiedAt).toLocaleString()}</div>
-                          <Tooltip>
-                            <TooltipTrigger>
-                              <Button size="icon" variant="ghost" aria-label={`Download ${u.name}`} onClick={() => { const a = document.createElement('a'); a.href = `/api/uploads/${selectedId}/file?name=${encodeURIComponent(u.name)}`; a.download = u.name; document.body.appendChild(a); a.click(); a.remove(); }}>
-                                <Download className="h-4 w-4" />
-                              </Button>
-                            </TooltipTrigger>
-                          </Tooltip>
-                          <Tooltip>
-                            <TooltipTrigger>
-                              <Button size="icon" variant="destructive" disabled={uploading || deleting === u.name} onClick={() => deleteUpload(u.name)} aria-label={`Delete ${u.name}`}>
-                                {deleting === u.name ? '.' : <Icon.Trash className="h-4 w-4" />}
-                              </Button>
-                            </TooltipTrigger>
-                          </Tooltip>
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <div className="text-muted-foreground text-sm">{docQuery.trim() ? 'No matching documents.' : 'No documents yet for this customer.'}</div>
-                )}
-              </div>
+                {/* Tab Content */}
+                <TabsContent value="uploaded" className="flex-1 min-h-0 mt-0">
+                  {!selectedId ? (
+                    <div className="p-4">
+                      <div className="text-sm text-muted-foreground">Select a customer to view uploaded documents.</div>
+                    </div>
+                  ) : loadingUploads ? (
+                    <div className="p-4">
+                      <div className="text-sm text-muted-foreground">Loading uploaded documents…</div>
+                    </div>
+                  ) : (docQuery.trim() ? uploads.filter((u) => u.name.toLowerCase().includes(docQuery.trim().toLowerCase())).length : uploads.length) ? (
+                    <div className="flex-1 overflow-y-auto">
+                      <div className="p-4 space-y-2">
+                        {(docQuery.trim() ? uploads.filter((u) => u.name.toLowerCase().includes(docQuery.trim().toLowerCase())) : uploads).map((u, idx) => (
+                          <div key={idx} className="rounded-md border bg-card/50 transition px-4 py-3">
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="flex items-center gap-2 min-w-0 flex-1">
+                                <Icon.File className="h-4 w-4 text-muted-foreground shrink-0" />
+                                <a
+                                  href={`/api/uploads/${selectedId}/file?name=${encodeURIComponent(u.name)}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  title={u.name}
+                                  className="font-medium hover:underline truncate"
+                                >
+                                  {u.name}
+                                </a>
+                                <div className="text-xs text-muted-foreground shrink-0">{formatBytes(u.size)}</div>
+                              </div>
+                              <div className="flex items-center gap-2 shrink-0">
+                                <div className="text-xs text-muted-foreground">{new Date(u.modifiedAt).toLocaleString()}</div>
+                                <Tooltip>
+                                  <TooltipTrigger>
+                                    <Button size="icon" variant="ghost" aria-label={`Download ${u.name}`} onClick={() => { const a = document.createElement('a'); a.href = `/api/uploads/${selectedId}/file?name=${encodeURIComponent(u.name)}`; a.download = u.name; document.body.appendChild(a); a.click(); a.remove(); }}>
+                                      <Download className="h-4 w-4" />
+                                    </Button>
+                                  </TooltipTrigger>
+                                </Tooltip>
+                                <Tooltip>
+                                  <TooltipTrigger>
+                                    <Button size="icon" variant="destructive" disabled={uploading || deleting === u.name} onClick={() => deleteUpload(u.name)} aria-label={`Delete ${u.name}`}>
+                                      {deleting === u.name ? '.' : <Icon.Trash className="h-4 w-4" />}
+                                    </Button>
+                                  </TooltipTrigger>
+                                </Tooltip>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-4">
+                      <div className="text-muted-foreground text-sm">{docQuery.trim() ? 'No matching uploaded documents.' : 'No uploaded documents yet for this customer.'}</div>
+                    </div>
+                  )}
+                </TabsContent>
+
+                <TabsContent value="generated" className="flex-1 min-h-0 mt-0">
+                  {!selectedId ? (
+                    <div className="p-4">
+                      <div className="text-sm text-muted-foreground">Select a customer to view generated documents.</div>
+                    </div>
+                  ) : loadingGeneratedDocs ? (
+                    <div className="p-4">
+                      <div className="text-sm text-muted-foreground">Loading generated documents…</div>
+                    </div>
+                  ) : (docQuery.trim() ? generatedDocs.filter((d) => d.name.toLowerCase().includes(docQuery.trim().toLowerCase())).length : generatedDocs.length) ? (
+                    <div className="flex-1 overflow-y-auto">
+                      <div className="p-4 space-y-2">
+                        {(docQuery.trim() ? generatedDocs.filter((d) => d.name.toLowerCase().includes(docQuery.trim().toLowerCase())) : generatedDocs).map((d, idx) => (
+                          <div key={idx} className="rounded-md border bg-card/50 transition px-4 py-3">
+                            <div className="flex items-center justify-between gap-3">
+                              <div className="flex items-center gap-2 min-w-0 flex-1">
+                                <Icon.File className="h-4 w-4 text-muted-foreground shrink-0" />
+                                <a
+                                  href={`/api/documents/${selectedId}/file?name=${encodeURIComponent(d.name)}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  title={d.name}
+                                  className="font-medium hover:underline truncate"
+                                >
+                                  {d.name}
+                                </a>
+                                <div className="text-xs text-muted-foreground shrink-0">{formatBytes(d.size)}</div>
+                              </div>
+                              <div className="flex items-center gap-2 shrink-0">
+                                <div className="text-xs text-muted-foreground">{new Date(d.modifiedAt).toLocaleString()}</div>
+                                <Tooltip>
+                                  <TooltipTrigger>
+                                    <Button size="icon" variant="ghost" aria-label={`Download ${d.name}`} onClick={() => { const a = document.createElement('a'); a.href = `/api/documents/${selectedId}/file?name=${encodeURIComponent(d.name)}`; a.download = d.name; document.body.appendChild(a); a.click(); a.remove(); }}>
+                                      <Download className="h-4 w-4" />
+                                    </Button>
+                                  </TooltipTrigger>
+                                </Tooltip>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="p-4">
+                      <div className="text-muted-foreground text-sm">{docQuery.trim() ? 'No matching generated documents.' : 'No generated documents yet for this customer.'}</div>
+                    </div>
+                  )}
+                </TabsContent>
+              </Tabs>
             </Card>
           </div>
         </div>
@@ -935,6 +1039,49 @@ export function CustomersPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Generate Document Dialog */}
+      <Dialog open={generateOpen} onOpenChange={setGenerateOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Generate Document</DialogTitle>
+            <DialogDescription>
+              Generate documents using this customer's workspace and selected template.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <label className="text-sm">Template</label>
+              <select className="mt-1 w-full border rounded-md h-9 px-2 bg-background" value={selectedTemplate} onChange={(e) => setSelectedTemplate(e.target.value)} disabled={loadingTemplates}>
+                {loadingTemplates ? <option>Loading templates...</option> : (
+                  templates.length ? templates.map((t) => (
+                    <option key={t.slug} value={t.slug}>{t.name || t.slug}</option>
+                  )) : <option value="">No templates found</option>
+                )}
+              </select>
+            </div>
+            <div>
+              <label className="text-sm">Additional AI context (optional)</label>
+              <Textarea
+                className="mt-1 w-full"
+                rows={4}
+                placeholder="e.g., only include specific sources, reference meeting notes from last week, keep answers concise, etc."
+                value={genInstructions}
+                onChange={(e) => setGenInstructions(e.target.value)}
+              />
+            </div>
+            {generating ? (
+              <div className="pt-2"><Progress indeterminate /></div>
+            ) : null}
+          </div>
+          <DialogFooter>
+            <Button variant="secondary" onClick={() => setGenerateOpen(false)} disabled={generating}>Cancel</Button>
+            <Button onClick={generateDocument} disabled={!selectedId || !selectedTemplate || generating} aria-label="Confirm generate">
+              {generating ? 'Generating...' : 'Generate'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Generation Logs */}
       <Dialog open={!!genLogs} onOpenChange={(v) => { if (!v) { setGenLogs(null); setGenSteps({}); setGenProgress(null); setGenJobId(null); setGenError(null) } }}>

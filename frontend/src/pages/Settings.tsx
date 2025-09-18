@@ -1,6 +1,6 @@
 import * as React from "react";
 import { Card } from "../components/ui/card";
-import { Button, buttonVariants } from "@/components/ui/Button";
+import { Button, buttonVariants } from "../components/ui/Button";
 import { Input } from "../components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "../components/ui/breadcrumb";
@@ -9,8 +9,8 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Icon } from "../components/icons";
 import { toast } from "sonner";
 import { useTheme } from "next-themes";
-import { apiFetch } from "@/lib/api";
-import { cn } from "@/lib/utils";
+import { apiFetch } from "../lib/api";
+import { cn } from "../lib/utils";
 
 export default function SettingsPage() {
   const { theme, setTheme } = useTheme();
@@ -120,9 +120,21 @@ export default function SettingsPage() {
           </BreadcrumbItem>
         </BreadcrumbList>
       </Breadcrumb>
-      <h1 className="text-2xl font-semibold tracking-tight">Configuration</h1>
+      <div className="flex items-center justify-between">
+        <div className="space-y-1">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <Icon.Settings className="h-5 w-5" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
+              <p className="text-muted-foreground">Configure application preferences and connections</p>
+            </div>
+          </div>
+        </div>
+      </div>
 
-      <Card className="p-4 space-y-3">
+      <Card className="p-6 space-y-4">
         <div className="font-medium">Appearance</div>
         <div className="text-sm text-muted-foreground">Choose your preferred theme. "System" follows your OS setting.</div>
         <div>
@@ -142,7 +154,7 @@ export default function SettingsPage() {
         </div>
       </Card>
 
-      <Card className="p-4 space-y-4">
+      <Card className="p-6 space-y-4">
         <div className="flex items-center justify-between">
           <div className="font-medium">AnythingLLM Connectivity</div>
           <Button onClick={check} disabled={loading || !canTest}><Icon.Refresh className="h-4 w-4 mr-2"/>Test Connection</Button>

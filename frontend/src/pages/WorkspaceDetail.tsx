@@ -323,7 +323,7 @@ export default function WorkspaceDetailPage({ slug }: { slug: string }) {
         <DialogContent>
           <DialogHeader><DialogTitle>Create Thread</DialogTitle></DialogHeader>
           <div className="space-y-2">
-            <Input placeholder="Thread name" value={newThreadName} onChange={(e) => setNewThreadName(e.target.value)} />
+            <Input placeholder="Thread name" className="h-9" value={newThreadName} onChange={(e) => setNewThreadName(e.target.value)} />
           </div>
           <DialogFooter>
             <Button onClick={createThread}>Create</Button>
@@ -336,7 +336,7 @@ export default function WorkspaceDetailPage({ slug }: { slug: string }) {
         <DialogContent>
           <DialogHeader><DialogTitle>Rename Thread</DialogTitle></DialogHeader>
           <div className="space-y-2">
-            <Input placeholder="New name" value={renameThreadValue} onChange={(e) => setRenameThreadValue(e.target.value)} />
+            <Input placeholder="New name" className="h-9" value={renameThreadValue} onChange={(e) => setRenameThreadValue(e.target.value)} />
           </div>
           <DialogFooter>
             <Button onClick={confirmRenameThread}>Save</Button>
@@ -362,7 +362,7 @@ export default function WorkspaceDetailPage({ slug }: { slug: string }) {
         <DialogContent>
           <DialogHeader><DialogTitle>Rename Workspace</DialogTitle></DialogHeader>
           <div className="space-y-2">
-            <Input placeholder="New name" value={renameWsValue} onChange={(e) => setRenameWsValue(e.target.value)} />
+            <Input placeholder="New name" className="h-9" value={renameWsValue} onChange={(e) => setRenameWsValue(e.target.value)} />
           </div>
           <DialogFooter>
             <Button onClick={renameWorkspace}>Save</Button>

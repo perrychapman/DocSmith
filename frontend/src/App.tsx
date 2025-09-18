@@ -68,22 +68,22 @@ export default function App() {
           </a>
           <a className={linkCls(hash.startsWith("#workspaces")) + " group"}
              href="#workspaces">
-            <Icon.Folder className="h-4 w-4" />
+            <Icon.Bot className="h-4 w-4" />
             <span>Workspaces</span>
           </a>
-          <a className={linkCls(hash.startsWith("#jobs")) + " group"}
-             href="#jobs">
-            <Icon.Activity className="h-4 w-4" />
-            <span>Jobs</span>
+          <a className={linkCls(hash==="#templates") + " group"}
+             href="#templates">
+            <Icon.FileText className="h-4 w-4" />
+            <span>Templates</span>
           </a>
           
           <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wider mt-4">
             Resources
           </div>
-          <a className={linkCls(hash==="#templates") + " group"}
-             href="#templates">
-            <Icon.FileText className="h-4 w-4" />
-            <span>Templates</span>
+          <a className={linkCls(hash.startsWith("#jobs")) + " group"}
+             href="#jobs">
+            <Icon.Clock className="h-4 w-4" />
+            <span>Jobs</span>
           </a>
           <a className={linkCls(hash==="#settings") + " group"}
              href="#settings">
@@ -92,8 +92,8 @@ export default function App() {
           </a>
         </nav>
       </aside>
-      <main className="p-6 overflow-hidden">
-        <div className="mx-auto w-full max-w-6xl space-y-6">
+      <main className="p-6 overflow-y-auto">
+        <div className="mx-auto w-full max-w-[95vw] xl:max-w-[90vw] 2xl:max-w-[85vw] space-y-6 pb-32">
           {content}
         </div>
       </main>

@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "../components/ui/breadcrumb";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { Icon } from "../components/icons";
+import { Search } from "lucide-react";
 import { toast } from "sonner";
 import { apiFetch } from "../lib/api";
 
@@ -198,35 +199,51 @@ export default function JobsPage() {
   }
 
   return (
-    <div className="flex flex-col gap-4 h-full">
-      <div>
-        <Breadcrumb>
-          <BreadcrumbList>
-            <BreadcrumbItem>
-              <BreadcrumbLink href="#workspaces">DocSmith</BreadcrumbLink>
-            </BreadcrumbItem>
-            <BreadcrumbSeparator />
-            <BreadcrumbItem>
-              <BreadcrumbPage>Jobs</BreadcrumbPage>
-            </BreadcrumbItem>
-          </BreadcrumbList>
-        </Breadcrumb>
-      </div>
+    <div className="flex flex-col space-y-6 animate-in fade-in-0 slide-in-from-top-2 h-full">
+      <Breadcrumb>
+        <BreadcrumbList>
+          <BreadcrumbItem>
+            <BreadcrumbLink href="#workspaces">DocSmith</BreadcrumbLink>
+          </BreadcrumbItem>
+          <BreadcrumbSeparator />
+          <BreadcrumbItem>
+            <BreadcrumbPage>Jobs</BreadcrumbPage>
+          </BreadcrumbItem>
+        </BreadcrumbList>
+      </Breadcrumb>
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold tracking-tight">Generation Jobs</h1>
+        <div className="space-y-1">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <Icon.Clock className="h-5 w-5" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold tracking-tight">Generation Jobs</h1>
+              <p className="text-muted-foreground">Monitor document generation tasks</p>
+            </div>
+          </div>
+        </div>
         <div className="text-xs text-muted-foreground">Auto-refreshing every 5s</div>
       </div>
-      <Separator />
       {error ? (<div className="text-sm text-red-600">Failed to load jobs: {error}</div>) : null}
 
-      <Card className="h-[calc(100vh-160px)] overflow-hidden p-0">
-        <div className="h-full p-4 space-y-3 overflow-y-auto">
-          <div className="grid grid-cols-12 gap-2 h-full min-h-0">
-            {/* Left: list */}
-            <div className="col-span-12 md:col-span-4 h-full min-h-0 flex flex-col">
-              <div className="flex items-center gap-2 mb-2 shrink-0">
+      <div className="flex gap-6 flex-1 min-h-[calc(100vh-200px)]">
+        {/* Left: Jobs list */}
+        <div className="w-1/4 xl:w-1/5">
+          <Card className="flex-1 h-full overflow-hidden border-0 shadow-lg">
+            <div className="p-4 border-b border-border/40 bg-muted/20">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input 
+                    placeholder="Search template or customer" 
+                    value={q} 
+                    onChange={(e)=>setQ(e.target.value)} 
+                    className="pl-9 h-9 bg-background/50 border-border/50 focus:bg-background"
+                  />
+                </div>
                 <Select value={(statusFilter || 'all')} onValueChange={(v)=>setStatusFilter(v === 'all' ? '' : v)}>
-                  <SelectTrigger className="w-[170px]">
+                  <SelectTrigger className="w-[170px] h-9">
                     <SelectValue placeholder="All statuses" />
                   </SelectTrigger>
                   <SelectContent>
@@ -237,48 +254,103 @@ export default function JobsPage() {
                     <SelectItem value="cancelled">Cancelled</SelectItem>
                   </SelectContent>
                 </Select>
-                <Input placeholder="Search template or customer" value={q} onChange={(e)=>setQ(e.target.value)} />
-                <Button variant="destructive" className="ml-auto" onClick={()=> setClearOpen(true)}>Clear All</Button>
+                <Badge variant="secondary" className="text-xs font-medium px-3 py-1 bg-primary/10 text-primary border-primary/20 shrink-0">
+                  {filtered.length}
+                </Badge>
               </div>
-              <div className="panel-3d p-2 min-h-0 flex-1 overflow-hidden flex flex-col">
-                <ScrollArea className="flex-1 min-h-0">
-                  <ul className="text-sm space-y-1 pr-2">
-                    {filtered.map(j => (
-                      <li key={j.id} className={"flex items-center gap-2 justify-between rounded px-2 py-1 cursor-pointer " + (activeId===j.id?"bg-accent":"hover:bg-accent/40")} onClick={()=>openJob(j.id)}>
-                        <div className="min-w-0 flex-1">
-                          <div className="font-medium truncate flex items-center gap-2">
-                            <span className="truncate">{j.template}</span>
-                          </div>
-                          <div className="text-xs text-foreground truncate">{!isCompileJob(j) ? `for ${String(j.customerName || j.customerId)} • ` : ''}{new Date(j.updatedAt).toLocaleString()}</div>
-                        </div>
-                        {statusBadgeIcon(j.status)}
-                      </li>
-                    ))}
-                    {!filtered.length ? <li className="text-muted-foreground">No jobs.</li> : null}
-                  </ul>
-                </ScrollArea>
+              <div>
+                <Button variant="destructive" className="w-full h-9" onClick={()=> setClearOpen(true)}>Clear All</Button>
               </div>
             </div>
-
-            {/* Right: details */}
-            <div className="col-span-12 md:col-span-8 h-full min-h-0 flex flex-col">
-              <div className="panel-3d p-3 min-h-0 flex-1 overflow-hidden">
-                {!active ? (
-                  <div className="text-muted-foreground text-sm">Select a job to view details.</div>
-                ) : (
-                  <div className="flex flex-col h-full space-y-3 text-sm">
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <div className="font-medium">
-                            {isCompileJob(active)
-                              ? `${active.template}`
-                              : `${active.template} for ${String(active.customerName || active.customerId)}`}
+            <ScrollArea className="h-full">
+              <div className="p-4">
+                <div className="space-y-2">
+                  {filtered.map(j => (
+                    <div 
+                      key={j.id} 
+                      className={
+                        "group relative rounded-lg border p-3 transition-all duration-200 cursor-pointer hover:shadow-md " +
+                        (activeId===j.id 
+                          ? "bg-primary/10 border-primary/50 shadow-sm" 
+                          : "hover:bg-accent/50 hover:border-accent")
+                      } 
+                      onClick={()=>openJob(j.id)}
+                    >
+                      <div className="flex items-start justify-between">
+                        <div className="min-w-0 flex-1">
+                          <div className="font-medium truncate text-sm flex items-center gap-2">
+                            <span className="truncate">{j.template}</span>
                           </div>
-                          <Badge variant={isCompileJob(active)?'secondary':'outline'}>{isCompileJob(active)?'Template Compile':'Document Generation'}</Badge>
-                          {statusBadge(active.status)}
+                          <div className="text-xs text-muted-foreground mt-1 truncate">
+                            {!isCompileJob(j) ? `for ${String(j.customerName || j.customerId)} • ` : ''}{new Date(j.updatedAt).toLocaleString()}
+                          </div>
                         </div>
-                        <div className="text-xs text-muted-foreground">Updated {new Date(active.updatedAt).toLocaleString()}</div>
+                        <div className="ml-2 flex items-center">
+                          {statusBadgeIcon(j.status)}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {!filtered.length ? (
+                    <div className="text-center py-8 text-muted-foreground text-sm">
+                      No jobs found.
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            </ScrollArea>
+          </Card>
+        </div>
+
+        {/* Right: Job details */}
+        <div className="w-3/4 xl:w-4/5">
+          <Card className="flex-1 h-full overflow-hidden border-0 shadow-lg">
+            {!active ? (
+              <div className="p-8 text-center h-full flex items-center justify-center">
+                <div className="space-y-3">
+                  <div className="h-12 w-12 rounded-lg bg-muted/50 flex items-center justify-center mx-auto">
+                    <Icon.Clock className="h-6 w-6 text-muted-foreground" />
+                  </div>
+                  <div className="text-sm text-muted-foreground">Select a job to view details</div>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col h-full">
+                <div className="p-4 border-b border-border/40 bg-muted/20">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <div>
+                        <div className="font-medium text-sm">{active.template}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {!isCompileJob(active) ? `Customer: ${String(active.customerName || active.customerId)}` : 'Template compilation'}
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {statusBadgeIcon(active.status)}
+                      <Button 
+                        variant="destructive" 
+                        size="sm" 
+                        onClick={() => setDeleteOpen(true)}
+                        className="h-8"
+                      >
+                        <Icon.Trash className="h-3.5 w-3.5 mr-1.5" />
+                        Delete
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+                <ScrollArea className="flex-1">
+                  <div className="p-4 space-y-4 text-sm">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <div className="font-medium">
+                          {isCompileJob(active)
+                            ? `${active.template}`
+                            : `${active.template} for ${String(active.customerName || active.customerId)}`}
+                        </div>
+                        <Badge variant={isCompileJob(active)?'secondary':'outline'}>{isCompileJob(active)?'Template Compile':'Document Generation'}</Badge>
+                        {statusBadge(active.status)}
                       </div>
                       <div className="flex items-center gap-1">
                         {active.status==='running' ? (
@@ -300,9 +372,6 @@ export default function JobsPage() {
                             </Button>
                           </>
                         ) : null}
-                        <Button size="icon" variant="destructive" aria-label="Delete" title="Delete" onClick={(e)=>{ e.preventDefault(); setDeleteOpen(true) }}>
-                          <Icon.Trash className="h-4 w-4" />
-                        </Button>
                       </div>
                     </div>
 
@@ -356,12 +425,12 @@ export default function JobsPage() {
                       </div>
                     </div>
                   </div>
-                )}
+                </ScrollArea>
               </div>
-            </div>
-          </div>
+            )}
+          </Card>
         </div>
-      </Card>
+      </div>
 
       {/* Clear All Jobs */}
       <AlertDialog open={clearOpen} onOpenChange={setClearOpen}>

@@ -9,7 +9,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "../components/ui/breadcrumb";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { Icon } from "../components/icons";
-import { A } from "../lib/api";
+import { A, apiFetch } from "../lib/api";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import { readSSEStream, cn } from "../lib/utils";
 import { toast } from "sonner";
@@ -117,7 +117,7 @@ export default function WorkspaceDetailPage({ slug }: { slug: string }) {
     let cancelled = false;
     async function loadJobsOnce() {
       try {
-        const r = await fetch('/api/generate/jobs');
+        const r = await apiFetch('/api/generate/jobs');
         const j = await r.json().catch(()=>({}));
         const list: Job[] = Array.isArray(j?.jobs) ? j.jobs : [];
         const filtered = list.filter((x) => String(x?.usedWorkspace || '') === String(slug));

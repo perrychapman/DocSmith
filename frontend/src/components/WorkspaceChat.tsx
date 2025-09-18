@@ -4,7 +4,7 @@ import { Button } from "./ui/Button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { Textarea } from "./ui/textarea";
 import { Icon } from "./icons";
-import { A } from "../lib/api";
+import { A, apiFetch } from "../lib/api";
 import { readSSEStream } from "../lib/utils";
 
 type Thread = { id?: number; slug?: string; name?: string };
@@ -140,7 +140,7 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
     let cancelled = false;
     async function loadJobsOnce() {
       try {
-        const r = await fetch('/api/generate/jobs');
+        const r = await apiFetch('/api/generate/jobs');
         const j = await r.json().catch(()=>({}));
         const list: Job[] = Array.isArray(j?.jobs) ? j.jobs : [];
         const filtered = list.filter((x) => String(x?.usedWorkspace || '') === String(slug));
@@ -319,7 +319,7 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
                                 </Tooltip>
                                 <Tooltip>
                                   <TooltipTrigger asChild>
-                                    <Button size="icon" variant="ghost" aria-label="Open folder" title="Open folder" onClick={async (e)=>{ e.preventDefault(); try { await fetch(`/api/generate/jobs/${encodeURIComponent(card.jobId)}/reveal`) } catch {} }}>
+                                    <Button size="icon" variant="ghost" aria-label="Open folder" title="Open folder" onClick={async (e)=>{ e.preventDefault(); try { await apiFetch(`/api/generate/jobs/${encodeURIComponent(card.jobId)}/reveal`) } catch {} }}>
                                       <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h5l2 3h9a1 1 0 0 1 1 1v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/></svg>
                                     </Button>
                                   </TooltipTrigger>

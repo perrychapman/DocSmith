@@ -7,6 +7,7 @@ import { Separator } from "../components/ui/separator";
 import { Icon } from "../components/icons";
 import { toast } from "sonner";
 import { useTheme } from "next-themes";
+import { apiFetch } from "@/lib/api";
 
 export default function SettingsPage() {
   const { theme, setTheme } = useTheme();
@@ -40,14 +41,14 @@ export default function SettingsPage() {
   async function check() {
     setLoading(true);
     try {
-      await fetch(`/api/settings`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ anythingLLMUrl: (apiUrl||'').trim() || undefined, anythingLLMKey: (apiKey||'').trim() || undefined }) });
+      await apiFetch(`/api/settings`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ anythingLLMUrl: (apiUrl||'').trim() || undefined, anythingLLMKey: (apiKey||'').trim() || undefined }) });
     } catch {}
     try {
-      const pr = await fetch(`/api/anythingllm/ping`);
+      const pr = await apiFetch(`/api/anythingllm/ping`);
       setPing(pr.status === 200 ? "ok" : String(pr.status));
     } catch { setPing("error") }
     try {
-      const ar = await fetch(`/api/anythingllm/auth`);
+      const ar = await apiFetch(`/api/anythingllm/auth`);
       setAuth(ar.status === 200 ? "ok" : (ar.status === 403 ? "invalid-key" : String(ar.status)));
     } catch { setAuth("error") }
     setLastChecked(new Date().toLocaleString());
@@ -57,7 +58,7 @@ export default function SettingsPage() {
   React.useEffect(() => {
     (async () => {
       try {
-        const s = await fetch(`/api/settings`).then((r) => r.json()).catch(() => ({}));
+        const s = await apiFetch(`/api/settings`).then((r) => r.json()).catch(() => ({}));
         if (s?.anythingLLMUrl) setApiUrl(String(s.anythingLLMUrl)); else setApiUrl('http://localhost:3001');
         if (s?.anythingLLMKey) setApiKey(String(s.anythingLLMKey));
       } catch {}
@@ -68,7 +69,7 @@ export default function SettingsPage() {
   async function save() {
     try {
       setLoading(true);
-      const r = await fetch(`/api/settings`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ anythingLLMUrl: (apiUrl||'').trim() || undefined, anythingLLMKey: (apiKey||'').trim() || undefined }) });
+      const r = await apiFetch(`/api/settings`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ anythingLLMUrl: (apiUrl||'').trim() || undefined, anythingLLMKey: (apiKey||'').trim() || undefined }) });
       if (!r.ok) throw new Error(String(r.status));
       toast.success("Settings saved");
     } catch { toast.error("Failed to save settings") }

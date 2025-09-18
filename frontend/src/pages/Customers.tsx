@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogT
 import { Icon } from "../components/icons";
 import { Maximize2, Minimize2, Search, ExternalLink, Download } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "../components/ui/tooltip";
-import { A } from "../lib/api";
+import { A, apiFetch } from "../lib/api";
 import WorkspaceChat from "../components/WorkspaceChat";
 import { toast } from "sonner";
 import { Progress } from "../components/ui/progress";
@@ -80,7 +80,7 @@ export function CustomersPage() {
     let ignore = false;
     (async () => {
       try {
-        const r = await fetch(`/api/customers`);
+        const r = await apiFetch(`/api/customers`);
         if (!r.ok) throw new Error(String(r.status));
         const data: Customer[] = await r.json();
         if (!ignore) {
@@ -100,7 +100,7 @@ export function CustomersPage() {
       if (!customers.length) { setCounts({}); return; }
       setCountsLoading(true);
       try {
-        const r = await fetch(`/api/customers/metrics`);
+        const r = await apiFetch(`/api/customers/metrics`);
         if (!r.ok) throw new Error(String(r.status));
         const data = await r.json().catch(() => ({}));
         const metrics: Array<{ id: number; docs: number; chats: number }> = Array.isArray(data?.metrics) ? data.metrics : [];
@@ -113,12 +113,12 @@ export function CustomersPage() {
         const next: Record<number, { docs?: number; chats?: number }> = {};
         await Promise.allSettled(list.map(async (c) => {
           try {
-            const r = await fetch(`/api/uploads/${c.id}`);
+            const r = await apiFetch(`/api/uploads/${c.id}`);
             const items: UploadItem[] = await r.json().catch(() => []);
             next[c.id] = { ...(next[c.id] || {}), docs: Array.isArray(items) ? items.length : 0 };
           } catch { next[c.id] = { ...(next[c.id] || {}), docs: 0 } }
           try {
-            const ws = await fetch(`/api/customers/${c.id}/workspace`).then((r) => r.ok ? r.json() : Promise.reject()).catch(() => null);
+            const ws = await apiFetch(`/api/customers/${c.id}/workspace`).then((r) => r.ok ? r.json() : Promise.reject()).catch(() => null);
             const slug = ws?.slug as string | undefined;
             if (slug) {
               const data = await A.workspaceChats(slug, 200, 'desc').catch(() => null);
@@ -166,7 +166,7 @@ export function CustomersPage() {
     async function loadWs(cid: number) {
       setWsLoading(true);
       try {
-        const r = await fetch(`/api/customers/${cid}/workspace`);
+        const r = await apiFetch(`/api/customers/${cid}/workspace`);
         if (!r.ok) throw new Error(String(r.status));
         const data = await r.json();
         if (!ignore) setWsSlug(data?.slug || null);
@@ -186,7 +186,7 @@ export function CustomersPage() {
     async function loadUploads(cid: number) {
       setLoadingUploads(true);
       try {
-        const r = await fetch(`/api/uploads/${cid}`);
+        const r = await apiFetch(`/api/uploads/${cid}`);
         if (!r.ok) throw new Error(String(r.status));
         const data: UploadItem[] = await r.json();
         if (!ignore) setUploads(Array.isArray(data) ? data : []);
@@ -208,7 +208,7 @@ export function CustomersPage() {
     (async () => {
       setLoadingTemplates(true);
       try {
-        const r = await fetch(`/api/templates`);
+        const r = await apiFetch(`/api/templates`);
         const data = await r.json().catch(() => ({}));
         const list: Array<{ slug: string; name: string }> = Array.isArray(data?.templates) ? data.templates : [];
         if (!ignore) setTemplates(list);
@@ -335,7 +335,7 @@ export function CustomersPage() {
               setGenJobId(null);
             }
               // Refresh uploads
-              (async () => { try { const r2 = await fetch(`/api/uploads/${selectedId}`); const d2: UploadItem[] = await r2.json(); setUploads(Array.isArray(d2) ? d2 : []) } catch { } })()
+              (async () => { try { const r2 = await apiFetch(`/api/uploads/${selectedId}`); const d2: UploadItem[] = await r2.json(); setUploads(Array.isArray(d2) ? d2 : []) } catch { } })()
             toast.success('Document generated')
           }
         } catch { }
@@ -366,7 +366,7 @@ export function CustomersPage() {
       setGenSteps({});
       setGenProgress(null);
       // Fetch job details
-      const r = await fetch(`/api/generate/jobs/${encodeURIComponent(jobId)}`);
+      const r = await apiFetch(`/api/generate/jobs/${encodeURIComponent(jobId)}`);
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(String(j?.error || r.status));
       const logs: string[] = Array.isArray(j?.logs) ? j.logs : [];
@@ -392,7 +392,7 @@ export function CustomersPage() {
     let timer: any;
     async function refresh() {
       try {
-        const r = await fetch(`/api/uploads/${selectedId}`);
+        const r = await apiFetch(`/api/uploads/${selectedId}`);
         if (!r.ok) throw new Error(String(r.status));
         const data: UploadItem[] = await r.json();
         if (!ignore) setUploads(Array.isArray(data) ? data : []);
@@ -407,10 +407,10 @@ export function CustomersPage() {
     const n = name.trim();
     if (!n) return;
     try {
-      await fetch(`/api/customers`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: n }) });
+      await apiFetch(`/api/customers`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: n }) });
       toast.success("Customer added");
       setName("");
-      const r = await fetch(`/api/customers`);
+      const r = await apiFetch(`/api/customers`);
       const data: Customer[] = await r.json();
       setCustomers(data);
       if (data.length) setSelectedId(data[0].id);
@@ -426,11 +426,11 @@ export function CustomersPage() {
       const toastId = (toast as any).loading ? (toast as any).loading("Uploading and embedding...") : undefined;
       const fd = new FormData();
       fd.append("file", file);
-      const r = await fetch(`/api/uploads/${selectedId}`, { method: "POST", body: fd });
+      const r = await apiFetch(`/api/uploads/${selectedId}`, { method: "POST", body: fd });
       const json = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(String(r.status));
       // refresh list
-      const r2 = await fetch(`/api/uploads/${selectedId}`);
+      const r2 = await apiFetch(`/api/uploads/${selectedId}`);
       const d2: UploadItem[] = await r2.json();
       setUploads(d2);
       setFile(null);
@@ -455,11 +455,11 @@ export function CustomersPage() {
     try {
       setDeleting(name);
       const loadingId = (toast as any).loading ? (toast as any).loading("Removing from workspace...") : undefined;
-      const r = await fetch(`/api/uploads/${selectedId}?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
+      const r = await apiFetch(`/api/uploads/${selectedId}?name=${encodeURIComponent(name)}`, { method: 'DELETE' });
       const json = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(String(r.status));
       // refresh list
-      const r2 = await fetch(`/api/uploads/${selectedId}`);
+      const r2 = await apiFetch(`/api/uploads/${selectedId}`);
       const d2: UploadItem[] = await r2.json();
       setUploads(d2);
       const removed = Array.isArray((json as any)?.removedNames) ? (json as any).removedNames : [];
@@ -486,7 +486,7 @@ export function CustomersPage() {
     try {
       const url = `/api/customers/${deleteId}?deleteWorkspace=${alsoDeleteWorkspace ? "true" : "false"}`;
       const loadingId = (toast as any).loading ? (toast as any).loading("Deleting customer and workspace docs...") : undefined;
-      const r = await fetch(url, { method: "DELETE" });
+      const r = await apiFetch(url, { method: "DELETE" });
       const body = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(String(r.status));
       if ((body as any)?.documentsWarning) toast.warning?.((body as any).documentsWarning);
@@ -495,7 +495,7 @@ export function CustomersPage() {
       else toast.success("Customer deleted");
       setDeleteOpen(false);
       // refresh customers
-      const rr = await fetch(`/api/customers`);
+      const rr = await apiFetch(`/api/customers`);
       const data: Customer[] = await rr.json();
       setCustomers(data);
       // adjust selection
@@ -842,7 +842,7 @@ export function CustomersPage() {
                         onClick={async () => {
                           if (!selectedId) return;
                           try {
-                            const r = await fetch(`/api/uploads/${selectedId}/open-folder`, { method: 'POST' });
+                            const r = await apiFetch(`/api/uploads/${selectedId}/open-folder`, { method: 'POST' });
                             if (!r.ok) throw new Error(String(r.status));
                             toast.success?.('Opened folder');
                           } catch {
@@ -1003,7 +1003,7 @@ export function CustomersPage() {
           </div>
           <DialogFooter>
             {generating && genJobId ? (
-              <Button variant="destructive" onClick={async () => { try { await fetch(`/api/generate/jobs/${encodeURIComponent(genJobId)}/cancel`, { method: 'POST' }); } catch { } }}>Cancel</Button>
+              <Button variant="destructive" onClick={async () => { try { await apiFetch(`/api/generate/jobs/${encodeURIComponent(genJobId)}/cancel`, { method: 'POST' }); } catch { } }}>Cancel</Button>
             ) : null}
             {!generating && genError ? (
               <Button variant="outline" onClick={() => { setGenLogs([]); setGenSteps({}); setGenProgress(0); setGenError(null); if (genEventRef.current) { try { genEventRef.current.close() } catch { }; genEventRef.current = null }; generateDocument(); }}>Retry</Button>
@@ -1064,7 +1064,7 @@ function RecentJobs({ selectedId }: { selectedId: number | null }) {
 
   async function revealTemplateFolder(slug: string) {
     try {
-      const r = await fetch(`/api/templates/${encodeURIComponent(slug)}/open-folder`, { method: 'POST' })
+      const r = await apiFetch(`/api/templates/${encodeURIComponent(slug)}/open-folder`, { method: 'POST' })
       const j = await r.json().catch(() => (null as any))
       if (!r.ok) throw new Error(String(j?.error || r.status))
       toast.success('Opened template folder')
@@ -1078,7 +1078,7 @@ function RecentJobs({ selectedId }: { selectedId: number | null }) {
     const load = async () => {
       try {
         setLoading(true)
-        const r = await fetch('/api/generate/jobs')
+        const r = await apiFetch('/api/generate/jobs')
         const j = await r.json().catch(() => ({}))
         if (!ignore) {
           const arr = Array.isArray(j?.jobs) ? j.jobs : []
@@ -1094,7 +1094,7 @@ function RecentJobs({ selectedId }: { selectedId: number | null }) {
   }, [selectedId])
 
   async function openJob(id: string) {
-    try { const r = await fetch(`/api/generate/jobs/${encodeURIComponent(id)}`); const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(String(r.status)); setActive(j) } catch { setActive(null) }
+    try { const r = await apiFetch(`/api/generate/jobs/${encodeURIComponent(id)}`); const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(String(r.status)); setActive(j) } catch { setActive(null) }
   }
 
   return (
@@ -1135,14 +1135,14 @@ function RecentJobs({ selectedId }: { selectedId: number | null }) {
                 <div className="flex items-center gap-1">
                   {statusBadge(String(active.status) as any)}
                   {active.status === 'running' ? (
-                    <Button size="icon" variant="ghost" aria-label="Cancel" title="Cancel" onClick={async (e) => { e.preventDefault(); try { if (active?.id) { await fetch(`/api/generate/jobs/${encodeURIComponent(active.id)}/cancel`, { method: 'POST' }); await openJob(active.id) } } catch { } }}>
+                    <Button size="icon" variant="ghost" aria-label="Cancel" title="Cancel" onClick={async (e) => { e.preventDefault(); try { if (active?.id) { await apiFetch(`/api/generate/jobs/${encodeURIComponent(active.id)}/cancel`, { method: 'POST' }); await openJob(active.id) } } catch { } }}>
                       <Icon.Stop className="h-4 w-4" />
                     </Button>
                   ) : null}
                   {!isCompileJob(active) && active.file ? (
                     <>
                       <Button asChild size="icon" variant="ghost" aria-label="Open Folder" title="Open Folder">
-                        <a href="#" onClick={async (e) => { e.preventDefault(); try { await fetch(`/api/generate/jobs/${encodeURIComponent(active.id)}/reveal`) } catch { } }}>
+                        <a href="#" onClick={async (e) => { e.preventDefault(); try { await apiFetch(`/api/generate/jobs/${encodeURIComponent(active.id)}/reveal`) } catch { } }}>
                           <Icon.Folder className="h-4 w-4" />
                         </a>
                       </Button>

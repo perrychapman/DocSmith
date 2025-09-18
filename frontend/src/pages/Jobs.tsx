@@ -10,6 +10,7 @@ import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbP
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { Icon } from "../components/icons";
 import { toast } from "sonner";
+import { apiFetch } from "../lib/api";
 
 type Job = {
   id: string;
@@ -52,7 +53,7 @@ export default function JobsPage() {
     try {
       setLoading(true);
       setError(null);
-      const r = await fetch('/api/generate/jobs');
+      const r = await apiFetch('/api/generate/jobs');
       if (!r.ok) throw new Error(String(r.status));
       const j = await r.json().catch(()=>({}));
       const list: Job[] = Array.isArray(j?.jobs) ? j.jobs : [];
@@ -76,7 +77,7 @@ export default function JobsPage() {
   async function openJob(id: string) {
     setActiveId(id);
     try {
-      const r = await fetch(`/api/generate/jobs/${encodeURIComponent(id)}`);
+      const r = await apiFetch(`/api/generate/jobs/${encodeURIComponent(id)}`);
       if (!r.ok) throw new Error(String(r.status));
       const j = await r.json().catch(()=>({}));
       setActive(j as Job);
@@ -183,11 +184,11 @@ export default function JobsPage() {
     )
   }
 
-  const cancelActive = async () => { if (!activeId) return; try { await fetch(`/api/generate/jobs/${encodeURIComponent(activeId)}/cancel`, { method: 'POST' }); await openJob(activeId) } catch {} };
+  const cancelActive = async () => { if (!activeId) return; try { await apiFetch(`/api/generate/jobs/${encodeURIComponent(activeId)}/cancel`, { method: 'POST' }); await openJob(activeId) } catch {} };
 
   async function revealTemplateFolder(slug: string) {
     try {
-      const r = await fetch(`/api/templates/${encodeURIComponent(slug)}/open-folder`, { method: 'POST' });
+      const r = await apiFetch(`/api/templates/${encodeURIComponent(slug)}/open-folder`, { method: 'POST' });
       const j = await r.json().catch(() => (null as any));
       if (!r.ok) throw new Error(String(j?.error || r.status));
       toast.success('Opened template folder');
@@ -288,7 +289,7 @@ export default function JobsPage() {
                         {!isCompileJob(active) && active.file ? (
                           <>
                             <Button asChild size="icon" variant="ghost" aria-label="Open Folder" title="Open Folder">
-                              <a href="#" onClick={async (e)=>{ e.preventDefault(); try { await fetch(`/api/generate/jobs/${encodeURIComponent(active.id)}/reveal`) } catch {} }}>
+                              <a href="#" onClick={async (e)=>{ e.preventDefault(); try { await apiFetch(`/api/generate/jobs/${encodeURIComponent(active.id)}/reveal`) } catch {} }}>
                                 <Icon.Folder className="h-4 w-4" />
                               </a>
                             </Button>
@@ -371,7 +372,7 @@ export default function JobsPage() {
           <div className="text-sm text-muted-foreground">This only deletes job history. Generated files are not removed.</div>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={async ()=>{ try { await fetch('/api/generate/jobs', { method: 'DELETE' }); setClearOpen(false); setActive(null); setActiveId(null); await loadJobs() } catch { setClearOpen(false) } }}>Clear</AlertDialogAction>
+            <AlertDialogAction onClick={async ()=>{ try { await apiFetch('/api/generate/jobs', { method: 'DELETE' }); setClearOpen(false); setActive(null); setActiveId(null); await loadJobs() } catch { setClearOpen(false) } }}>Clear</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -385,7 +386,7 @@ export default function JobsPage() {
           <div className="text-sm text-muted-foreground">This only deletes the job record. The generated document remains on disk.</div>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={async ()=>{ try { if (active?.id) { await fetch(`/api/generate/jobs/${encodeURIComponent(active.id)}`, { method: 'DELETE' }) } setDeleteOpen(false); setActive(null); setActiveId(null); await loadJobs() } catch { setDeleteOpen(false) } }}>Delete</AlertDialogAction>
+            <AlertDialogAction onClick={async ()=>{ try { if (active?.id) { await apiFetch(`/api/generate/jobs/${encodeURIComponent(active.id)}`, { method: 'DELETE' }) } setDeleteOpen(false); setActive(null); setActiveId(null); await loadJobs() } catch { setDeleteOpen(false) } }}>Delete</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

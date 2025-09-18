@@ -1,0 +1,22 @@
+{
+  "appId": "com.docsmith.app",
+  "productName": "DocSmith",
+  "directories": {
+    "buildResources": "build",
+    "output": "dist"
+  },
+  "files": [
+    "frontend/dist/**",
+    "backend/dist/**",
+    "electron/main.js"
+  ],
+  "win": {
+    "target": "nsis"
+  },
+  "mac": {
+    "target": "dmg"
+  },
+  "linux": {
+    "target": "AppImage"
+  }
+}

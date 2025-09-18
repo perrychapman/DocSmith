@@ -23,11 +23,13 @@ debug.log
 ############################################
 # Build Artifacts
 ############################################
-dist/
+dist*/
 build/
 backend/dist/
 frontend/dist/
 *.tsbuildinfo
+*.asar
+*.yaml
 
 ############################################
 # Environment files

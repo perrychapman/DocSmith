@@ -84,6 +84,38 @@ app.use((req, res) => {
   res.status(404).json({ error: "Not found" });
 });
 
-app.listen(APP_CONFIG.port, () => {
+const server = app.listen(APP_CONFIG.port, () => {
   logInfo(`Backend running at http://localhost:${APP_CONFIG.port}`);
+});
+
+// Graceful shutdown handling
+function gracefulShutdown(signal: string) {
+  logInfo(`Received ${signal}, starting graceful shutdown...`);
+  
+  server.close(() => {
+    logInfo('HTTP server closed');
+    process.exit(0);
+  });
+
+  // Force close after 10 seconds
+  setTimeout(() => {
+    logInfo('Forcing shutdown after timeout');
+    process.exit(1);
+  }, 10000);
+}
+
+// Handle various shutdown signals
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGUSR2', () => gracefulShutdown('SIGUSR2')); // nodemon restart
+
+// Handle uncaught exceptions and unhandled rejections
+process.on('uncaughtException', (err) => {
+  logInfo(`Uncaught Exception: ${err.message}`);
+  gracefulShutdown('uncaughtException');
+});
+
+process.on('unhandledRejection', (reason) => {
+  logInfo(`Unhandled Rejection: ${reason}`);
+  gracefulShutdown('unhandledRejection');
 });

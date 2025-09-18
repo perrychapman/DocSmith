@@ -1,5 +1,9 @@
 {
     "name": "docsmith",
+    "version": "1.0.0",
+    "description": "DocSmith: Document management and workspace collaboration app.",
+    "author": "Perry Chapman",
+    "main": "electron/main.js",
     "private": true,
     "workspaces": [
         "backend",
@@ -7,16 +11,21 @@
     ],
     "scripts": {
         "dev:backend": "nodemon --watch backend/src --ext ts,js --exec ts-node backend/src/server.ts",
-        "build:backend": "tsc -p backend/tsconfig.json",
+        "build:backend": "tsc -p backend/tsconfig.json && xcopy \"backend\\src\\db\\*.sql\" \"backend\\dist\\db\\\" /Y",
+        "build:electron": "tsc electron/main.ts --outDir electron --target es2020 --module es2020 --moduleResolution node --esModuleInterop",
         "start:backend": "node backend/dist/server.js",
         "dev": "concurrently -n backend,frontend -c yellow,cyan \"npm:dev:backend\" \"npm --workspace frontend run dev\"",
-        "build": "npm run build:backend && npm --workspace frontend run build"
+        "build": "npm run build:backend && npm run build:electron && npm --workspace frontend run build",
+        "electron:dev": "concurrently -n backend,frontend,electron -c yellow,cyan,magenta \"npm:dev:backend\" \"npm --workspace frontend run dev\" \"electron .\"",
+        "electron:build": "npm run build && electron-builder"
     },
     "devDependencies": {
         "@types/cors": "^2.8.19",
         "@types/express": "^5.0.3",
-        "@types/node": "^24.3.0",
-        "concurrently": "^9.0.0",
+        "@types/node": "^24.5.1",
+        "concurrently": "^9.2.1",
+        "electron": "^38.1.2",
+        "electron-builder": "^26.0.12",
         "nodemon": "^3.1.10",
         "ts-node": "^10.9.2",
         "typescript": "^5.9.2"
@@ -25,18 +34,44 @@
         "axios": "^1.11.0",
         "body-parser": "^2.2.0",
         "cors": "^2.8.5",
+        "docx": "^8.5.0",
+        "docxtemplater": "^3.45.0",
         "dotenv": "^17.2.1",
+        "exceljs": "^4.4.0",
         "express": "^5.1.0",
         "handlebars": "^4.7.8",
-        "puppeteer": "^23.6.0",
-        "docxtemplater": "^3.45.0",
-        "pizzip": "^3.1.7",
         "html-to-docx": "^1.8.0",
-        "docx": "^8.5.0",
-        "marked": "^12.0.2",
         "mammoth": "^1.6.0",
+        "marked": "^12.0.2",
         "multer": "^2.0.2",
-        "sqlite3": "^5.1.7",
-        "exceljs": "^4.4.0"
+        "node-abi": "^4.14.0",
+        "pizzip": "^3.1.7",
+        "puppeteer": "^23.6.0",
+        "sqlite3": "^5.1.7"
+    },
+    "build": {
+        "appId": "com.docsmith.app",
+        "productName": "DocSmith",
+        "directories": {
+            "buildResources": "build",
+            "output": "release"
+        },
+        "files": [
+            "frontend/dist/**",
+            "backend/dist/**",
+            "electron/main.js"
+        ],
+        "asarUnpack": [
+            "backend/dist/**"
+        ],
+        "win": {
+            "target": "nsis"
+        },
+        "mac": {
+            "target": "dmg"
+        },
+        "linux": {
+            "target": "AppImage"
+        }
     }
 }

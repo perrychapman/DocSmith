@@ -10,6 +10,7 @@ import { Progress } from "../components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import { toast } from "sonner";
+import { apiFetch } from "../lib/api";
 
 type TItem = { slug: string; name?: string; dir?: string; hasTemplate?: boolean; hasDocx?: boolean; hasExcel?: boolean; hasSource?: boolean; hasFullGen?: boolean; compiledAt?: string; workspaceSlug?: string; updatedAt?: string; versionCount?: number };
 
@@ -40,7 +41,7 @@ export default function TemplatesPage() {
   async function load() {
     setLoading(true);
     try {
-      const r = await fetch(`/api/templates`);
+      const r = await apiFetch(`/api/templates`);
       const j = await r.json();
       setItems(Array.isArray(j?.templates) ? j.templates : []);
     } catch {
@@ -55,7 +56,7 @@ export default function TemplatesPage() {
 
   async function viewFullGen(sl: string) {
     try {
-      const r = await fetch(`/api/templates/${encodeURIComponent(sl)}/fullgen`);
+      const r = await apiFetch(`/api/templates/${encodeURIComponent(sl)}/fullgen`);
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(String(j?.error || r.status));
       setCodeModal({ title: 'Full Document Generator (generator.full.ts)', code: String(j.code || '') });
@@ -66,7 +67,7 @@ export default function TemplatesPage() {
 
   async function openFolder(sl: string) {
     try {
-      const r = await fetch(`/api/templates/${encodeURIComponent(sl)}/reveal`);
+      const r = await apiFetch(`/api/templates/${encodeURIComponent(sl)}/reveal`);
       if (!r.ok) throw new Error(String(r.status));
       toast.success('Opened folder');
     } catch { toast.error('Failed to open folder'); }
@@ -117,7 +118,7 @@ export default function TemplatesPage() {
 
   async function openFolder(sl: string) {
     try {
-      const r = await fetch(`/api/templates/${encodeURIComponent(sl)}/reveal`, { method: 'POST' });
+      const r = await apiFetch(`/api/templates/${encodeURIComponent(sl)}/reveal`, { method: 'POST' });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(String(j?.error || r.status));
       toast.success('Opened folder');
@@ -139,7 +140,7 @@ export default function TemplatesPage() {
       fd.append("file", file);
       if (name.trim()) fd.append("name", name.trim());
       if (slug.trim()) fd.append("slug", slug.trim());
-      const r = await fetch(`/api/templates/upload`, { method: 'POST', body: fd });
+      const r = await apiFetch(`/api/templates/upload`, { method: 'POST', body: fd });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(String(r.status));
       const ws = j?.workspaceSlug ? ` (Workspace: ${j.workspaceSlug})` : '';
@@ -161,7 +162,7 @@ export default function TemplatesPage() {
   async function confirmDelete() {
     if (!deleteSlug) return;
     try {
-      const r = await fetch(`/api/templates/${encodeURIComponent(deleteSlug)}`, { method: 'DELETE' });
+      const r = await apiFetch(`/api/templates/${encodeURIComponent(deleteSlug)}`, { method: 'DELETE' });
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(String(r.status));
       if (j?.workspaceDeleted) {
@@ -318,7 +319,7 @@ export default function TemplatesPage() {
                             <TooltipTrigger asChild>
                               <Button size="icon" variant="ghost" aria-label="Open folder" title="Open Folder" onClick={async () => {
                                 try {
-                                  const r = await fetch(`/api/templates/${encodeURIComponent(t.slug)}/open-folder`, { method: 'POST' });
+                                  const r = await apiFetch(`/api/templates/${encodeURIComponent(t.slug)}/open-folder`, { method: 'POST' });
                                   if (!r.ok) throw new Error(String(r.status));
                                   toast.success('Opened folder');
                                 } catch { toast.error('Failed to open folder') }
@@ -420,7 +421,7 @@ export default function TemplatesPage() {
           </div>
           <DialogFooter>
             {compiling && compJobId ? (
-              <Button variant="destructive" onClick={async () => { try { await fetch(`/api/templates/compile/jobs/${encodeURIComponent(compJobId)}/cancel`, { method: 'POST' }); setCompLogs((prev) => ([...(prev || []), 'cancel:requested'])) } catch { } }}>Cancel</Button>
+              <Button variant="destructive" onClick={async () => { try { await apiFetch(`/api/templates/compile/jobs/${encodeURIComponent(compJobId)}/cancel`, { method: 'POST' }); setCompLogs((prev) => ([...(prev || []), 'cancel:requested'])) } catch { } }}>Cancel</Button>
             ) : null}
             <DialogClose asChild>
               <Button variant="secondary">Close</Button>

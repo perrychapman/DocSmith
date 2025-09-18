@@ -1,5 +1,7 @@
 # DocSmith Technical Documentation
 
+**Security Review:** See [SECURITY-REVIEW.md](./SECURITY-REVIEW.md) for a full security audit and controls overview.
+
 DocSmith is a full-stack document generation and workspace collaboration platform designed for enterprise use, with deep AI integration, robust file management, and secure customer-centric workflows. This README provides technical documentation suitable for app review, onboarding, and developer reference.
 
 ---
@@ -122,7 +124,7 @@ DocSmith is designed with multiple layers of security controls:
 - **AnythingLLM API Security**: API keys and URLs are stored securely and never exposed to the frontend. All requests are authenticated.
 - **Frontend Browser Safety**: No direct file system access from the browser. All uploads and downloads are routed through secure backend endpoints.
 
-For a full security review, see the technical documentation or contact the maintainers.
+For a full security review, see [SECURITY-REVIEW.md](./SECURITY-REVIEW.md) or contact the maintainers.
 
 ## Testing
 - **Backend**: HTTP tests in `backend/tests.http`

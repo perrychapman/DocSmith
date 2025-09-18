@@ -5,7 +5,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { Textarea } from "./ui/textarea";
 import { Icon } from "./icons";
 import { A, apiFetch } from "../lib/api";
-import { readSSEStream } from "../lib/utils";
+import { readSSEStream, formatTimeAgo } from "../lib/utils";
 
 type Thread = { id?: number; slug?: string; name?: string };
 
@@ -59,8 +59,30 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
   const listRef = React.useRef<HTMLDivElement | null>(null);
   const [atBottom, setAtBottom] = React.useState(true);
   const scrollToBottom = React.useCallback(() => {
-    const el = listRef.current; if (!el) return;
-    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+    const el = listRef.current; 
+    if (!el) return;
+    
+    // Custom smooth scroll implementation for better cross-browser support
+    const start = el.scrollTop;
+    const target = el.scrollHeight - el.clientHeight;
+    const duration = 300; // 300ms animation
+    const startTime = performance.now();
+    
+    const animateScroll = (currentTime: number) => {
+      const elapsed = currentTime - startTime;
+      const progress = Math.min(elapsed / duration, 1);
+      
+      // Easing function for smooth animation
+      const easeOutCubic = 1 - Math.pow(1 - progress, 3);
+      
+      el.scrollTop = start + (target - start) * easeOutCubic;
+      
+      if (progress < 1) {
+        requestAnimationFrame(animateScroll);
+      }
+    };
+    
+    requestAnimationFrame(animateScroll);
   }, []);
   const onListScroll = React.useCallback(() => {
     const el = listRef.current; if (!el) return;
@@ -108,11 +130,21 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
       }
     } catch {
       setHistory([]);
-    } finally { setLoading(false); scrollToBottom(); }
+    } finally { setLoading(false); }
   }
 
   React.useEffect(() => { loadThreadsAndChats(); }, [slug]);
-  React.useEffect(() => { if (atBottom) scrollToBottom(); }, [history, atBottom, scrollToBottom]);
+  
+  // Enhanced auto-scroll with smooth animations
+  React.useEffect(() => { 
+    if (atBottom && history.length > 0) {
+      // Small delay to let DOM update, then smooth scroll
+      const timeoutId = setTimeout(() => {
+        scrollToBottom();
+      }, 50);
+      return () => clearTimeout(timeoutId);
+    }
+  }, [history, atBottom, scrollToBottom]);
   // Inject external cards as synthetic assistant messages
   React.useEffect(() => {
     if (!externalCards || !externalCards.length) return;
@@ -261,91 +293,103 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
               const shouldHideAsCode = (isGenJobPrompt(text) || isGenJobResponse(text) || (!isUser && looksLikeCode(text)));
               const job = shouldHideAsCode ? latestRelevantJob() : null;
               const jobStatus = job?.status;
+              
+              // Extract timestamp from message
+              const timestamp = m.sentAt ?? m.createdAt ?? m.created_at ?? m.timestamp ?? m.date;
+              const timeAgo = formatTimeAgo(timestamp);
+              
               // For generation prompts we inject our own sent card; skip rendering the raw prompt replacement
               if (shouldHideAsCode && isUser) return null;
               return (
                 <div key={idx} className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
-                  <div className={`max-w-[75%] whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 ${isUser ? 'bg-primary text-primary-foreground rounded-br-md' : 'bg-card border rounded-bl-md'}`}>
-                    {card ? (
-                      <div className="space-y-1">
-                        <div className="font-medium">
-                          {isUser
-                            ? (card.jobStatus === 'running' ? 'Document Generating' : 'Document Requested')
-                            : 'Document Generated'}
-                        </div>
-                        <div className="text-sm text-muted-foreground">
-                          {card.template ? (<div>Template: {card.template}</div>) : null}
-                          {!isUser && card.filename ? (<div>File: {card.filename}</div>) : null}
-                        </div>
-                        {isUser && card.aiContext ? (
-                          <div className="text-xs text-muted-foreground">AI Context: {card.aiContext}</div>
-                        ) : null}
-                        <div className="flex items-center gap-2 pt-1">
-                          {card.jobId ? (
-                            isUser ? (
-                              <>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <Button asChild size="icon" variant="ghost" aria-label="View job" title="View job">
-                                      <a href={`#jobs?id=${encodeURIComponent(card.jobId)}`}>
-                                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14L21 3"/></svg>
-                                      </a>
-                                    </Button>
-                                  </TooltipTrigger>
-                                  <TooltipContent>View job</TooltipContent>
-                                </Tooltip>
-                                {onOpenLogs ? (
+                  <div className="group flex flex-col gap-1 max-w-[75%]">
+                    <div className={`whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 ${isUser ? 'bg-primary text-primary-foreground rounded-br-md' : 'bg-card border rounded-bl-md'}`}>
+                      {card ? (
+                        <div className="space-y-1">
+                          <div className="font-medium">
+                            {isUser
+                              ? (card.jobStatus === 'running' ? 'Document Generating' : 'Document Requested')
+                              : 'Document Generated'}
+                          </div>
+                          <div className="text-sm text-muted-foreground">
+                            {card.template ? (<div>Template: {card.template}</div>) : null}
+                            {!isUser && card.filename ? (<div>File: {card.filename}</div>) : null}
+                          </div>
+                          {isUser && card.aiContext ? (
+                            <div className="text-xs text-muted-foreground">AI Context: {card.aiContext}</div>
+                          ) : null}
+                          <div className="flex items-center gap-2 pt-1">
+                            {card.jobId ? (
+                              isUser ? (
+                                <>
                                   <Tooltip>
                                     <TooltipTrigger asChild>
-                                      <Button size="icon" variant="ghost" aria-label="View logs" title="View logs" onClick={(e)=>{ e.preventDefault(); onOpenLogs?.(card.jobId!) }}>
-                                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 4h18"/><path d="M3 10h18"/><path d="M3 16h18"/></svg>
+                                      <Button asChild size="icon" variant="ghost" aria-label="View job" title="View job">
+                                        <a href={`#jobs?id=${encodeURIComponent(card.jobId)}`}>
+                                          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14L21 3"/></svg>
+                                        </a>
                                       </Button>
                                     </TooltipTrigger>
-                                    <TooltipContent>View logs</TooltipContent>
+                                    <TooltipContent>View job</TooltipContent>
                                   </Tooltip>
-                                ) : null}
-                              </>
+                                  {onOpenLogs ? (
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <Button size="icon" variant="ghost" aria-label="View logs" title="View logs" onClick={(e)=>{ e.preventDefault(); onOpenLogs?.(card.jobId!) }}>
+                                          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 4h18"/><path d="M3 10h18"/><path d="M3 16h18"/></svg>
+                                        </Button>
+                                      </TooltipTrigger>
+                                      <TooltipContent>View logs</TooltipContent>
+                                    </Tooltip>
+                                  ) : null}
+                                </>
+                              ) : (
+                                <>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Button asChild size="icon" variant="ghost" aria-label="Download" title="Download">
+                                        <a href={`/api/generate/jobs/${encodeURIComponent(card.jobId)}/file?download=true`}>
+                                          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+                                        </a>
+                                      </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>Download</TooltipContent>
+                                  </Tooltip>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Button size="icon" variant="ghost" aria-label="Open folder" title="Open folder" onClick={async (e)=>{ e.preventDefault(); try { await apiFetch(`/api/generate/jobs/${encodeURIComponent(card.jobId || '')}/reveal`) } catch {} }}>
+                                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h5l2 3h9a1 1 0 0 1 1 1v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/></svg>
+                                      </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>Open folder</TooltipContent>
+                                  </Tooltip>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Button asChild size="icon" variant="ghost" aria-label="View job" title="View job">
+                                        <a href={`#jobs?id=${encodeURIComponent(card.jobId)}`}>
+                                          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14L21 3"/></svg>
+                                        </a>
+                                      </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>View job</TooltipContent>
+                                  </Tooltip>
+                                </>
+                              )
                             ) : (
-                              <>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <Button asChild size="icon" variant="ghost" aria-label="Download" title="Download">
-                                      <a href={`/api/generate/jobs/${encodeURIComponent(card.jobId)}/file?download=true`}>
-                                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
-                                      </a>
-                                    </Button>
-                                  </TooltipTrigger>
-                                  <TooltipContent>Download</TooltipContent>
-                                </Tooltip>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <Button size="icon" variant="ghost" aria-label="Open folder" title="Open folder" onClick={async (e)=>{ e.preventDefault(); try { await apiFetch(`/api/generate/jobs/${encodeURIComponent(card.jobId)}/reveal`) } catch {} }}>
-                                      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h5l2 3h9a1 1 0 0 1 1 1v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/></svg>
-                                    </Button>
-                                  </TooltipTrigger>
-                                  <TooltipContent>Open folder</TooltipContent>
-                                </Tooltip>
-                                <Tooltip>
-                                  <TooltipTrigger asChild>
-                                    <Button asChild size="icon" variant="ghost" aria-label="View job" title="View job">
-                                      <a href={`#jobs?id=${encodeURIComponent(card.jobId)}`}>
-                                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14L21 3"/></svg>
-                                      </a>
-                                    </Button>
-                                  </TooltipTrigger>
-                                  <TooltipContent>View job</TooltipContent>
-                                </Tooltip>
-                              </>
-                            )
-                          ) : (
-                            <a className="underline" href="#jobs">View jobs</a>
-                          )}
+                              <a className="underline" href="#jobs">View jobs</a>
+                            )}
+                          </div>
                         </div>
+                      ) : shouldHideAsCode ? (
+                        null
+                      ) : (
+                        <>{text}</>
+                      )}
+                    </div>
+                    {timeAgo && (
+                      <div className={`text-xs text-muted-foreground px-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200 ${isUser ? 'text-right' : 'text-left'}`}>
+                        {timeAgo}
                       </div>
-                    ) : shouldHideAsCode ? (
-                      null
-                    ) : (
-                      <>{text}</>
                     )}
                   </div>
                 </div>

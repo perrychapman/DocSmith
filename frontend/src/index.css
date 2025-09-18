@@ -65,29 +65,48 @@
 
   /* Modern sidebar look */
   .app-sidebar {
-    background: linear-gradient(180deg, hsl(var(--secondary)) 0%, hsl(var(--secondary) / 0.92) 100%);
-    @apply bg-secondary/80 backdrop-blur-sm;
+    background: linear-gradient(180deg, hsl(var(--background)) 0%, hsl(var(--muted) / 0.3) 100%);
+    @apply backdrop-blur-xl border-border/50;
+    box-shadow: inset -1px 0 0 hsl(var(--border));
   }
 
   .sidebar-link {
-    @apply relative rounded-md px-3 py-2 text-sm text-muted-foreground transition-colors;
+    @apply relative rounded-lg px-3 py-2.5 text-sm font-medium text-muted-foreground transition-all duration-200 flex items-center gap-3;
   }
-  .sidebar-link:hover { @apply bg-accent/30 text-foreground; }
-  .sidebar-link.is-active { @apply bg-accent text-accent-foreground; }
+  .sidebar-link:hover { 
+    @apply bg-accent/50 text-foreground shadow-sm; 
+    transform: translateX(2px);
+  }
+  .sidebar-link.is-active { 
+    @apply bg-primary/10 text-primary shadow-sm; 
+    box-shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), inset 0 1px 0 0 hsl(var(--primary) / 0.1);
+  }
   .sidebar-link::before {
     content: "";
     position: absolute;
-    left: -8px;
-    top: 12%;
-    bottom: 12%;
+    left: -12px;
+    top: 20%;
+    bottom: 20%;
     width: 3px;
     border-radius: 9999px;
     background: transparent;
-    transform: scaleY(0.4);
-    transition: background-color 200ms ease, transform 200ms ease;
+    transform: scaleY(0);
+    transition: all 200ms cubic-bezier(0.4, 0, 0.2, 1);
   }
-  .sidebar-link:hover::before { background: hsl(var(--accent)); transform: scaleY(1); }
-  .sidebar-link.is-active::before { background: hsl(var(--primary)); transform: scaleY(1); }
+  .sidebar-link:hover::before { 
+    background: hsl(var(--accent-foreground) / 0.3); 
+    transform: scaleY(0.7); 
+  }
+  .sidebar-link.is-active::before { 
+    background: hsl(var(--primary)); 
+    transform: scaleY(1); 
+  }
+  .sidebar-link svg {
+    @apply transition-transform duration-200;
+  }
+  .sidebar-link:hover svg {
+    transform: scale(1.1);
+  }
 }
 
 /* Dark theme overrides (applied when .dark class is on html) */

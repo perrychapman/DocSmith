@@ -1,13 +1,16 @@
 import * as React from "react";
 import { Card } from "../components/ui/card";
-import { Button } from "@/components/ui/Button";
+import { Button, buttonVariants } from "@/components/ui/Button";
 import { Input } from "../components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "../components/ui/breadcrumb";
 import { Separator } from "../components/ui/separator";
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from "../components/ui/alert-dialog";
 import { Icon } from "../components/icons";
 import { toast } from "sonner";
 import { useTheme } from "next-themes";
 import { apiFetch } from "@/lib/api";
+import { cn } from "@/lib/utils";
 
 export default function SettingsPage() {
   const { theme, setTheme } = useTheme();
@@ -17,6 +20,8 @@ export default function SettingsPage() {
   const [ping, setPing] = React.useState<string>("unknown");
   const [auth, setAuth] = React.useState<string>("unknown");
   const [loading, setLoading] = React.useState(false);
+  const [resetting, setResetting] = React.useState(false);
+  const [resetDialogOpen, setResetDialogOpen] = React.useState(false);
 
   const [apiUrl, setApiUrl] = React.useState<string>("http://localhost:3001");
   const [apiKey, setApiKey] = React.useState<string>("");
@@ -76,6 +81,32 @@ export default function SettingsPage() {
     finally { setLoading(false) }
   }
 
+  async function resetApp() {
+    try {
+      setResetting(true);
+      setResetDialogOpen(false);
+      const response = await apiFetch(`/api/reset/app`, { method: 'POST' });
+      
+      if (!response.ok) {
+        throw new Error(`Reset failed with status ${response.status}`);
+      }
+      
+      const result = await response.json();
+      toast.success(result.message || "Application has been reset successfully");
+      
+      // Optionally refresh the page or redirect to setup
+      setTimeout(() => {
+        window.location.reload();
+      }, 2000);
+      
+    } catch (error) {
+      console.error('Reset failed:', error);
+      toast.error("Failed to reset application: " + (error instanceof Error ? error.message : 'Unknown error'));
+    } finally {
+      setResetting(false);
+    }
+  }
+
   return (
     <div className="space-y-6 animate-in fade-in-0 slide-in-from-top-2">
       <Breadcrumb>
@@ -95,15 +126,19 @@ export default function SettingsPage() {
         <div className="font-medium">Appearance</div>
         <div className="text-sm text-muted-foreground">Choose your preferred theme. "System" follows your OS setting.</div>
         <div>
-          <select
-            className="w-full border rounded-md h-9 px-2 bg-background"
-            value={mounted ? (theme ?? "system") : "system"}
-            onChange={(e) => setTheme(e.target.value as "light" | "dark" | "system")}
+          <Select 
+            value={mounted ? (theme ?? "system") : "system"} 
+            onValueChange={(value) => setTheme(value as "light" | "dark" | "system")}
           >
-            <option value="system">System</option>
-            <option value="light">Light</option>
-            <option value="dark">Dark</option>
-          </select>
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="Select theme" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="system">System</SelectItem>
+              <SelectItem value="light">Light</SelectItem>
+              <SelectItem value="dark">Dark</SelectItem>
+            </SelectContent>
+          </Select>
         </div>
       </Card>
 
@@ -169,9 +204,67 @@ export default function SettingsPage() {
                 Reset Setup
               </Button>
             </div>
+            
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm font-medium text-red-600">Reset All Data</div>
+                <div className="text-xs text-muted-foreground">
+                  Permanently delete all customers, templates, jobs, and documents
+                </div>
+              </div>
+              <AlertDialog open={resetDialogOpen} onOpenChange={setResetDialogOpen}>
+                <AlertDialogTrigger asChild>
+                  <Button 
+                    variant="destructive" 
+                    size="sm"
+                    disabled={resetting}
+                  >
+                    {resetting ? (
+                      <>
+                        <Icon.Clock className="w-3 h-3 mr-1 animate-spin" />
+                        Resetting...
+                      </>
+                    ) : (
+                      <>
+                        <Icon.Trash className="w-3 h-3 mr-1" />
+                        Reset App
+                      </>
+                    )}
+                  </Button>
+                </AlertDialogTrigger>
+              </AlertDialog>
+            </div>
           </div>
         </div>
       </Card>
+
+      {/* Reset App Confirmation Dialog */}
+      <AlertDialog open={resetDialogOpen} onOpenChange={setResetDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Reset All Application Data?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This action will permanently delete ALL data including:
+              <ul className="mt-2 list-disc list-inside space-y-1">
+                <li>All customers and their information</li>
+                <li>All templates and documents</li>
+                <li>All jobs and generation history</li>
+                <li>All uploaded files</li>
+              </ul>
+              <strong className="text-red-600 mt-3 block">This action cannot be undone.</strong>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction 
+              onClick={resetApp} 
+              className="!bg-destructive !text-destructive-foreground hover:!bg-destructive/90 focus:!ring-destructive"
+            >
+              Reset All Data
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

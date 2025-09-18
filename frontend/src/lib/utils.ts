@@ -10,6 +10,47 @@ export function formatDate(val: any) {
   return String(val ?? "");
 }
 
+export function formatTimeAgo(timestamp: any): string {
+  try {
+    const now = Date.now();
+    let messageTime: number;
+    
+    if (typeof timestamp === 'number') {
+      // Handle Unix timestamps (could be in seconds or milliseconds)
+      // If the number is less than a reasonable millisecond timestamp, assume it's in seconds
+      messageTime = timestamp < 10000000000 ? timestamp * 1000 : timestamp;
+    } else {
+      messageTime = new Date(timestamp).getTime();
+    }
+    
+    if (!messageTime || isNaN(messageTime)) return '';
+    
+    const diffMs = now - messageTime;
+    const diffSeconds = Math.floor(diffMs / 1000);
+    const diffMinutes = Math.floor(diffSeconds / 60);
+    const diffHours = Math.floor(diffMinutes / 60);
+    const diffDays = Math.floor(diffHours / 24);
+    
+    if (diffSeconds < 60) {
+      return diffSeconds <= 5 ? 'just now' : `${diffSeconds}s ago`;
+    } else if (diffMinutes < 60) {
+      return `${diffMinutes}m ago`;
+    } else if (diffHours < 24) {
+      return `${diffHours}h ago`;
+    } else if (diffDays === 1) {
+      return 'yesterday';
+    } else if (diffDays < 7) {
+      return `${diffDays}d ago`;
+    } else {
+      // For older messages, show the actual date
+      const date = new Date(messageTime);
+      return date.toLocaleDateString();
+    }
+  } catch {
+    return '';
+  }
+}
+
 export async function readSSEStream(resp: Response, onData: (data: string) => void) {
   if (!resp.ok || !resp.body) throw new Error(String(resp.status));
   const reader = resp.body.getReader();

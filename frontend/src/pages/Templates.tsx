@@ -5,10 +5,12 @@ import { Input } from "../components/ui/input";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, DialogDescription, DialogClose } from "../components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "../components/ui/breadcrumb";
+import { Badge } from "../components/ui/badge";
 import { Icon } from "../components/icons";
 import { Progress } from "../components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
+import { Search } from "lucide-react";
 import { toast } from "sonner";
 import { apiFetch } from "../lib/api";
 
@@ -250,34 +252,49 @@ export default function TemplatesPage() {
       <div className="grid grid-cols-12 gap-4 min-h-0">
         {/* Cards list full width */}
         <div className="col-span-12">
-          <Card className="p-4 h-[calc(100vh-220px)] flex flex-col">
-            {loading ? (
-              <div className="text-sm text-muted-foreground">Loading templates…</div>
-            ) : items.length ? (
-              <>
-                {/* Fixed search/filter bar at top */}
-                <div className="flex items-center gap-2 mb-4 flex-shrink-0">
-                  <Input placeholder="Search templates" value={q} onChange={(e) => setQ(e.target.value)} className="w-[260px]" />
-                  <Select value={typeFilter} onValueChange={setTypeFilter}>
-                    <SelectTrigger className="w-[160px]"><SelectValue placeholder="Type" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">All types</SelectItem>
-                      <SelectItem value="docx">Word (DOCX)</SelectItem>
-                      <SelectItem value="excel">Excel (XLSX)</SelectItem>
-                      <SelectItem value="text">Text/HTML/MD</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <Select value={sortBy} onValueChange={setSortBy}>
-                    <SelectTrigger className="w-[180px]"><SelectValue placeholder="Sort by" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="recent">Recently modified</SelectItem>
-                      <SelectItem value="name">Name (A–Z)</SelectItem>
-                    </SelectContent>
-                  </Select>
+          <Card className="h-[calc(100vh-220px)] flex flex-col border-0 shadow-lg overflow-hidden">
+            <div className="p-4 border-b border-border/40 bg-muted/20">
+              <div className="flex items-center justify-between gap-3 mb-3">
+                <div className="relative flex-1">
+                  <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input 
+                    placeholder="Search templates..." 
+                    value={q} 
+                    onChange={(e) => setQ(e.target.value)} 
+                    className="pl-9 h-9 bg-background/50 border-border/50 focus:bg-background"
+                  />
                 </div>
-
-                {/* Scrollable content area */}
-                <div className="flex-1 overflow-y-auto space-y-2">
+                <Badge variant="secondary" className="text-xs font-medium px-3 py-1 bg-primary/10 text-primary border-primary/20 shrink-0">
+                  {items.length}
+                </Badge>
+              </div>
+              <div className="flex items-center gap-2">
+                <Select value={typeFilter} onValueChange={setTypeFilter}>
+                  <SelectTrigger className="w-[160px] h-8"><SelectValue placeholder="Type" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All types</SelectItem>
+                    <SelectItem value="docx">Word (DOCX)</SelectItem>
+                    <SelectItem value="excel">Excel (XLSX)</SelectItem>
+                    <SelectItem value="text">Text/HTML/MD</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Select value={sortBy} onValueChange={setSortBy}>
+                  <SelectTrigger className="w-[180px] h-8"><SelectValue placeholder="Sort by" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="recent">Recently modified</SelectItem>
+                    <SelectItem value="name">Name (A–Z)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            
+            {loading ? (
+              <div className="p-4">
+                <div className="text-sm text-muted-foreground">Loading templates…</div>
+              </div>
+            ) : items.length ? (
+              <div className="flex-1 overflow-y-auto">
+                <div className="p-4 space-y-2">
                   {items
                     .filter((t) => !q || (t.name || t.slug).toLowerCase().includes(q.toLowerCase()) || t.slug.toLowerCase().includes(q.toLowerCase()))
                     .filter((t) => typeFilter === 'all' ? true : (typeFilter === 'docx' ? !!t.hasDocx : (typeFilter === 'excel' ? !!(t as any).hasExcel : !t.hasDocx && !((t as any).hasExcel))))
@@ -354,9 +371,11 @@ export default function TemplatesPage() {
                       </div>
                     ))}
                 </div>
-              </>
+              </div>
             ) : (
-              <div className="text-sm text-muted-foreground">No templates yet. Upload one to get started.</div>
+              <div className="p-4">
+                <div className="text-sm text-muted-foreground">No templates yet. Upload one to get started.</div>
+              </div>
             )}
           </Card>
         </div>
@@ -371,7 +390,7 @@ export default function TemplatesPage() {
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={confirmDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">Delete</AlertDialogAction>
+            <AlertDialogAction onClick={confirmDelete} className="!bg-destructive !text-destructive-foreground hover:!bg-destructive/90 focus:!ring-destructive">Delete</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

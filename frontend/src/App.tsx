@@ -7,6 +7,7 @@ import TemplatesPage from "./pages/Templates";
 import SettingsPage from "./pages/Settings";
 import Setup from "./components/Setup";
 import { Separator } from "./components/ui/separator";
+import { Icon } from "./components/icons";
 
 function useHashRoute() {
   const [hash, setHash] = React.useState<string>(() => location.hash || "#customers");
@@ -40,20 +41,55 @@ export default function App() {
     "sidebar-link " + (active ? "is-active" : "");
 
   return (
-    <div className="grid grid-cols-[240px_1fr] h-screen bg-background">
-      <aside className="app-sidebar border-r p-4">
-        <div className="text-lg font-semibold tracking-tight">DocSmith</div>
-        <nav className="mt-4 flex flex-col gap-1">
-          <a className={linkCls(hash==="#customers")}
-             href="#customers">Customers</a>
-          <a className={linkCls(hash.startsWith("#workspaces"))}
-             href="#workspaces">Workspaces</a>
-          <a className={linkCls(hash.startsWith("#jobs"))}
-             href="#jobs">Jobs</a>
-          <a className={linkCls(hash==="#templates")}
-             href="#templates">Templates</a>
-          <a className={linkCls(hash==="#settings")}
-             href="#settings">Settings</a>
+    <div className="grid grid-cols-[260px_1fr] h-screen bg-background">
+      <aside className="app-sidebar border-r">
+        {/* Brand/Logo Area */}
+        <div className="p-6 border-b border-border/50">
+          <div className="flex items-center gap-3">
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+              <Icon.FileText className="h-4 w-4" />
+            </div>
+            <div>
+              <div className="text-lg font-semibold tracking-tight">DocSmith</div>
+              <div className="text-xs text-muted-foreground">Document Management</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Navigation */}
+        <nav className="p-4 space-y-1">
+          <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wider">
+            Main
+          </div>
+          <a className={linkCls(hash==="#customers") + " group"}
+             href="#customers">
+            <Icon.Users className="h-4 w-4" />
+            <span>Customers</span>
+          </a>
+          <a className={linkCls(hash.startsWith("#workspaces")) + " group"}
+             href="#workspaces">
+            <Icon.Folder className="h-4 w-4" />
+            <span>Workspaces</span>
+          </a>
+          <a className={linkCls(hash.startsWith("#jobs")) + " group"}
+             href="#jobs">
+            <Icon.Activity className="h-4 w-4" />
+            <span>Jobs</span>
+          </a>
+          
+          <div className="px-2 py-1.5 text-xs font-medium text-muted-foreground uppercase tracking-wider mt-4">
+            Resources
+          </div>
+          <a className={linkCls(hash==="#templates") + " group"}
+             href="#templates">
+            <Icon.FileText className="h-4 w-4" />
+            <span>Templates</span>
+          </a>
+          <a className={linkCls(hash==="#settings") + " group"}
+             href="#settings">
+            <Icon.Settings className="h-4 w-4" />
+            <span>Settings</span>
+          </a>
         </nav>
       </aside>
       <main className="p-6 overflow-hidden">

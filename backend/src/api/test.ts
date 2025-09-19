@@ -8,6 +8,14 @@ import fs from "fs"
 const router = Router()
 
 /**
+ * GET /api/test
+ * Simple health check endpoint
+ */
+router.get("/", (req, res) => {
+  res.json({ status: "ok", timestamp: new Date().toISOString() })
+})
+
+/**
  * POST /api/test/reset
  * Wipes SQLite DB and clears library folders (customers + .cache).
  * For local dev/testing only.

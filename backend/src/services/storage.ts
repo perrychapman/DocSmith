@@ -7,7 +7,25 @@ let db: sqlite3.Database | null = null
 export function getDB(): sqlite3.Database {
   if (!db) {
     const dbPath = path.resolve(__dirname, "../../data/app.sqlite")
-    const schemaPath = path.resolve(__dirname, "../db/schema.sql")
+    
+    // Try multiple possible schema paths (development vs production/bundled)
+    const possibleSchemaPaths = [
+      path.resolve(__dirname, "../db/schema.sql"),      // Development
+      path.resolve(__dirname, "./db/schema.sql"),       // Bundled (esbuild flattens structure)
+      path.resolve(__dirname, "db/schema.sql")          // Alternative bundled path
+    ]
+    
+    let schemaPath: string | null = null
+    for (const possiblePath of possibleSchemaPaths) {
+      if (fs.existsSync(possiblePath)) {
+        schemaPath = possiblePath
+        break
+      }
+    }
+    
+    if (!schemaPath) {
+      throw new Error(`Could not find schema.sql in any of these locations: ${possibleSchemaPaths.join(", ")}`)
+    }
 
     // Ensure /data exists
     const dataDir = path.resolve(__dirname, "../../data")

@@ -71,15 +71,33 @@ function applyCellFormatting(cell: ExcelJS.Cell, spec: ExcelCellSpec) {
 
 // Accept broad input buffer types to avoid typing friction across Node versions
 export async function mergeOpsIntoExcelTemplate(templateBuffer: ArrayBuffer | Uint8Array | any, ops: ExcelOps | any): Promise<Buffer> {
-  const workbook = new ExcelJS.Workbook()
-  // exceljs typings vary; cast to any to satisfy both Buffer/ArrayBuffer/Uint8Array
-  await workbook.xlsx.load(templateBuffer as any)
-  const sheets: ExcelSheetSpec[] = Array.isArray((ops && ops.sheets)) ? ops.sheets : []
+  try {
+    const workbook = new ExcelJS.Workbook()
+    // exceljs typings vary; cast to any to satisfy both Buffer/ArrayBuffer/Uint8Array
+    await workbook.xlsx.load(templateBuffer as any)
+    const sheets: ExcelSheetSpec[] = Array.isArray((ops && ops.sheets)) ? ops.sheets : []
 
-  for (const s of sheets) {
-    if (!s || !s.name) continue
-    let ws = workbook.getWorksheet(String(s.name))
-    if (!ws) ws = workbook.addWorksheet(String(s.name))
+    for (const s of sheets) {
+      if (!s || !s.name) continue
+      let ws = workbook.getWorksheet(String(s.name))
+      if (!ws) ws = workbook.addWorksheet(String(s.name))
+
+      // Clear any autofilters that might cause issues with filterButton property
+      try {
+        if ((ws as any).autoFilter) {
+          (ws as any).autoFilter = undefined
+        }
+        // Also clear any table references that might have filter buttons
+        if ((ws as any).tables) {
+          for (const table of (ws as any).tables) {
+            if (table && table.filterButton !== undefined) {
+              table.filterButton = false
+            }
+          }
+        }
+      } catch (autoFilterError) {
+        console.warn('Warning: Failed to clear autoFilter/tables:', autoFilterError)
+      }
 
     // Row insertions (with optional style copy)
     if (Array.isArray(s.insertRows) && s.insertRows.length) {
@@ -158,8 +176,40 @@ export async function mergeOpsIntoExcelTemplate(templateBuffer: ArrayBuffer | Ui
     }
   }
 
-  const out = await workbook.xlsx.writeBuffer()
-  return Buffer.isBuffer(out) ? out : Buffer.from(out as ArrayBuffer)
+  // Write the modified workbook with error handling for filterButton issues
+  try {
+    const out = await workbook.xlsx.writeBuffer()
+    return Buffer.isBuffer(out) ? out : Buffer.from(out as ArrayBuffer)
+  } catch (writeError) {
+    // If writing fails due to filterButton or similar issues, try to fix and retry
+    console.warn('First writeBuffer attempt failed, trying to fix worksheet properties:', writeError)
+    
+    // Try to clear all problematic properties from all worksheets
+    workbook.worksheets.forEach(ws => {
+      try {
+        if ((ws as any).autoFilter) {
+          (ws as any).autoFilter = undefined
+        }
+        if ((ws as any).tables) {
+          (ws as any).tables = []
+        }
+        // Clear any filter buttons that might be undefined
+        if ((ws as any).filterButton !== undefined) {
+          delete (ws as any).filterButton
+        }
+      } catch (cleanupError) {
+        console.warn('Failed to clean worksheet properties:', cleanupError)
+      }
+    })
+    
+    // Retry the write operation
+    const out = await workbook.xlsx.writeBuffer()
+    return Buffer.isBuffer(out) ? out : Buffer.from(out as ArrayBuffer)
+  }
+  } catch (error) {
+    console.error('ExcelJS merge error:', error)
+    throw new Error(`Excel template merge failed: ${error instanceof Error ? error.message : String(error)}`)
+  }
 }
 
 export default { mergeOpsIntoExcelTemplate }

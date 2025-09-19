@@ -1,0 +1,52 @@
+{
+  "iconSizes": {
+    "16": {
+      "file": "docsmith-16.ico",
+      "description": "Small taskbar and system tray icon",
+      "size": "16x16",
+      "usage": ["taskbar", "systray", "small-ui"]
+    },
+    "32": {
+      "file": "docsmith-32.ico", 
+      "description": "Standard desktop and file explorer icon",
+      "size": "32x32",
+      "usage": ["desktop", "explorer", "standard"]
+    },
+    "48": {
+      "file": "docsmith-48.ico",
+      "description": "Large icon view and installer",
+      "size": "48x48", 
+      "usage": ["large-view", "installer", "high-quality"]
+    },
+    "256": {
+      "file": "docsmith-256.ico",
+      "description": "High-resolution for modern displays",
+      "size": "256x256",
+      "usage": ["high-dpi", "retina", "modern"]
+    }
+  },
+  "platformDefaults": {
+    "win32": {
+      "app": "48",
+      "installer": "48", 
+      "uninstaller": "32",
+      "reasoning": "Windows prefers 48x48 for installers and app icons, 32x32 for uninstaller"
+    },
+    "darwin": {
+      "app": "256",
+      "reasoning": "macOS prefers high-resolution icons for Retina displays"
+    },
+    "linux": {
+      "app": "48",
+      "reasoning": "Linux desktop environments typically use 48x48 as standard"
+    }
+  },
+  "currentConfig": {
+    "platform": "win32",
+    "app": "48",
+    "installer": "48",
+    "uninstaller": "48"
+  },
+  "generatedAt": "2025-09-19T00:00:00.000Z",
+  "version": "1.0.0"
+}

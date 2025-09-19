@@ -12,7 +12,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import { Search } from "lucide-react";
 import { toast } from "sonner";
-import { apiFetch } from "../lib/api";
+import { apiFetch, apiEventSource } from '../lib/api';
 
 type TItem = { slug: string; name?: string; dir?: string; hasTemplate?: boolean; hasDocx?: boolean; hasExcel?: boolean; hasSource?: boolean; hasFullGen?: boolean; compiledAt?: string; workspaceSlug?: string; updatedAt?: string; versionCount?: number };
 
@@ -73,7 +73,7 @@ export default function TemplatesPage() {
     try {
       setCompiling(sl)
       setCompLogs([]); setCompSteps({}); setCompProgress(0); setCompJobId(null)
-      const es = new EventSource(`/api/templates/${encodeURIComponent(sl)}/compile/stream`)
+      const es = apiEventSource(`/api/templates/${encodeURIComponent(sl)}/compile/stream`)
       compEsRef.current = es
       es.onmessage = (ev) => {
         try {
@@ -206,35 +206,49 @@ export default function TemplatesPage() {
               <Button><Icon.Upload className="h-4 w-4 mr-2" />Upload</Button>
             </DialogTrigger>
             <DialogContent>
-              <DialogHeader><DialogTitle>Upload Template Source</DialogTitle></DialogHeader>
-              <div className="space-y-3">
-                <Input placeholder="Display name (optional)" className="h-9" value={name} onChange={(e) => setName(e.target.value)} />
-                <Input placeholder="Slug (optional)" className="h-9" value={slug} onChange={(e) => setSlug(e.target.value)} />
-                <div className="text-sm text-muted-foreground">Click the area below to attach a file, or drag and drop.</div>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  className="hidden"
-                  disabled={uploading}
-                  onChange={(e) => setFile(e.target.files?.[0] || null)}
-                />
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
-                  onDrop={(e) => {
-                    e.preventDefault(); e.stopPropagation();
-                    const f = (e as any).dataTransfer?.files?.[0] as File | undefined;
-                    if (f) setFile(f);
-                  }}
-                  disabled={uploading}
-                  className="w-full rounded-md border border-dashed p-6 text-center hover:bg-accent/40 transition flex flex-col items-center justify-center text-muted-foreground"
-                >
-                  <Icon.Upload className="h-6 w-6 mb-1" />
-                  <div className="font-medium">{file ? 'Change selected file' : 'Click to select a file'}</div>
-                  <div className="text-xs mt-1 max-w-full truncate">{file ? file.name : 'or drag and drop here'}</div>
-                </button>
-                <div className="text-xs text-muted-foreground">Supported: Markdown (.md), HTML (.html), Text (.txt), Word (.docx), Excel (.xlsx). Compile to Handlebars with AI after upload.</div>
+              <DialogHeader>
+                <DialogTitle>Upload Template Source</DialogTitle>
+                <DialogDescription>
+                  Upload template files for document generation.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4 py-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Display name (optional)</label>
+                  <Input placeholder="My Template" value={name} onChange={(e) => setName(e.target.value)} />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Slug (optional)</label>
+                  <Input placeholder="my-template" value={slug} onChange={(e) => setSlug(e.target.value)} />
+                </div>
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Template file</label>
+                  <div className="text-sm text-muted-foreground">Click the area below to attach a file, or drag and drop.</div>
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    className="hidden"
+                    disabled={uploading}
+                    onChange={(e) => setFile(e.target.files?.[0] || null)}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                    onDrop={(e) => {
+                      e.preventDefault(); e.stopPropagation();
+                      const f = (e as any).dataTransfer?.files?.[0] as File | undefined;
+                      if (f) setFile(f);
+                    }}
+                    disabled={uploading}
+                    className="w-full rounded-md border border-dashed p-6 text-center hover:bg-accent/40 transition flex flex-col items-center justify-center text-muted-foreground"
+                  >
+                    <Icon.Upload className="h-6 w-6 mb-1" />
+                    <div className="font-medium">{file ? 'Change selected file' : 'Click to select a file'}</div>
+                    <div className="text-xs mt-1 max-w-full whitespace-normal break-all">{file ? file.name : 'or drag and drop here'}</div>
+                  </button>
+                  <div className="text-xs text-muted-foreground">Supported: Markdown (.md), HTML (.html), Text (.txt), Word (.docx), Excel (.xlsx). Compile to Handlebars with AI after upload.</div>
+                </div>
               </div>
               <DialogFooter>
                 <Button variant="secondary" onClick={() => setUploadOpen(false)} disabled={uploading}>Cancel</Button>
@@ -258,7 +272,7 @@ export default function TemplatesPage() {
             <DialogContent>
               <DialogHeader>
                 <DialogTitle>Upload Template</DialogTitle>
-                <DialogDescription>Upload a ZIP file containing your template files.</DialogDescription>
+                <DialogDescription>Upload template files for document generation.</DialogDescription>
               </DialogHeader>
               <div className="space-y-4 py-4">
                 <div className="space-y-2">
@@ -278,14 +292,32 @@ export default function TemplatesPage() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">ZIP file</label>
-                  <input 
-                    type="file" 
-                    accept=".zip" 
+                  <label className="text-sm font-medium">Template file</label>
+                  <div className="text-sm text-muted-foreground">Click the area below to attach a file, or drag and drop.</div>
+                  <input
                     ref={fileInputRef}
-                    onChange={(e) => setFile(e.target.files?.[0] || null)} 
-                    className="block w-full text-sm text-muted-foreground file:mr-4 file:py-2 file:px-4 file:rounded-md file:border-0 file:text-sm file:font-medium file:bg-primary file:text-primary-foreground hover:file:bg-primary/80"
+                    type="file"
+                    className="hidden"
+                    disabled={uploading}
+                    onChange={(e) => setFile(e.target.files?.[0] || null)}
                   />
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+                    onDrop={(e) => {
+                      e.preventDefault(); e.stopPropagation();
+                      const f = (e as any).dataTransfer?.files?.[0] as File | undefined;
+                      if (f) setFile(f);
+                    }}
+                    disabled={uploading}
+                    className="w-full rounded-md border border-dashed p-6 text-center hover:bg-accent/40 transition flex flex-col items-center justify-center text-muted-foreground"
+                  >
+                    <Icon.Upload className="h-6 w-6 mb-1" />
+                    <div className="font-medium">{file ? 'Change selected file' : 'Click to select a file'}</div>
+                    <div className="text-xs mt-1 max-w-full whitespace-normal break-all">{file ? file.name : 'or drag and drop here'}</div>
+                  </button>
+                  <div className="text-xs text-muted-foreground">Supported: Markdown (.md), HTML (.html), Text (.txt), Word (.docx), Excel (.xlsx). Compile to Handlebars with AI after upload.</div>
                 </div>
               </div>
               <DialogFooter>
@@ -444,7 +476,10 @@ export default function TemplatesPage() {
       {/* Code Modal */}
       <Dialog open={!!codeModal} onOpenChange={(v) => { if (!v) setCodeModal(null) }}>
         <DialogContent className="sm:max-w-3xl">
-          <DialogHeader><DialogTitle>{codeModal?.title || 'Code'}</DialogTitle></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>{codeModal?.title || 'Code'}</DialogTitle>
+            <DialogDescription>View generated code for this template.</DialogDescription>
+          </DialogHeader>
           <div className="border rounded-md bg-muted/30 px-3 py-2 h-96 overflow-auto text-sm">
             <pre className="whitespace-pre-wrap">{codeModal?.code || ''}</pre>
           </div>

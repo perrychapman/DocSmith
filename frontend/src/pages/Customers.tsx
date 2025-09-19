@@ -8,7 +8,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogT
 import { Icon } from "../components/icons";
 import { Maximize2, Minimize2, Search, ExternalLink, Download } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "../components/ui/tooltip";
-import { A, apiFetch } from "../lib/api";
+import { A, apiFetch, apiEventSource } from "../lib/api";
 import WorkspaceChat from "../components/WorkspaceChat";
 import { toast } from "sonner";
 import { Progress } from "../components/ui/progress";
@@ -251,7 +251,7 @@ export function CustomersPage() {
       setGenSteps({}); setGenProgress(0); setGenError(null);
       const extra = genInstructions && genInstructions.trim().length ? `&instructions=${encodeURIComponent(genInstructions)}` : ''
       const url = `/api/generate/stream?customerId=${encodeURIComponent(String(selectedId))}&template=${encodeURIComponent(String(selectedTemplate))}${extra}`
-      const es = new EventSource(url)
+      const es = apiEventSource(url)
       genEventRef.current = es
       let fileName: string | null = null
       es.onmessage = (ev) => {

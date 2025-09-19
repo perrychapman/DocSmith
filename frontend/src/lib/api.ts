@@ -1,29 +1,43 @@
 // Helper to get the base URL for API calls
 function getBaseUrl(): string {
-  const isElectron = typeof window !== 'undefined' && navigator.userAgent.includes('Electron');
+  const isElectron = typeof window !== 'undefined' && (
+    navigator.userAgent.includes('Electron') || 
+    (window as any).electronAPI || 
+    window.location.protocol === 'file:'
+  );
   const isProd = import.meta.env.MODE === 'production';
   const isFileProtocol = typeof window !== 'undefined' && window.location.protocol === 'file:';
   
-  // In Electron, we're either in production mode OR loading from file protocol
-  const shouldUseLocalhost = isElectron && (isProd || isFileProtocol);
+  // Debug logging in development
+  if (import.meta.env.DEV) {
+    console.log('API Base URL Detection:', {
+      isElectron,
+      isProd,
+      isFileProtocol,
+      userAgent: navigator.userAgent,
+      protocol: window.location.protocol
+    });
+  }
   
-  console.log('API Base URL Detection:', {
-    isElectron,
-    isProd,
-    isFileProtocol,
-    shouldUseLocalhost,
-    userAgent: typeof navigator !== 'undefined' ? navigator.userAgent : 'undefined',
-    mode: import.meta.env.MODE,
-    protocol: typeof window !== 'undefined' ? window.location.protocol : 'undefined'
-  });
+  // In Electron production or when using file protocol, always use localhost:3000
+  if (isElectron || isFileProtocol) {
+    return 'http://localhost:3000';
+  }
   
-  return shouldUseLocalhost ? 'http://localhost:3000' : '';
+  // In web development, use empty string (relative URLs)
+  return '';
 }
 
 // Helper function for direct fetch calls with base URL
 export function apiFetch(url: string, options?: RequestInit): Promise<Response> {
   const baseUrl = getBaseUrl();
   return fetch(baseUrl + url, options);
+}
+
+// Helper function for EventSource with base URL
+export function apiEventSource(url: string): EventSource {
+  const baseUrl = getBaseUrl();
+  return new EventSource(baseUrl + url);
 }
 
 export async function jget<T = any>(url: string): Promise<T> {

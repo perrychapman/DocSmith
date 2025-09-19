@@ -236,7 +236,9 @@ function createWindow() {
                 PORT: '3000',
                 NODE_ENV: 'production'
             },
-            cwd: path.dirname(backendPath),
+            cwd: isPackaged
+                ? path.join(process.resourcesPath, 'app.asar.unpacked')
+                : path.join(__dirname, '..'),
             stdio: ['pipe', 'pipe', 'pipe'],
         });
         backendProcess.stdout?.on('data', (data) => {

@@ -12,22 +12,29 @@
     ],
     "scripts": {
         "dev:backend": "nodemon --watch backend/src --ext ts,js --exec ts-node backend/src/server.ts",
-        "build:backend": "powershell -Command \"Remove-Item backend/dist -Recurse -Force -ErrorAction SilentlyContinue\" && tsc -p backend/tsconfig.json && xcopy \"backend\\src\\db\\*.sql\" \"backend\\dist\\db\\\" /Y && echo {\"type\":\"commonjs\"} > backend/dist/package.json",
+        "build:backend": "powershell -Command \"Remove-Item backend/dist -Recurse -Force -ErrorAction SilentlyContinue\" && npx esbuild backend/src/server.ts --bundle --platform=node --target=node20 --outfile=backend/dist/server.js --external:sqlite3 && xcopy \"backend\\src\\db\\*.sql\" \"backend\\dist\\db\\\" /Y && xcopy \"backend\\package.json\" \"backend\\dist\\\" /Y",
         "build:electron": "tsc electron/main.ts --outDir electron --target es2020 --module es2020 --moduleResolution node --esModuleInterop && tsc electron/preload.ts --outDir electron --target es2020 --module commonjs --moduleResolution node --esModuleInterop",
         "start:backend": "node backend/dist/server.js",
         "dev": "concurrently -n backend,frontend -c yellow,cyan \"npm:dev:backend\" \"npm --workspace frontend run dev\"",
-        "build": "npm run build:backend && npm run build:electron && npm --workspace frontend run build",
+        "build": "npm run build:backend && npm run build:electron && npm --workspace backend install && cd backend && npm install typescript@^5.9.2 --no-workspaces && cd .. && cross-env VITE_ELECTRON=true npm --workspace frontend run build",
         "electron:dev": "concurrently -n backend,frontend,electron -c yellow,cyan,magenta \"npm:dev:backend\" \"npm --workspace frontend run dev\" \"electron .\"",
-        "electron:build": "npm run build && electron-builder"
+        "electron:build": "npm run build && electron-builder",
+        "electron:build:win": "npm run build && electron-builder --win",
+        "electron:build:mac": "npm run build && electron-builder --mac",
+        "electron:build:linux": "npm run build && electron-builder --linux"
     },
     "devDependencies": {
         "@types/cors": "^2.8.19",
         "@types/express": "^5.0.3",
         "@types/node": "^24.5.1",
         "concurrently": "^9.2.1",
+        "cross-env": "^10.0.0",
         "electron": "^38.1.2",
         "electron-builder": "^26.0.12",
+        "esbuild": "^0.25.10",
         "nodemon": "^3.1.10",
+        "sharp": "^0.34.4",
+        "to-ico": "^1.1.5",
         "ts-node": "^10.9.2",
         "typescript": "^5.9.2"
     },
@@ -53,6 +60,7 @@
     "build": {
         "appId": "com.docsmith.app",
         "productName": "DocSmith",
+        "icon": "frontend\\public\\favicon.ico",
         "directories": {
             "buildResources": "build",
             "output": "dist-release"
@@ -61,13 +69,35 @@
             "frontend/dist/**",
             "backend/dist/**",
             "backend/package.json",
-            "electron/main.js"
+            "node_modules/sqlite3/**",
+            "node_modules/bindings/**",
+            "node_modules/file-uri-to-path/**",
+            "electron/main.js",
+            "electron/preload.js"
         ],
         "asarUnpack": [
-            "backend/dist/**"
+            "backend/dist/**",
+            "node_modules/sqlite3/**",
+            "node_modules/bindings/**",
+            "node_modules/file-uri-to-path/**"
         ],
         "win": {
-            "target": "nsis"
+            "target": {
+                "target": "nsis",
+                "arch": [
+                    "x64"
+                ]
+            }
+        },
+        "nsis": {
+            "oneClick": false,
+            "allowToChangeInstallationDirectory": true,
+            "allowElevation": true,
+            "installerIcon": "frontend\\public\\favicon.ico",
+            "uninstallerIcon": "frontend\\public\\favicon.ico",
+            "createDesktopShortcut": true,
+            "createStartMenuShortcut": true,
+            "shortcutName": "DocSmith"
         },
         "mac": {
             "target": "dmg"

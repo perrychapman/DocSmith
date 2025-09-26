@@ -6,7 +6,7 @@ import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbP
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, DialogDescription, DialogClose } from "../components/ui/dialog";
 import { Icon } from "../components/icons";
-import { Maximize2, Minimize2, Search, ExternalLink, Download } from "lucide-react";
+import { Maximize2, Minimize2, Search, ExternalLink, Download, FileText, FileSpreadsheet, FileCode, FileQuestion, FileType } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "../components/ui/tooltip";
 import { A, apiFetch, apiEventSource } from "../lib/api";
 import WorkspaceChat from "../components/WorkspaceChat";
@@ -78,6 +78,55 @@ export function CustomersPage() {
     let idx = 0;
     while (val >= 1024 && idx < units.length - 1) { val /= 1024; idx++; }
     return `${val.toFixed(val < 10 ? 1 : 0)} ${units[idx]}`;
+  }
+
+  function formatRelativeTime(value?: string | number | Date): string {
+    if (!value) return "-";
+    try {
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return "-";
+      const diffMs = date.getTime() - Date.now();
+      const diffSeconds = Math.round(diffMs / 1000);
+      const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+      const absSeconds = Math.abs(diffSeconds);
+      if (absSeconds < 60) return rtf.format(diffSeconds, 'second');
+      const diffMinutes = Math.round(diffSeconds / 60);
+      if (Math.abs(diffMinutes) < 60) return rtf.format(diffMinutes, 'minute');
+      const diffHours = Math.round(diffMinutes / 60);
+      if (Math.abs(diffHours) < 24) return rtf.format(diffHours, 'hour');
+      const diffDays = Math.round(diffHours / 24);
+      if (Math.abs(diffDays) < 7) return rtf.format(diffDays, 'day');
+      const diffWeeks = Math.round(diffDays / 7);
+      if (Math.abs(diffWeeks) < 5) return rtf.format(diffWeeks, 'week');
+      const diffMonths = Math.round(diffDays / 30);
+      if (Math.abs(diffMonths) < 12) return rtf.format(diffMonths, 'month');
+      const diffYears = Math.round(diffDays / 365);
+      return rtf.format(diffYears, 'year');
+    } catch {
+      return "-";
+    }
+  }
+
+  function getDocumentIconMeta(filename: string) {
+    const ext = (filename?.split('.').pop() || '').toLowerCase();
+    const wordExt = new Set(['doc', 'docx']);
+    const excelExt = new Set(['xls', 'xlsx', 'csv']);
+    const codeExt = new Set(['html', 'htm', 'xhtml']);
+    const markdownExt = new Set(['md', 'markdown']);
+
+    if (wordExt.has(ext)) {
+      return { Icon: FileText, wrapper: 'bg-blue-500/10 text-blue-500', label: 'Word document' };
+    }
+    if (excelExt.has(ext)) {
+      return { Icon: FileSpreadsheet, wrapper: 'bg-emerald-500/10 text-emerald-500', label: 'Spreadsheet' };
+    }
+    if (codeExt.has(ext)) {
+      return { Icon: FileCode, wrapper: 'bg-orange-500/10 text-orange-500', label: 'HTML file' };
+    }
+    if (markdownExt.has(ext)) {
+      return { Icon: FileType, wrapper: 'bg-purple-500/10 text-purple-500', label: 'Markdown file' };
+    }
+    return { Icon: FileQuestion, wrapper: 'bg-muted text-muted-foreground', label: 'Document' };
   }
 
   React.useEffect(() => {
@@ -760,8 +809,8 @@ export function CustomersPage() {
             </div>
 
             {/* Documents */}
-            <Card className="h-full flex flex-col border-0 shadow-lg overflow-hidden">
-              <Tabs value={docsTab} onValueChange={setDocsTab} className="h-full flex flex-col">
+            <Card className="h-full min-h-0 flex flex-col border-0 shadow-lg overflow-hidden">
+              <Tabs value={docsTab} onValueChange={setDocsTab} className="h-full min-h-0 flex flex-col">
                 <div className="p-4 border-b border-border/40 bg-muted/20">
                   <div className="flex items-center gap-3">
                     <TabsList className="inline-flex h-10 items-center justify-start rounded-md bg-muted p-1 text-muted-foreground">
@@ -908,54 +957,67 @@ export function CustomersPage() {
                 </div>
 
                 {/* Tab Content */}
-                <TabsContent value="uploaded" className="flex-1 min-h-0 mt-0">
+                <TabsContent value="uploaded" className="flex flex-col flex-1 min-h-0 mt-0 p-0 overflow-hidden data-[state=inactive]:hidden">
                   {!selectedId ? (
                     <div className="p-4">
                       <div className="text-sm text-muted-foreground">Select a customer to view uploaded documents.</div>
                     </div>
                   ) : loadingUploads ? (
                     <div className="p-4">
-                      <div className="text-sm text-muted-foreground">Loading uploaded documents…</div>
+                      <div className="text-sm text-muted-foreground">Loading uploaded documents.</div>
                     </div>
                   ) : (docQuery.trim() ? uploads.filter((u) => u.name.toLowerCase().includes(docQuery.trim().toLowerCase())).length : uploads.length) ? (
-                    <ScrollArea className="flex-1 min-h-0">
-                      <div className="p-4 space-y-2">
-                        {(docQuery.trim() ? uploads.filter((u) => u.name.toLowerCase().includes(docQuery.trim().toLowerCase())) : uploads).map((u, idx) => (
-                          <div key={idx} className="rounded-md border bg-card/50 transition px-4 py-3">
-                            <div className="flex items-center justify-between gap-3">
-                              <div className="flex items-center gap-2 min-w-0 flex-1">
-                                <Icon.File className="h-4 w-4 text-muted-foreground shrink-0" />
-                                <a
-                                  href={`/api/uploads/${selectedId}/file?name=${encodeURIComponent(u.name)}`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  title={u.name}
-                                  className="font-medium hover:underline truncate"
-                                >
-                                  {u.name}
-                                </a>
-                                <div className="text-xs text-muted-foreground shrink-0">{formatBytes(u.size)}</div>
+                    <ScrollArea className="flex-1 min-h-0 h-full">
+                      <div className="px-4 pb-4 space-y-2">
+                        {(docQuery.trim() ? uploads.filter((u) => u.name.toLowerCase().includes(docQuery.trim().toLowerCase())) : uploads).map((u, idx) => {
+                          const { Icon: DocIcon, wrapper, label } = getDocumentIconMeta(u.name);
+                          return (
+                          <div key={idx} className="rounded-md border bg-card/50 transition px-3 py-2">
+                            <div className="flex gap-3">
+                              <div className={`flex h-8 w-8 items-center justify-center rounded-md ${wrapper} shrink-0`} title={label}>
+                                <DocIcon className="h-4 w-4" />
                               </div>
-                              <div className="flex items-center gap-2 shrink-0">
-                                <div className="text-xs text-muted-foreground">{new Date(u.modifiedAt).toLocaleString()}</div>
-                                <Tooltip>
-                                  <TooltipTrigger>
-                                    <Button size="icon" variant="ghost" aria-label={`Download ${u.name}`} onClick={() => { const a = document.createElement('a'); a.href = `/api/uploads/${selectedId}/file?name=${encodeURIComponent(u.name)}`; a.download = u.name; document.body.appendChild(a); a.click(); a.remove(); }}>
-                                      <Download className="h-4 w-4" />
-                                    </Button>
-                                  </TooltipTrigger>
-                                </Tooltip>
-                                <Tooltip>
-                                  <TooltipTrigger>
-                                    <Button size="icon" variant="destructive" disabled={uploading || deleting === u.name} onClick={() => deleteUpload(u.name)} aria-label={`Delete ${u.name}`}>
-                                      {deleting === u.name ? '.' : <Icon.Trash className="h-4 w-4" />}
-                                    </Button>
-                                  </TooltipTrigger>
-                                </Tooltip>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center justify-between gap-3">
+                                  <div className="min-w-0">
+                                    <a
+                                      href={`/api/uploads/${selectedId}/file?name=${encodeURIComponent(u.name)}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      title={u.name}
+                                      className="font-medium hover:underline break-words leading-snug block"
+                                    >
+                                      {u.name}
+                                    </a>
+                                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                                      <span>{formatBytes(u.size)}</span>
+                                      <span title={new Date(u.modifiedAt).toLocaleString()}>{formatRelativeTime(u.modifiedAt)}</span>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+                                    <Tooltip>
+                                      <TooltipTrigger>
+                                        <Button size="icon" variant="ghost" className="h-9 w-9" aria-label={`Download ${u.name}`} onClick={() => { const a = document.createElement('a'); a.href = `/api/uploads/${selectedId}/file?name=${encodeURIComponent(u.name)}`; a.download = u.name; document.body.appendChild(a); a.click(); a.remove(); }}>
+                                          <Download className="h-4 w-4" />
+                                        </Button>
+                                      </TooltipTrigger>
+                                      <TooltipContent>Download</TooltipContent>
+                                    </Tooltip>
+                                    <Tooltip>
+                                      <TooltipTrigger>
+                                        <Button size="icon" variant="destructive" className="h-9 w-9" disabled={uploading || deleting === u.name} onClick={() => deleteUpload(u.name)} aria-label={`Delete ${u.name}`}>
+                                          {deleting === u.name ? '.' : <Icon.Trash className="h-4 w-4" />}
+                                        </Button>
+                                      </TooltipTrigger>
+                                      <TooltipContent>Delete</TooltipContent>
+                                    </Tooltip>
+                                  </div>
+                                </div>
                               </div>
                             </div>
                           </div>
-                        ))}
+                        );
+                        })}
                       </div>
                     </ScrollArea>
                   ) : (
@@ -965,47 +1027,59 @@ export function CustomersPage() {
                   )}
                 </TabsContent>
 
-                <TabsContent value="generated" className="flex-1 min-h-0 mt-0">
+                <TabsContent value="generated" className="flex flex-col flex-1 min-h-0 mt-0 p-0 overflow-hidden data-[state=inactive]:hidden">
                   {!selectedId ? (
                     <div className="p-4">
                       <div className="text-sm text-muted-foreground">Select a customer to view generated documents.</div>
                     </div>
                   ) : loadingGeneratedDocs ? (
                     <div className="p-4">
-                      <div className="text-sm text-muted-foreground">Loading generated documents…</div>
+                      <div className="text-sm text-muted-foreground">Loading generated documents.</div>
                     </div>
                   ) : (docQuery.trim() ? generatedDocs.filter((d) => d.name.toLowerCase().includes(docQuery.trim().toLowerCase())).length : generatedDocs.length) ? (
-                    <ScrollArea className="flex-1 min-h-0">
-                      <div className="p-4 space-y-2">
-                        {(docQuery.trim() ? generatedDocs.filter((d) => d.name.toLowerCase().includes(docQuery.trim().toLowerCase())) : generatedDocs).map((d, idx) => (
-                          <div key={idx} className="rounded-md border bg-card/50 transition px-4 py-3">
-                            <div className="flex items-center justify-between gap-3">
-                              <div className="flex items-center gap-2 min-w-0 flex-1">
-                                <Icon.File className="h-4 w-4 text-muted-foreground shrink-0" />
-                                <a
-                                  href={`/api/documents/${selectedId}/file?name=${encodeURIComponent(d.name)}`}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  title={d.name}
-                                  className="font-medium hover:underline truncate"
-                                >
-                                  {d.name}
-                                </a>
-                                <div className="text-xs text-muted-foreground shrink-0">{formatBytes(d.size)}</div>
+                    <ScrollArea className="flex-1 min-h-0 h-full">
+                      <div className="px-4 pb-4 space-y-2">
+                        {(docQuery.trim() ? generatedDocs.filter((d) => d.name.toLowerCase().includes(docQuery.trim().toLowerCase())) : generatedDocs).map((d, idx) => {
+                          const { Icon: DocIcon, wrapper, label } = getDocumentIconMeta(d.name);
+                          return (
+                          <div key={idx} className="rounded-md border bg-card/50 transition px-3 py-2">
+                            <div className="flex gap-3">
+                              <div className={`flex h-8 w-8 items-center justify-center rounded-md ${wrapper} shrink-0`} title={label}>
+                                <DocIcon className="h-4 w-4" />
                               </div>
-                              <div className="flex items-center gap-2 shrink-0">
-                                <div className="text-xs text-muted-foreground">{new Date(d.modifiedAt).toLocaleString()}</div>
-                                <Tooltip>
-                                  <TooltipTrigger>
-                                    <Button size="icon" variant="ghost" aria-label={`Download ${d.name}`} onClick={() => { const a = document.createElement('a'); a.href = `/api/documents/${selectedId}/file?name=${encodeURIComponent(d.name)}`; a.download = d.name; document.body.appendChild(a); a.click(); a.remove(); }}>
-                                      <Download className="h-4 w-4" />
-                                    </Button>
-                                  </TooltipTrigger>
-                                </Tooltip>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center justify-between gap-3">
+                                  <div className="min-w-0">
+                                    <a
+                                      href={`/api/documents/${selectedId}/file?name=${encodeURIComponent(d.name)}`}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      title={d.name}
+                                      className="font-medium hover:underline break-words leading-snug block"
+                                    >
+                                      {d.name}
+                                    </a>
+                                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                                      <span>{formatBytes(d.size)}</span>
+                                      <span title={new Date(d.modifiedAt).toLocaleString()}>{formatRelativeTime(d.modifiedAt)}</span>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+                                    <Tooltip>
+                                      <TooltipTrigger>
+                                        <Button size="icon" variant="ghost" className="h-9 w-9" aria-label={`Download ${d.name}`} onClick={() => { const a = document.createElement('a'); a.href = `/api/documents/${selectedId}/file?name=${encodeURIComponent(d.name)}`; a.download = d.name; document.body.appendChild(a); a.click(); a.remove(); }}>
+                                          <Download className="h-4 w-4" />
+                                        </Button>
+                                      </TooltipTrigger>
+                                      <TooltipContent>Download</TooltipContent>
+                                    </Tooltip>
+                                  </div>
+                                </div>
                               </div>
                             </div>
                           </div>
-                        ))}
+                        );
+                        })}
                       </div>
                     </ScrollArea>
                   ) : (
@@ -1348,7 +1422,7 @@ function RecentJobs({ selectedId }: { selectedId: number | null }) {
               <div className="flex-1 min-h-0 flex flex-col w-full">
                 <div className="font-medium mb-1">Logs</div>
                 <div className="border rounded bg-muted/30 p-2 flex-1 min-h-0">
-                  <ScrollArea className="flex-1 min-h-0">
+                  <ScrollArea className="flex-1 min-h-0 h-full">
                     <pre className="whitespace-pre-wrap pr-2">{Array.isArray(active.logs) ? active.logs.join('\n') : ''}</pre>
                   </ScrollArea>
                 </div>
@@ -1360,6 +1434,7 @@ function RecentJobs({ selectedId }: { selectedId: number | null }) {
     </div>
   )
 }
+
 
 
 

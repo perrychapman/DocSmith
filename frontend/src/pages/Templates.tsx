@@ -16,6 +16,10 @@ import { apiFetch, apiEventSource } from '../lib/api';
 
 type TItem = { slug: string; name?: string; dir?: string; hasTemplate?: boolean; hasDocx?: boolean; hasExcel?: boolean; hasSource?: boolean; hasFullGen?: boolean; compiledAt?: string; workspaceSlug?: string; updatedAt?: string; versionCount?: number };
 
+type CompileStatus = 'idle' | 'running' | 'success' | 'error';
+type CompileState = { status: CompileStatus; startedAt?: number; finishedAt?: number; error?: string };
+type CompileStateMap = Record<string, CompileState>;
+
 export default function TemplatesPage() {
   const [items, setItems] = React.useState<TItem[]>([]);
   const [loading, setLoading] = React.useState(true);
@@ -36,6 +40,17 @@ export default function TemplatesPage() {
   const [compProgress, setCompProgress] = React.useState<number | null>(null);
   const [compJobId, setCompJobId] = React.useState<string | null>(null);
   const compEsRef = React.useRef<EventSource | null>(null);
+  const [compileStates, setCompileStates] = React.useState<CompileStateMap>({});
+  const updateCompileState = React.useCallback((slug: string, patch: Partial<CompileState>) => {
+    setCompileStates((prev) => {
+      const prevState = prev[slug] || { status: 'idle' as CompileStatus };
+      const nextState = { ...prevState, ...patch };
+      if (nextState.status === 'running') {
+        nextState.finishedAt = undefined;
+      }
+      return { ...prev, [slug]: nextState };
+    });
+  }, []);
   const [q, setQ] = React.useState("");
   const [typeFilter, setTypeFilter] = React.useState<string>("all"); // all|docx|excel|text
   const [sortBy, setSortBy] = React.useState<string>("recent"); // recent|name
@@ -50,9 +65,44 @@ export default function TemplatesPage() {
       setItems([]);
     } finally { setLoading(false) }
   }
+  React.useEffect(() => {
+    setCompileStates((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      const currentSlugs = new Set(items.map((item) => item.slug));
+
+      for (const slug of Object.keys(next)) {
+        if (!currentSlugs.has(slug)) {
+          delete next[slug];
+          changed = true;
+        }
+      }
+
+      for (const item of items) {
+        const prevState = next[item.slug];
+        if (prevState?.status === 'running') continue;
+
+        if (item.hasFullGen) {
+          if (!prevState || prevState.status !== 'success') {
+            next[item.slug] = { ...(prevState || {}), status: 'success', error: undefined };
+            changed = true;
+          }
+        } else {
+          if (!prevState) {
+            next[item.slug] = { status: 'idle' };
+            changed = true;
+          } else if (prevState.status === 'success') {
+            next[item.slug] = { ...prevState, status: 'idle', error: undefined };
+            changed = true;
+          }
+        }
+      }
+
+      return changed ? next : prev;
+    });
+  }, [items]);
+
   React.useEffect(() => { load(); }, []);
-
-
 
   // Only Full Generator is supported now
 
@@ -71,8 +121,13 @@ export default function TemplatesPage() {
 
   async function compile(sl: string) {
     try {
+      if (compEsRef.current) { compEsRef.current.close(); compEsRef.current = null }
       setCompiling(sl)
-      setCompLogs([]); setCompSteps({}); setCompProgress(0); setCompJobId(null)
+      updateCompileState(sl, { status: 'running', startedAt: Date.now(), finishedAt: undefined, error: undefined })
+      setCompLogs([])
+      setCompSteps({})
+      setCompProgress(0)
+      setCompJobId(null)
       const es = apiEventSource(`/api/templates/${encodeURIComponent(sl)}/compile/stream`)
       compEsRef.current = es
       es.onmessage = (ev) => {
@@ -91,18 +146,31 @@ export default function TemplatesPage() {
             if (p != null) setCompProgress(p)
           } else if (data?.type === 'done') {
             setCompLogs((prev) => ([...(prev || []), 'done']))
+            updateCompileState(sl, { status: 'success', finishedAt: Date.now(), error: undefined })
             if (compEsRef.current) { compEsRef.current.close(); compEsRef.current = null }
-            setCompiling(null); setCompProgress(100); setCompJobId(null)
+            setCompiling(null)
+            setCompProgress(100)
+            setCompJobId(null)
             load()
           } else if (data?.type === 'error') {
-            setCompLogs((prev) => ([...(prev || []), `error:${String(data.error || 'unknown')}`]))
+            const errMessage = String(data.error || 'unknown')
+            setCompLogs((prev) => ([...(prev || []), `error:${errMessage}`]))
+            updateCompileState(sl, { status: 'error', finishedAt: Date.now(), error: errMessage })
             if (compEsRef.current) { compEsRef.current.close(); compEsRef.current = null }
-            setCompiling(null); setCompJobId(null)
+            setCompiling(null)
+            setCompJobId(null)
           }
         } catch { }
       }
-      es.onerror = () => { setCompLogs((prev) => ([...(prev || []), 'error:stream'])); if (compEsRef.current) { compEsRef.current.close(); compEsRef.current = null }; setCompiling(null); setCompJobId(null) }
+      es.onerror = () => {
+        setCompLogs((prev) => ([...(prev || []), 'error:stream']))
+        updateCompileState(sl, { status: 'error', finishedAt: Date.now(), error: 'stream' })
+        if (compEsRef.current) { compEsRef.current.close(); compEsRef.current = null }
+        setCompiling(null)
+        setCompJobId(null)
+      }
     } catch {
+      updateCompileState(sl, { status: 'error', finishedAt: Date.now() })
       setCompiling(null)
     }
   }
@@ -376,8 +444,20 @@ export default function TemplatesPage() {
                     .filter((t) => !q || (t.name || t.slug).toLowerCase().includes(q.toLowerCase()) || t.slug.toLowerCase().includes(q.toLowerCase()))
                     .filter((t) => typeFilter === 'all' ? true : (typeFilter === 'docx' ? !!t.hasDocx : (typeFilter === 'excel' ? !!(t as any).hasExcel : !t.hasDocx && !((t as any).hasExcel))))
                     .sort((a, b) => sortBy === 'name' ? String(a.name || a.slug).localeCompare(String(b.name || b.slug)) : (new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime()))
-                    .map((t) => (
-                      <div key={t.slug} className="rounded-md border bg-card/50 transition px-4 py-3">
+                    .map((t) => {
+                      const state = compileStates[t.slug];
+                      const effectiveStatus = state?.status ?? (t.hasFullGen ? 'success' : 'idle');
+                      const isActiveCompile = compiling === t.slug;
+                      const isCompiling = effectiveStatus === 'running' || isActiveCompile;
+                      const hadError = effectiveStatus === 'error';
+                      const hasCompiled = Boolean(t.hasFullGen || effectiveStatus === 'success');
+                      const anyCompileInFlight = Boolean(compiling);
+                      const disableCompileButton = isCompiling || (anyCompileInFlight && !isActiveCompile);
+                      const compileLabel = isCompiling ? 'Compiling...' : (hadError ? 'Retry compile' : (hasCompiled ? 'Recompile' : 'Compile'));
+                      const compileActionLabel = isCompiling ? 'Compiling template' : (hadError ? 'Retry compile for template' : (hasCompiled ? 'Recompile template' : 'Compile template'));
+                      const compileTooltip = isCompiling ? 'Compilation running...' : (hadError ? 'Last attempt failed - try again' : (hasCompiled ? 'Generate a fresh FullGen script' : 'Create the FullGen script'));
+                      return (
+                        <div key={t.slug} className="rounded-md border bg-card/50 transition px-4 py-3">
                         {/* ... rest of your template item content stays the same ... */}
                         <div className="flex items-center justify-between gap-3">
                           <div>
@@ -408,45 +488,58 @@ export default function TemplatesPage() {
                             <div>{t.updatedAt ? new Date(t.updatedAt).toLocaleString() : '—'}</div>
                           </div>
                         </div>
-                        <div className="mt-2 flex items-center gap-2 flex-wrap justify-end">
+                        <div className="mt-2 flex flex-col items-end gap-2">
                           <Tooltip>
                             <TooltipTrigger asChild>
-                              <Button size="icon" variant="ghost" aria-label="Open folder" title="Open Folder" onClick={async () => {
-                                try {
-                                  const r = await apiFetch(`/api/templates/${encodeURIComponent(t.slug)}/open-folder`, { method: 'POST' });
-                                  if (!r.ok) throw new Error(String(r.status));
-                                  toast.success('Opened folder');
-                                } catch { toast.error('Failed to open folder') }
-                              }}>
-                                <Icon.Folder className="h-4 w-4" />
+                              <Button
+                                size="default"
+                                variant="default"
+                                className={`gap-2 px-4 shadow-sm ${hadError ? 'ring-1 ring-warning/40' : ''}`}
+                                aria-label={compileActionLabel}
+                                title={compileActionLabel}
+                                onClick={() => compile(t.slug)}
+                                disabled={disableCompileButton}
+                                aria-busy={isCompiling}
+                              >
+                                <Icon.Refresh className={`h-4 w-4 ${isCompiling ? 'animate-spin' : ''}`} />
+                                <span>{compileLabel}</span>
                               </Button>
                             </TooltipTrigger>
-                            <TooltipContent>Open Folder</TooltipContent>
+                            <TooltipContent>{compileTooltip}</TooltipContent>
                           </Tooltip>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button size="icon" variant="ghost" aria-label="Compile" title={compiling === t.slug ? 'Compiling' : (t.hasFullGen ? 'Recompile' : 'Compile')} onClick={() => compile(t.slug)} disabled={compiling === t.slug}>
-                                <Icon.Refresh className="h-4 w-4" />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>{compiling === t.slug ? 'Compiling' : (t.hasFullGen ? 'Recompile' : 'Compile')}</TooltipContent>
-                          </Tooltip>
-                          {t.hasFullGen ? (
+                          <div className="flex items-center gap-2 flex-wrap justify-end">
                             <Tooltip>
                               <TooltipTrigger asChild>
-                                <Button size="icon" variant="ghost" aria-label="View FullGen" title="View FullGen" onClick={() => viewFullGen(t.slug)}>
-                                  <Icon.File className="h-4 w-4" />
+                                <Button size="icon" variant="ghost" aria-label="Open folder" title="Open Folder" onClick={async () => {
+                                  try {
+                                    const r = await apiFetch(`/api/templates/${encodeURIComponent(t.slug)}/open-folder`, { method: 'POST' });
+                                    if (!r.ok) throw new Error(String(r.status));
+                                    toast.success('Opened folder');
+                                  } catch { toast.error('Failed to open folder') }
+                                }}>
+                                  <Icon.Folder className="h-4 w-4" />
                                 </Button>
                               </TooltipTrigger>
-                              <TooltipContent>View FullGen</TooltipContent>
+                              <TooltipContent>Open Folder</TooltipContent>
                             </Tooltip>
-                          ) : null}
-                          <Button size="icon" variant="destructive" aria-label="Delete" title="Delete" onClick={() => startDelete(t.slug)}>
-                            <Icon.Trash className="h-4 w-4" />
-                          </Button>
+                            {t.hasFullGen ? (
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <Button size="icon" variant="ghost" aria-label="View FullGen" title="View FullGen" onClick={() => viewFullGen(t.slug)}>
+                                    <Icon.File className="h-4 w-4" />
+                                  </Button>
+                                </TooltipTrigger>
+                                <TooltipContent>View FullGen</TooltipContent>
+                              </Tooltip>
+                            ) : null}
+                            <Button size="icon" variant="destructive" aria-label="Delete" title="Delete" onClick={() => startDelete(t.slug)}>
+                              <Icon.Trash className="h-4 w-4" />
+                            </Button>
+                          </div>
                         </div>
                       </div>
-                    ))}
+                    );
+                    })}
                 </div>
               </div>
             ) : (

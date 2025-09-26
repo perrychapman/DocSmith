@@ -4,6 +4,7 @@ import { Button } from "./ui/Button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { Textarea } from "./ui/textarea";
 import { Icon } from "./icons";
+import { toast } from "sonner";
 import { A, apiFetch } from "../lib/api";
 import { readSSEStream, formatTimeAgo } from "../lib/utils";
 
@@ -38,6 +39,7 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
   const [loading, setLoading] = React.useState(false);
   const [replying, setReplying] = React.useState(false);
   const [stream] = React.useState(true);
+  const [exporting, setExporting] = React.useState(false);
   // Jobs for this workspace (UI-only correlation to hide codey outputs)
   type Job = {
     id: string;
@@ -277,11 +279,183 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
     } finally { setReplying(false) }
   }
 
-  return (
+async function exportHistory() {
+  if (exporting) return;
+  setExporting(true);
+  try {
+    const effectiveThread = threadSlug || (threads[0]?.slug ? String(threads[0].slug) : undefined);
+    const fetchLimit = 500;
+
+    let base: any[] = [];
+    if (effectiveThread) {
+      const data = await A.threadChats(slug, effectiveThread);
+      base = Array.isArray(data?.history) ? data.history : (Array.isArray(data) ? data : []);
+    } else {
+      const data = await A.workspaceChats(slug, fetchLimit, "asc");
+      base = Array.isArray(data?.history)
+        ? data.history
+        : (Array.isArray(data?.chats) ? data.chats : (Array.isArray(data) ? data : []));
+    }
+
+    let merged = sortOldestFirst(base);
+
+    try {
+      const persisted = await A.genCardsByWorkspace(slug).catch(() => ({ cards: [] }));
+      const cards: ExternalCard[] = Array.isArray((persisted as any)?.cards) ? (persisted as any).cards : [];
+      if (cards.length) {
+        const have = new Set(merged.filter((m: any) => m && m.card).map((m: any) => String(m.card.id)));
+        const mapped = cards
+          .filter((c: any) => !have.has(String(c.id)))
+          .map((c: any) => ({
+            role: c.side || "user",
+            content: "",
+            sentAt: Number(c.timestamp || 0) || Date.now(),
+            card: { ...c },
+          }));
+        if (mapped.length) merged = [...merged, ...mapped];
+      }
+    } catch (err) {
+      console.error("Failed to merge persisted cards for export", err);
+    }
+
+    if (externalCards && externalCards.length) {
+      const have = new Set(merged.filter((m: any) => m && m.card).map((m: any) => String(m.card.id)));
+      for (const c of externalCards) {
+        const key = String(c.id);
+        if (have.has(key)) continue;
+        merged.push({
+          role: c.side || "user",
+          content: "",
+          sentAt: Number(c.timestamp || 0) || Date.now(),
+          card: { ...c },
+        });
+        have.add(key);
+      }
+    }
+
+    merged = sortOldestFirst(merged);
+
+    const safeClone = (value: any) => JSON.parse(JSON.stringify(value ?? null));
+    const toIso = (value: any) => {
+      if (value == null) return null;
+      const n = typeof value === "number" ? value : Date.parse(String(value));
+      if (!Number.isFinite(n)) return null;
+      return new Date(n).toISOString();
+    };
+
+    const exportMessages = merged.map((message, index) => {
+      const cloned = safeClone(message);
+      const baseTimestamp =
+        cloned?.sentAt ?? cloned?.createdAt ?? cloned?.created_at ?? cloned?.timestamp ?? cloned?.date ?? null;
+      const textValue = cloned?.content ?? cloned?.message ?? cloned?.text ?? "";
+      return {
+        index,
+        role: cloned?.role != null ? String(cloned.role) : null,
+        text: typeof textValue === "string" ? textValue : String(textValue ?? ""),
+        timestamp: toIso(baseTimestamp),
+        timestampRaw: baseTimestamp ?? null,
+        card: cloned?.card ?? undefined,
+        sources: cloned?.sources ?? cloned?.documents ?? cloned?.context ?? undefined,
+        raw: cloned,
+      };
+    });
+
+    const metadata: Record<string, any> = {
+      workspaceSlug: slug,
+      threadSlug: effectiveThread ?? null,
+      exportedAt: new Date().toISOString(),
+      messageCount: exportMessages.length,
+      includesExternalCards: Boolean(externalCards && externalCards.length),
+      messages: exportMessages,
+    };
+
+    if (threads.length) {
+      metadata.threads = threads.map((t) => ({
+        slug: t?.slug != null ? String(t.slug) : null,
+        name: t?.name != null ? String(t.name) : null,
+      }));
+    }
+
+    const sanitizeSegment = (value?: string) => {
+      if (!value) return null;
+      const cleaned = value.replace(/[^a-z0-9_-]+/gi, "-").replace(/-+/g, "-").replace(/^-|-$/g, "");
+      return cleaned ? cleaned.toLowerCase() : null;
+    };
+
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const now = new Date();
+    const datePart = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
+    const timePart = `${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+    const stamp = `${datePart}-${timePart}`;
+
+    const segments = ["docsmith", "chat"];
+    const safeWorkspace = sanitizeSegment(slug) ?? "workspace";
+    segments.push(safeWorkspace);
+    const safeThread = sanitizeSegment(effectiveThread);
+    if (safeThread) segments.push(safeThread);
+    const filename = `${segments.join("-")}-${stamp}.json`;
+
+    const payload = JSON.stringify(metadata, null, 2);
+
+    if (typeof window === "undefined" || typeof document === "undefined") {
+      throw new Error("Export is only supported in a browser environment");
+    }
+
+    const blob = new Blob([payload], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    try {
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } finally {
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    }
+
+    const successMessage = exportMessages.length
+      ? `Exported ${exportMessages.length} chat message${exportMessages.length === 1 ? "" : "s"}`
+      : "Chat history exported (no messages yet)";
+    toast.success(successMessage);
+  } catch (error) {
+    console.error("Failed to export chat history", error);
+    toast.error("Failed to export chat history");
+  } finally {
+    setExporting(false);
+  }
+}
+
+return (
     <Card className={("h-full min-h-0 p-0 flex flex-col " + (className || '')).trim()}>
       <div className="flex items-center justify-between px-2.5 py-1.5 border-b">
         <strong>{title}</strong>
-        <div className="flex items-center gap-2">{headerActions}</div>
+        <div className="flex items-center gap-2">
+          <Tooltip>
+            <TooltipTrigger >
+              <Button
+                size="icon"
+                variant="ghost"
+                aria-label="Export chat history"
+                title="Export chat history"
+                disabled={exporting || loading}
+                onClick={(e) => {
+                  e.preventDefault();
+                  void exportHistory();
+                }}
+              >
+                {exporting ? (
+                  <Icon.Refresh className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Icon.Download className="h-4 w-4" />
+                )}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Export chat</TooltipContent>
+          </Tooltip>
+          {headerActions}
+        </div>
+
       </div>
       <div className="relative flex-1 min-h-0 flex">
         <div className="text-sm text-muted-foreground sr-only">{loading ? 'Loading chats.' : `${history.length} message${history.length === 1 ? '' : 's'}`}</div>
@@ -323,7 +497,7 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
                               isUser ? (
                                 <>
                                   <Tooltip>
-                                    <TooltipTrigger asChild>
+                                    <TooltipTrigger >
                                       <Button asChild size="icon" variant="ghost" aria-label="View job" title="View job">
                                         <a href={`#jobs?id=${encodeURIComponent(card.jobId)}`}>
                                           <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14L21 3"/></svg>
@@ -334,7 +508,7 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
                                   </Tooltip>
                                   {onOpenLogs ? (
                                     <Tooltip>
-                                      <TooltipTrigger asChild>
+                                      <TooltipTrigger >
                                         <Button size="icon" variant="ghost" aria-label="View logs" title="View logs" onClick={(e)=>{ e.preventDefault(); onOpenLogs?.(card.jobId!) }}>
                                           <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 4h18"/><path d="M3 10h18"/><path d="M3 16h18"/></svg>
                                         </Button>
@@ -346,7 +520,7 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
                               ) : (
                                 <>
                                   <Tooltip>
-                                    <TooltipTrigger asChild>
+                                    <TooltipTrigger >
                                       <Button asChild size="icon" variant="ghost" aria-label="Download" title="Download">
                                         <a href={`/api/generate/jobs/${encodeURIComponent(card.jobId)}/file?download=true`}>
                                           <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
@@ -356,7 +530,7 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
                                     <TooltipContent>Download</TooltipContent>
                                   </Tooltip>
                                   <Tooltip>
-                                    <TooltipTrigger asChild>
+                                    <TooltipTrigger >
                                       <Button size="icon" variant="ghost" aria-label="Open folder" title="Open folder" onClick={async (e)=>{ e.preventDefault(); try { await apiFetch(`/api/generate/jobs/${encodeURIComponent(card.jobId || '')}/reveal`) } catch {} }}>
                                         <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h5l2 3h9a1 1 0 0 1 1 1v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/></svg>
                                       </Button>
@@ -364,7 +538,7 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
                                     <TooltipContent>Open folder</TooltipContent>
                                   </Tooltip>
                                   <Tooltip>
-                                    <TooltipTrigger asChild>
+                                    <TooltipTrigger >
                                       <Button asChild size="icon" variant="ghost" aria-label="View job" title="View job">
                                         <a href={`#jobs?id=${encodeURIComponent(card.jobId)}`}>
                                           <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14L21 3"/></svg>
@@ -424,7 +598,7 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
           />
           {onOpenGenerate ? (
             <Tooltip>
-              <TooltipTrigger asChild>
+              <TooltipTrigger >
                 <Button
                   size="icon"
                   variant="ghost"
@@ -453,3 +627,8 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
     </Card>
   );
 }
+
+
+
+
+

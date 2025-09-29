@@ -227,10 +227,10 @@ export default function JobsPage() {
       </div>
       {error ? (<div className="text-sm text-red-600">Failed to load jobs: {error}</div>) : null}
 
-      <div className="grid grid-cols-12 gap-2 flex-1 min-h-[calc(100vh-200px)]">
+      <div className="grid grid-cols-12 gap-2 flex-1 min-h-0 lg:min-h-[calc(100vh-200px)]">
         {/* Left: Jobs list */}
-        <div className="col-span-12 md:col-span-4">
-          <Card className="flex-1 h-full overflow-hidden border-0 shadow-lg">
+        <div className="col-span-12 md:col-span-4 flex min-h-0">
+          <Card className="flex h-full w-full flex-col overflow-hidden border-0 shadow-lg">
             <div className="p-4 border-b border-border/40 bg-muted/20">
               <div className="flex items-center gap-3 mb-3">
                 <div className="relative flex-1">
@@ -262,7 +262,7 @@ export default function JobsPage() {
                 <Button variant="destructive" className="w-full h-9" onClick={()=> setClearOpen(true)}>Clear All</Button>
               </div>
             </div>
-            <ScrollArea className="h-full">
+            <ScrollArea className="flex-1 min-h-0">
               <div className="p-4">
                 <div className="space-y-2">
                   {filtered.map(j => (
@@ -282,7 +282,7 @@ export default function JobsPage() {
                             <span className="truncate">{j.template}</span>
                           </div>
                           <div className="text-xs text-muted-foreground mt-1 truncate">
-                            {!isCompileJob(j) ? `for ${String(j.customerName || j.customerId)} • ` : ''}{new Date(j.updatedAt).toLocaleString()}
+                            {!isCompileJob(j) ? `for ${String(j.customerName || j.customerId)} | ` : ''}{new Date(j.updatedAt).toLocaleString()}
                           </div>
                         </div>
                         <div className="ml-2 flex items-center">
@@ -303,8 +303,8 @@ export default function JobsPage() {
         </div>
 
         {/* Right: Job details */}
-        <div className="col-span-12 md:col-span-8">
-          <Card className="flex-1 h-full overflow-hidden border-0 shadow-lg">
+        <div className="col-span-12 md:col-span-8 flex min-h-0">
+          <Card className="flex h-full w-full flex-col overflow-hidden border-0 shadow-lg">
             {!active ? (
               <div className="p-8 text-center h-full flex items-center justify-center">
                 <div className="space-y-3">
@@ -315,7 +315,7 @@ export default function JobsPage() {
                 </div>
               </div>
             ) : (
-              <div className="flex flex-col h-full">
+              <div className="flex h-full min-h-0 flex-col">
                 <div className="p-4 border-b border-border/40 bg-muted/20">
                   <div className="flex items-center justify-between">
                     <div className="flex items-center gap-3">
@@ -340,75 +340,81 @@ export default function JobsPage() {
                     </div>
                   </div>
                 </div>
-                <ScrollArea className="flex-1">
-                  <div className="p-4 space-y-4 text-sm">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <div className="font-medium">
-                          {isCompileJob(active)
-                            ? `${active.template}`
-                            : `${active.template} for ${String(active.customerName || active.customerId)}`}
-                        </div>
-                        <Badge variant={isCompileJob(active)?'secondary':'outline'}>{isCompileJob(active)?'Template Compile':'Document Generation'}</Badge>
-                        {statusBadge(active.status)}
-                      </div>
-                      <div className="flex items-center gap-1">
-                        {active.status==='running' ? (
-                          <Button size="icon" variant="ghost" aria-label="Cancel" title="Cancel" onClick={(e)=>{ e.preventDefault(); cancelActive(); }}>
-                            <Icon.Stop className="h-4 w-4" />
-                          </Button>
-                        ) : null}
-                        {!isCompileJob(active) && active.file ? (
-                          <>
-                            <Button asChild size="icon" variant="ghost" aria-label="Open Folder" title="Open Folder">
-                              <a href="#" onClick={async (e)=>{ e.preventDefault(); try { await apiFetch(`/api/generate/jobs/${encodeURIComponent(active.id)}/reveal`) } catch {} }}>
-                                <Icon.Folder className="h-4 w-4" />
-                              </a>
-                            </Button>
-                            <Button asChild size="icon" variant="ghost" aria-label="Download" title="Download">
-                              <a href={`/api/generate/jobs/${encodeURIComponent(active.id)}/file?download=true`}>
-                                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
-                              </a>
-                            </Button>
-                          </>
-                        ) : null}
-                      </div>
-                    </div>
 
-                    {/* Meta chips */}
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Badge asChild variant="outline">
-                        <a href="#" title="Reveal Template Folder" onClick={(e)=>{ e.preventDefault(); revealTemplateFolder(active.template) }}>
-                          Template: {active.template}
-                        </a>
-                      </Badge>
-                      {!isCompileJob(active) ? (
-                        <Badge asChild variant="outline"><a href="#customers" title="View Customers">Customer: {active.customerName || active.customerId}</a></Badge>
+                <div className="flex flex-1 min-h-0 flex-col gap-4 p-4 text-sm overflow-hidden">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="font-medium">
+                        {isCompileJob(active)
+                          ? `${active.template}`
+                          : `${active.template} for ${String(active.customerName || active.customerId)}`}
+                      </div>
+                      <Badge variant={isCompileJob(active)?'secondary':'outline'}>{isCompileJob(active)?'Template Compile':'Document Generation'}</Badge>
+                      {statusBadge(active.status)}
+                    </div>
+                    <div className="flex items-center gap-1">
+                      {active.status==='running' ? (
+                        <Button size="icon" variant="ghost" aria-label="Cancel" title="Cancel" onClick={(e)=>{ e.preventDefault(); cancelActive(); }}>
+                          <Icon.Stop className="h-4 w-4" />
+                        </Button>
                       ) : null}
-                      {active.file?.name ? (
-                        <Badge asChild variant="outline">
-                          <a href={`/api/generate/jobs/${encodeURIComponent(active.id)}/file?download=true`} title="Download file">File: {active.file.name}</a>
-                        </Badge>
-                      ) : (
-                        <Badge variant="outline">File: -</Badge>
-                      )}
+                      {!isCompileJob(active) && active.file ? (
+                        <>
+                          <Button asChild size="icon" variant="ghost" aria-label="Open Folder" title="Open Folder">
+                            <a href="#" onClick={async (e)=>{ e.preventDefault(); try { await apiFetch(`/api/generate/jobs/${encodeURIComponent(active.id)}/reveal`) } catch {} }}>
+                              <Icon.Folder className="h-4 w-4" />
+                            </a>
+                          </Button>
+                          <Button asChild size="icon" variant="ghost" aria-label="Download" title="Download">
+                            <a href={`/api/generate/jobs/${encodeURIComponent(active.id)}/file?download=true`}>
+                              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+                            </a>
+                          </Button>
+                        </>
+                      ) : null}
                     </div>
-                    <div className="text-xs text-muted-foreground">
-                      Started {new Date(active.startedAt).toLocaleString()} • Completed {active.completedAt ? new Date(active.completedAt).toLocaleString() : '-'} • Elapsed {formatDuration(((active.completedAt ? new Date(active.completedAt) : new Date()).getTime()) - new Date(active.startedAt).getTime())}
-                    </div>
+                  </div>
 
+                  {/* Meta chips */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge asChild variant="outline">
+                      <a href="#" title="Reveal Template Folder" onClick={(e)=>{ e.preventDefault(); revealTemplateFolder(active.template) }}>
+                        Template: {active.template}
+                      </a>
+                    </Badge>
+                    {!isCompileJob(active) ? (
+                      <Badge asChild variant="outline"><a href="#customers" title="View Customers">Customer: {active.customerName || active.customerId}</a></Badge>
+                    ) : null}
+                    {active.file?.name ? (
+                      <Badge asChild variant="outline">
+                        <a href={`/api/generate/jobs/${encodeURIComponent(active.id)}/file?download=true`} title="Download file">File: {active.file.name}</a>
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline">File: -</Badge>
+                    )}
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    Started {new Date(active.startedAt).toLocaleString()} | Completed {active.completedAt ? new Date(active.completedAt).toLocaleString() : '-'} | Elapsed {formatDuration(((active.completedAt ? new Date(active.completedAt) : new Date()).getTime()) - new Date(active.startedAt).getTime())}
+                  </div>
+
+                  <div className="flex flex-1 min-h-0 flex-col gap-4">
                     {Array.isArray(active.steps) && active.steps.length ? (
-                      <div className="max-h-56 min-h-[6rem] flex flex-col mb-6 min-h-0">
-                        <div className="font-medium mb-1">Steps</div>
-                        <ScrollArea className="h-full min-h-0">
-                          <ul className="space-y-1 pr-2 pb-2">
+                      <div className="flex min-h-[6rem] max-h-[45vh] flex-col overflow-hidden rounded border bg-muted/30">
+                        <div className="flex items-center justify-between border-b border-border/40 bg-muted/20 px-3 py-2">
+                          <div className="font-medium text-sm">Steps</div>
+                          <div className="text-xs text-muted-foreground">
+                            {active.steps.length} step{active.steps.length === 1 ? '' : 's'}
+                          </div>
+                        </div>
+                        <ScrollArea className="flex-1 min-h-0">
+                          <ul className="space-y-1 px-3 py-2">
                             {active.steps.map((s, idx) => (
                               <li key={idx} className="flex items-center justify-between border rounded px-2 py-1">
                                 <div>
                                   <div className="text-sm">{s.name}</div>
-                                  <div className="text-xs text-muted-foreground">{s.status || '-'} {s.durationMs ? `• ${formatDuration(s.durationMs)}` : ''}</div>
+                                  <div className="text-xs text-muted-foreground">{s.status || '-'} {s.durationMs ? `| ${formatDuration(s.durationMs)}` : ''}</div>
                                 </div>
-                                <div className="text-xs text-muted-foreground">{s.startedAt ? new Date(s.startedAt).toLocaleTimeString() : ''} {s.endedAt?`→ ${new Date(s.endedAt).toLocaleTimeString()}`:''}</div>
+                                <div className="text-xs text-muted-foreground">{s.startedAt ? new Date(s.startedAt).toLocaleTimeString() : ''} {s.endedAt?`-> ${new Date(s.endedAt).toLocaleTimeString()}`:''}</div>
                               </li>
                             ))}
                           </ul>
@@ -416,16 +422,16 @@ export default function JobsPage() {
                       </div>
                     ) : null}
 
-                    <div className="flex-1 min-h-0 flex flex-col w-full mt-2">
-                      <div className="font-medium mb-1">Logs</div>
-                      <div className="border rounded bg-muted/30 p-2 flex-1 min-h-0">
-                        <ScrollArea className="flex-1 min-h-0">
-                          <pre className="whitespace-pre-wrap pr-2">{Array.isArray(active.logs) ? active.logs.join('\n') : ''}</pre>
-                        </ScrollArea>
+                    <div className="flex flex-1 min-h-[8rem] flex-col overflow-hidden rounded border bg-muted/30">
+                      <div className="border-b border-border/40 bg-muted/20 px-3 py-2">
+                        <div className="font-medium text-sm">Logs</div>
                       </div>
+                      <ScrollArea className="flex-1 min-h-0">
+                        <pre className="whitespace-pre-wrap px-3 py-2 text-xs">{Array.isArray(active.logs) ? active.logs.join('\n') : ''}</pre>
+                      </ScrollArea>
                     </div>
                   </div>
-                </ScrollArea>
+                </div>
               </div>
             )}
           </Card>
@@ -462,3 +468,4 @@ export default function JobsPage() {
     </div>
   );
 }
+

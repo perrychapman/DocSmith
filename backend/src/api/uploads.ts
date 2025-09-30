@@ -45,6 +45,26 @@ function removeSidecar(uploadsDir: string, filename: string) {
   try { const p = sidecarPath(uploadsDir, filename); if (fs.existsSync(p)) fs.unlinkSync(p) } catch {}
 }
 
+function openInDefaultApp(targetPath: string): boolean {
+  if (!targetPath) return false
+  const platform = process.platform
+  try {
+    if (platform === 'win32') {
+      const escaped = targetPath.replace(/"/g, '""')
+      const child = spawn('cmd', ['/c', 'start', '', '"' + escaped + '"'], { detached: true, stdio: 'ignore' })
+      child.unref()
+    } else if (platform === 'darwin') {
+      const child = spawn('open', [targetPath], { detached: true, stdio: 'ignore' })
+      child.unref()
+    } else {
+      const child = spawn('xdg-open', [targetPath], { detached: true, stdio: 'ignore' })
+      child.unref()
+    }
+    return true
+  } catch {
+    return false
+  }
+}
 // GET /api/uploads/:customerId -> list files in uploads folder
 router.get("/:customerId", (req, res) => {
   const id = Number(req.params.customerId)
@@ -160,7 +180,7 @@ router.get("/:customerId/browse", (req, res) => {
   )
 })
 
-// POST /api/uploads/:customerId/open-file -> return file metadata for client-side opening
+// POST /api/uploads/:customerId/open-file -> open an uploaded file in the host OS default application
 router.post("/:customerId/open-file", (req, res) => {
   const id = Number(req.params.customerId)
   const nameRaw = String(req.query.name || (req.body as any)?.name || "").trim()
@@ -183,13 +203,15 @@ router.post("/:customerId/open-file", (req, res) => {
         const safeTarget = path.resolve(target)
         if (!safeTarget.startsWith(safeBase)) return res.status(400).json({ error: "Invalid file path" })
         if (!fs.existsSync(safeTarget)) return res.status(404).json({ error: "File not found" })
-        return res.json({ ok: true, path: safeTarget, extension: path.extname(safeTarget) })
+        if (!openInDefaultApp(safeTarget)) return res.status(500).json({ error: "Failed to open file" })
+        return res.json({ ok: true })
       } catch (e) {
         return res.status(500).json({ error: (e as Error).message })
       }
     }
   )
 })
+
 // POST /api/uploads/:customerId/open-folder -> open the uploads folder in the host OS file explorer
 router.post("/:customerId/open-folder", (req, res) => {
   const id = Number(req.params.customerId)

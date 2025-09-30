@@ -222,7 +222,7 @@ export default function JobsPage() {
       if (targetPath && window.electronAPI?.openPath) {
         const result = await window.electronAPI.openPath(targetPath).catch(() => ({ success: false }))
         if (result && result.success === false) {
-          throw new Error(result.error || 'Failed to open path via Electron')
+          throw new Error('error' in result ? (result.error || 'Failed to open path via Electron') : 'Failed to open path via Electron')
         }
         toast.success?.('Opened in default app')
         return

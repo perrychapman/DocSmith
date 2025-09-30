@@ -1,5 +1,5 @@
 import * as React from "react";
-import { Card } from "../components/ui/card";
+import { Card, CardHeader, CardContent, CardFooter, CardTitle, CardDescription } from "../components/ui/card";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/input";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, DialogDescription, DialogClose } from "../components/ui/dialog";
@@ -10,7 +10,7 @@ import { Icon } from "../components/icons";
 import { Progress } from "../components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
-import { Search } from "lucide-react";
+import { Search, FileText as FileTextIcon, FileSpreadsheet, FileCode, CheckCircle2, AlertTriangle, Loader2, Sparkles, Copy } from "lucide-react";
 import { toast } from "sonner";
 import { apiFetch, apiEventSource } from '../lib/api';
 
@@ -625,4 +625,6 @@ export default function TemplatesPage() {
     </div>
   );
 }
+
+
 

@@ -270,7 +270,7 @@ export default function TemplatesPage() {
         <div className="flex items-center gap-2">
           <Button variant="secondary" onClick={load}><Icon.Refresh className="h-4 w-4 mr-2" />Refresh</Button>
           <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
-            <DialogTrigger asChild>
+            <DialogTrigger>
               <Button><Icon.Upload className="h-4 w-4 mr-2" />Upload</Button>
             </DialogTrigger>
             <DialogContent>
@@ -334,7 +334,7 @@ export default function TemplatesPage() {
           <div className="text-lg font-semibold">Upload your first template</div>
           <div className="text-sm text-muted-foreground">Templates are used to generate customized documents with AI assistance.</div>
           <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
-            <DialogTrigger asChild>
+            <DialogTrigger>
               <Button><Icon.Upload className="h-4 w-4 mr-2" />Upload Template</Button>
             </DialogTrigger>
             <DialogContent>
@@ -466,7 +466,7 @@ export default function TemplatesPage() {
                           </div>
                           <div className="flex items-center gap-2 shrink-0">
                             <Tooltip>
-                              <TooltipTrigger asChild>
+                              <TooltipTrigger>
                                 <span className={`text-xs px-2 py-0.5 rounded border ${t.hasFullGen ? 'bg-green-50 text-green-700 border-green-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>{t.hasFullGen ? 'Compiled' : 'Not compiled'}</span>
                               </TooltipTrigger>
                               <TooltipContent>{t.hasFullGen ? 'Template has a generated FullGen script' : 'Template has not been compiled yet'}</TooltipContent>
@@ -490,7 +490,7 @@ export default function TemplatesPage() {
                         </div>
                         <div className="mt-2 flex flex-col items-end gap-2">
                           <Tooltip>
-                            <TooltipTrigger asChild>
+                            <TooltipTrigger>
                               <Button
                                 size="default"
                                 variant="default"
@@ -509,7 +509,7 @@ export default function TemplatesPage() {
                           </Tooltip>
                           <div className="flex items-center gap-2 flex-wrap justify-end">
                             <Tooltip>
-                              <TooltipTrigger asChild>
+                              <TooltipTrigger>
                                 <Button size="icon" variant="ghost" aria-label="Open folder" title="Open Folder" onClick={async () => {
                                   try {
                                     const r = await apiFetch(`/api/templates/${encodeURIComponent(t.slug)}/open-folder`, { method: 'POST' });
@@ -524,7 +524,7 @@ export default function TemplatesPage() {
                             </Tooltip>
                             {t.hasFullGen ? (
                               <Tooltip>
-                                <TooltipTrigger asChild>
+                                <TooltipTrigger>
                                   <Button size="icon" variant="ghost" aria-label="View FullGen" title="View FullGen" onClick={() => viewFullGen(t.slug)}>
                                     <Icon.File className="h-4 w-4" />
                                   </Button>
@@ -616,7 +616,7 @@ export default function TemplatesPage() {
             {compiling && compJobId ? (
               <Button variant="destructive" onClick={async () => { try { await apiFetch(`/api/templates/compile/jobs/${encodeURIComponent(compJobId)}/cancel`, { method: 'POST' }); setCompLogs((prev) => ([...(prev || []), 'cancel:requested'])) } catch { } }}>Cancel</Button>
             ) : null}
-            <DialogClose asChild>
+            <DialogClose>
               <Button variant="secondary">Close</Button>
             </DialogClose>
           </DialogFooter>

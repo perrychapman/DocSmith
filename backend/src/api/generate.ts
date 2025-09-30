@@ -694,6 +694,24 @@ router.get("/jobs/:id/file", (req, res) => {
   }
 })
 
+// Provide metadata for the file associated with a job so the client can open it natively
+router.post("/jobs/:id/open-file", (req, res) => {
+  try {
+    const j = getJob(String(req.params.id))
+    if (!j || !j.file?.path) return res.status(404).json({ error: 'Not found' })
+    const root = libraryRoot()
+    const resolved = path.resolve(String(j.file.path))
+    if (!resolved.startsWith(path.resolve(root))) {
+      return res.status(403).json({ error: 'Forbidden' })
+    }
+    if (!fs.existsSync(resolved)) {
+      return res.status(404).json({ error: 'File not found' })
+    }
+    return res.json({ ok: true, path: resolved, extension: path.extname(resolved) })
+  } catch (e:any) {
+    return res.status(500).json({ error: String(e?.message || e) })
+  }
+})
 // Delete one job record (does not delete any files)
 router.delete("/jobs/:id", (req, res) => {
   try { deleteJob(String(req.params.id)); return res.json({ ok: true }) } catch (e:any) { return res.status(500).json({ error: String(e?.message || e) }) }
@@ -829,3 +847,4 @@ router.delete('/cards/by-job/:jobId', (req, res) => {
     return res.json({ ok: true, deleted: this.changes || 0 })
   })
 })
+

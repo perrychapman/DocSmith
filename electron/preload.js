@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     getWindowState: () => ipcRenderer.invoke('get-window-state'),
     // Reveal application logs in file manager
     revealLogs: () => ipcRenderer.invoke('reveal-logs'),
+    // Open a file or folder in the OS default handler
+    openPath: (filePath) => ipcRenderer.invoke('open-path', filePath),
     // Clean up temporary files
     cleanupTempFiles: () => ipcRenderer.invoke('cleanup-temp-files'),
     // Listen for window state changes

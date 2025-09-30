@@ -30,6 +30,9 @@ type Job = {
   steps?: Array<{ name: string; status?: 'start'|'ok'|'error'; startedAt?: string; endedAt?: string; durationMs?: number }>;
 };
 
+const INLINE_PREVIEW_EXTENSIONS = new Set<string>(['.pdf']);
+
+
 export default function JobsPage() {
   const [jobs, setJobs] = React.useState<Job[]>([]);
   const [loading, setLoading] = React.useState(false);
@@ -195,6 +198,54 @@ export default function JobsPage() {
       toast.success('Opened template folder');
     } catch (e:any) {
       toast.error(e?.message ? String(e.message) : 'Failed to open template folder');
+    }
+  }
+  async function openJobFile(job: Job | null) {
+    if (!job?.id) return
+    const baseUrl = `/api/generate/jobs/${encodeURIComponent(job.id)}/file`
+    const openUrl = `/api/generate/jobs/${encodeURIComponent(job.id)}/open-file`
+    const fileName = job.file?.name || 'document'
+    try {
+      const response = await apiFetch(openUrl, { method: 'POST' })
+      const payload = await response.json().catch(() => null)
+      if (!response.ok) throw new Error(String(response.status))
+      const targetPath = typeof (payload as any)?.path === 'string' ? String((payload as any).path) : undefined
+      const extension = typeof (payload as any)?.extension === 'string' ? String((payload as any).extension).toLowerCase() : undefined
+      const fallbackExt = (() => {
+        const parts = String(job.file?.name || '').split('.')
+        if (parts.length <= 1) return undefined
+        const ext = parts.pop()?.toLowerCase()
+        return ext ? `.${ext}` : undefined
+      })()
+      const effectiveExt = extension || fallbackExt || ''
+
+      if (targetPath && window.electronAPI?.openPath) {
+        const result = await window.electronAPI.openPath(targetPath).catch(() => ({ success: false }))
+        if (result && result.success === false) {
+          throw new Error(result.error || 'Failed to open path via Electron')
+        }
+        toast.success?.('Opened in default app')
+        return
+      }
+
+      if (effectiveExt && INLINE_PREVIEW_EXTENSIONS.has(effectiveExt)) {
+        window.open(baseUrl, '_blank', 'noopener,noreferrer')
+        toast.success?.('Opened in new tab')
+        return
+      }
+
+      const anchor = document.createElement('a')
+      anchor.href = baseUrl
+      anchor.download = fileName
+      anchor.target = '_blank'
+      anchor.rel = 'noopener noreferrer'
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      toast.success?.('Download started')
+    } catch (error) {
+      console.error(error)
+      toast.error?.('Failed to open file')
     }
   }
 
@@ -365,10 +416,8 @@ export default function JobsPage() {
                               <Icon.Folder className="h-4 w-4" />
                             </a>
                           </Button>
-                          <Button asChild size="icon" variant="ghost" aria-label="Download" title="Download">
-                            <a href={`/api/generate/jobs/${encodeURIComponent(active.id)}/file?download=true`}>
-                              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
-                            </a>
+                          <Button size="icon" variant="ghost" aria-label="Open file" title="Open file" onClick={(e) => { e.preventDefault(); openJobFile(active); }}>
+                            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
                           </Button>
                         </>
                       ) : null}
@@ -387,7 +436,9 @@ export default function JobsPage() {
                     ) : null}
                     {active.file?.name ? (
                       <Badge asChild variant="outline">
-                        <a href={`/api/generate/jobs/${encodeURIComponent(active.id)}/file?download=true`} title="Download file">File: {active.file.name}</a>
+                        <button type="button" onClick={(e) => { e.preventDefault(); openJobFile(active); }} title="Open file" className="hover:underline">
+                          File: {active.file.name}
+                        </button>
                       </Badge>
                     ) : (
                       <Badge variant="outline">File: -</Badge>

@@ -160,6 +160,36 @@ router.get("/:customerId/browse", (req, res) => {
   )
 })
 
+// POST /api/uploads/:customerId/open-file -> return file metadata for client-side opening
+router.post("/:customerId/open-file", (req, res) => {
+  const id = Number(req.params.customerId)
+  const nameRaw = String(req.query.name || (req.body as any)?.name || "").trim()
+  const name = path.basename(nameRaw)
+  if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "Invalid customerId" })
+  if (!name) return res.status(400).json({ error: "Missing file name" })
+
+  const db = getDB()
+  db.get<CustomerRow>(
+    "SELECT id, name, workspaceSlug, createdAt FROM customers WHERE id = ?",
+    [id],
+    (err, row) => {
+      if (err) return res.status(500).json({ error: err.message })
+      if (!row) return res.status(404).json({ error: "Customer not found" })
+      try {
+        const { uploadsDir } = resolveCustomerPaths(row.id, row.name, new Date(row.createdAt))
+        fs.mkdirSync(uploadsDir, { recursive: true })
+        const target = path.join(uploadsDir, name)
+        const safeBase = path.resolve(uploadsDir)
+        const safeTarget = path.resolve(target)
+        if (!safeTarget.startsWith(safeBase)) return res.status(400).json({ error: "Invalid file path" })
+        if (!fs.existsSync(safeTarget)) return res.status(404).json({ error: "File not found" })
+        return res.json({ ok: true, path: safeTarget, extension: path.extname(safeTarget) })
+      } catch (e) {
+        return res.status(500).json({ error: (e as Error).message })
+      }
+    }
+  )
+})
 // POST /api/uploads/:customerId/open-folder -> open the uploads folder in the host OS file explorer
 router.post("/:customerId/open-folder", (req, res) => {
   const id = Number(req.params.customerId)
@@ -397,3 +427,4 @@ router.delete("/:customerId", (req, res) => {
     }
   )
 })
+

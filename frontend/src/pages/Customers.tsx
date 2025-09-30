@@ -21,6 +21,9 @@ import JobsPanel from "../components/JobsPanel";
 type Customer = { id: number; name: string; createdAt: string };
 type UploadItem = { name: string; path: string; size: number; modifiedAt: string };
 
+const INLINE_PREVIEW_EXTENSIONS = new Set<string>(['.pdf'])
+
+
 export function CustomersPage() {
   const [customers, setCustomers] = React.useState<Customer[]>([]);
   const [loadingCustomers, setLoadingCustomers] = React.useState(true);
@@ -547,6 +550,54 @@ export function CustomersPage() {
     }
   }
 
+
+  async function openCustomerFile(type: 'uploaded' | 'generated', fileName: string) {
+    if (!selectedId || !fileName) return
+    const base = type === 'uploaded' ? '/api/uploads' : '/api/documents'
+    const openUrl = `${base}/${selectedId}/open-file?name=${encodeURIComponent(fileName)}`
+    const downloadUrl = `${base}/${selectedId}/file?name=${encodeURIComponent(fileName)}`
+    try {
+      const response = await apiFetch(openUrl, { method: 'POST' })
+      const payload = await response.json().catch(() => null)
+      if (!response.ok) throw new Error(String(response.status))
+      const targetPath = (payload as any)?.path
+      const extension = typeof (payload as any)?.extension === 'string' ? String((payload as any).extension).toLowerCase() : undefined
+      const fallbackExt = (() => {
+        const parts = fileName.split('.')
+        if (parts.length <= 1) return undefined
+        const ext = parts.pop()?.toLowerCase()
+        return ext ? `.${ext}` : undefined
+      })()
+      const effectiveExt = extension || fallbackExt || ''
+
+      if (targetPath && window.electronAPI?.openPath) {
+        const result = await window.electronAPI.openPath(targetPath).catch(() => ({ success: false }))
+        if (result && result.success === false) {
+          throw new Error(result.error || 'Failed to open path via Electron')
+        }
+        toast.success?.('Opened in default app')
+        return
+      }
+      if (effectiveExt && INLINE_PREVIEW_EXTENSIONS.has(effectiveExt)) {
+        window.open(downloadUrl, '_blank', 'noopener,noreferrer')
+        toast.success?.('Opened in new tab')
+        return
+      }
+
+      const anchor = document.createElement('a')
+      anchor.href = downloadUrl
+      anchor.download = fileName
+      anchor.target = '_blank'
+      anchor.rel = 'noopener noreferrer'
+      document.body.appendChild(anchor)
+      anchor.click()
+      anchor.remove()
+      toast.success?.('Download started')
+    } catch (error) {
+      console.error(error)
+      toast.error?.('Failed to open file')
+    }
+  }
   function startDelete(c: Customer) {
     setDeleteId(c.id);
     setDeleteName(c.name);
@@ -980,15 +1031,14 @@ export function CustomersPage() {
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center justify-between gap-3">
                                   <div className="min-w-0">
-                                    <a
-                                      href={`/api/uploads/${selectedId}/file?name=${encodeURIComponent(u.name)}`}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
+                                    <button
+                                      type="button"
+                                      onClick={(e) => { e.preventDefault(); openCustomerFile('uploaded', u.name); }}
                                       title={u.name}
-                                      className="font-medium hover:underline break-words leading-snug block"
+                                      className="font-medium hover:underline break-words leading-snug block text-left"
                                     >
                                       {u.name}
-                                    </a>
+                                    </button>
                                     <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                                       <span>{formatBytes(u.size)}</span>
                                       <span title={new Date(u.modifiedAt).toLocaleString()}>{formatRelativeTime(u.modifiedAt)}</span>
@@ -1050,15 +1100,14 @@ export function CustomersPage() {
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center justify-between gap-3">
                                   <div className="min-w-0">
-                                    <a
-                                      href={`/api/documents/${selectedId}/file?name=${encodeURIComponent(d.name)}`}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
+                                    <button
+                                      type="button"
+                                      onClick={(e) => { e.preventDefault(); openCustomerFile('generated', d.name); }}
                                       title={d.name}
-                                      className="font-medium hover:underline break-words leading-snug block"
+                                      className="font-medium hover:underline break-words leading-snug block text-left"
                                     >
                                       {d.name}
-                                    </a>
+                                    </button>
                                     <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                                       <span>{formatBytes(d.size)}</span>
                                       <span title={new Date(d.modifiedAt).toLocaleString()}>{formatRelativeTime(d.modifiedAt)}</span>
@@ -1434,7 +1483,6 @@ function RecentJobs({ selectedId }: { selectedId: number | null }) {
     </div>
   )
 }
-
 
 
 

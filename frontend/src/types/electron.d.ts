@@ -9,6 +9,8 @@ interface ElectronAPI {
   getWindowState: () => Promise<{ isMaximized: boolean; isMinimized: boolean; isFullScreen: boolean }>;
   onWindowStateChanged: (callback: (state: { isMaximized: boolean }) => void) => () => void;
   restoreWindow: () => Promise<void>;
+  revealLogs: () => Promise<{ success: boolean; error?: string }>;
+  openPath: (filePath: string) => Promise<{ success: boolean; error?: string }>;
   isElectron: boolean;
 }
 

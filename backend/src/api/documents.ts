@@ -8,6 +8,7 @@ import { spawn } from "child_process"
 
 const router = Router()
 
+
 // List documents for a customer
 router.get("/:customerId", (req, res) => {
   const db = getDB()
@@ -57,6 +58,38 @@ router.get("/:customerId/files", (req, res) => {
   )
 })
 
+// POST /api/documents/:customerId/open-file -> return file metadata for client-side opening
+router.post("/:customerId/open-file", (req, res) => {
+  const id = Number(req.params.customerId)
+  const nameRaw = String(req.query.name || (req.body as any)?.name || "").trim()
+  const name = path.basename(nameRaw)
+  if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "Invalid customerId" })
+  if (!name) return res.status(400).json({ error: "Missing file name" })
+
+  const db = getDB()
+  db.get<{ id: number; name: string; createdAt: string }>(
+    "SELECT id, name, createdAt FROM customers WHERE id = ?",
+    [id],
+    (err, customer) => {
+      if (err) return res.status(500).json({ error: err.message })
+      if (!customer) return res.status(404).json({ error: "Customer not found" })
+
+      const { documentsDir } = resolveCustomerPaths(customer.id, customer.name, new Date(customer.createdAt))
+
+      try {
+        fs.mkdirSync(documentsDir, { recursive: true })
+        const target = path.join(documentsDir, name)
+        const safeBase = path.resolve(documentsDir)
+        const safeTarget = path.resolve(target)
+        if (!safeTarget.startsWith(safeBase)) return res.status(400).json({ error: "Invalid file path" })
+        if (!fs.existsSync(safeTarget)) return res.status(404).json({ error: "File not found" })
+        return res.json({ ok: true, path: safeTarget, extension: path.extname(safeTarget) })
+      } catch (error) {
+        return res.status(500).json({ error: `Failed to open file: ${(error as Error).message}` })
+      }
+    }
+  )
+})
 // POST /api/documents/:customerId/open-folder -> open the documents folder in the host OS file explorer
 router.post("/:customerId/open-folder", (req, res) => {
   const id = Number(req.params.customerId)
@@ -161,3 +194,4 @@ router.post("/", (req, res) => {
 })
 
 export default router
+

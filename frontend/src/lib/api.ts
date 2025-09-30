@@ -19,11 +19,15 @@ function getBaseUrl(): string {
     });
   }
   
-  // In Electron production or when using file protocol, always use localhost:3000
+  // In Electron/desktop contexts, point directly at the backend server
   if (isElectron || isFileProtocol) {
-    return 'http://localhost:3000';
+    const configuredPort = Number(import.meta.env.VITE_BACKEND_PORT) || Number(import.meta.env.VITE_ELECTRON_BACKEND_PORT);
+    const defaultPort = import.meta.env.DEV ? 4000 : 3000;
+    const port = configuredPort || defaultPort;
+    const host = import.meta.env.VITE_BACKEND_HOST || 'localhost';
+    return `http://${host}:${port}`;
   }
-  
+
   // In web development, use empty string (relative URLs)
   return '';
 }
@@ -86,3 +90,5 @@ export const A = {
   deleteGenCardsByCustomer: (id: number) => jdel(`/api/generate/cards/by-customer/${encodeURIComponent(String(id))}`),
   deleteGenCardsByJob: (jobId: string) => jdel(`/api/generate/cards/by-job/${encodeURIComponent(jobId)}`),
 };
+
+

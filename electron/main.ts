@@ -432,10 +432,27 @@ ipcMain.handle('get-window-state', () => {
   return { isMaximized: false, isMinimized: false, isFullScreen: false };
 });
 
+ipcMain.handle('open-path', async (_event, filePath: string) => {
+  try {
+    if (!filePath) {
+      return { success: false, error: 'Missing file path' };
+    }
+    logToFile(`Request to open path: ${filePath}`);
+    const result = await shell.openPath(filePath);
+    if (result) {
+      logToFile(`Failed to open path: ${result}`);
+      return { success: false, error: result };
+    }
+    return { success: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    logToFile(`Error opening path: ${message}`);
+    return { success: false, error: message };
+  }
+});
+    
 ipcMain.handle('reveal-logs', () => {
   try {
-    logToFile(`Attempting to reveal logs at: ${LOG_PATH}`);
-    
     // Ensure log file exists
     if (!fs.existsSync(LOG_PATH)) {
       logToFile('Log file does not exist, creating it');
@@ -568,3 +585,4 @@ process.on('SIGTERM', async () => {
 process.on('exit', (code) => {
   logToFile(`Electron process exiting with code: ${code}`);
 });
+

@@ -23,6 +23,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Reveal application logs in file manager
   revealLogs: () => ipcRenderer.invoke('reveal-logs'),
   
+  // Open a file or folder in the OS default handler
+  openPath: (filePath: string) => ipcRenderer.invoke('open-path', filePath),
+
   // Clean up temporary files
   cleanupTempFiles: () => ipcRenderer.invoke('cleanup-temp-files'),
   
@@ -56,6 +59,7 @@ declare global {
       onWindowStateChanged: (callback: (state: { isMaximized: boolean }) => void) => () => void;
       restoreWindow: () => Promise<void>;
       revealLogs: () => Promise<{ success: boolean; error?: string }>;
+      openPath: (filePath: string) => Promise<{ success: boolean; error?: string }>;
       isElectron: boolean;
     };
   }

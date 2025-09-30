@@ -5,6 +5,7 @@ import { resolveCustomerPaths } from "../services/customerLibrary"
 import fs from "fs"
 import path from "path"
 import { spawn } from "child_process"
+import { secureFileValidation } from "../services/fileSecurityValidator"
 
 const router = Router()
 
@@ -65,6 +66,16 @@ router.post("/:customerId/open-file", (req, res) => {
   const name = path.basename(nameRaw)
   if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "Invalid customerId" })
   if (!name) return res.status(400).json({ error: "Missing file name" })
+
+  // Security validation - prevent opening executable/dangerous files
+  const validation = secureFileValidation(name, true) // Use whitelist mode for strict security
+  if (!validation.allowed) {
+    return res.status(403).json({ 
+      error: "File type not allowed", 
+      reason: validation.reason,
+      extension: validation.extension 
+    })
+  }
 
   const db = getDB()
   db.get<{ id: number; name: string; createdAt: string }>(

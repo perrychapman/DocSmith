@@ -114,75 +114,47 @@ router.get("/:slug/preview", async (req, res) => {
     if (!fs.existsSync(dir)) return res.status(404).json({ error: 'Template not found' })
 
     const docxPath = path.join(dir, 'template.docx')
+    const xlsxPath = path.join(dir, 'template.xlsx')
     const srcName = (fs.readdirSync(dir).find((n) => /^source\./i.test(n)) || '')
     const srcPath = srcName ? path.join(dir, srcName) : ''
     const tmplHbsPath = path.join(dir, 'template.hbs')
     const suggestedPath = path.join(dir, 'template.suggested.hbs')
 
-    async function docxToText(bufOrPath: Buffer | string) {
-      if (typeof bufOrPath === 'string') {
-        const buffer = fs.readFileSync(bufOrPath)
-        const result = await mammoth.extractRawText({ buffer })
-        return String(result?.value || '')
-      } else {
-        const result = await mammoth.extractRawText({ buffer: bufOrPath })
-        return String(result?.value || '')
-      }
-    }
-    async function docxToHtml(bufOrPath: Buffer | string) {
-      if (typeof bufOrPath === 'string') {
-        const buffer = fs.readFileSync(bufOrPath)
-        const result = await mammoth.convertToHtml({ buffer }, {
-          styleMap: [
-            "p[style-name='Title'] => h1:fresh",
-            "p[style-name='Subtitle'] => h2:fresh",
-            "p[style-name='Heading 1'] => h1:fresh",
-            "p[style-name='Heading 2'] => h2:fresh",
-            "p[style-name='Heading 3'] => h3:fresh",
-            "p[style-name='Heading 4'] => h4:fresh",
-            "p[style-name='Heading 5'] => h5:fresh",
-            "p[style-name='Heading 6'] => h6:fresh"
-          ]
-        })
-        return String(result?.value || '')
-      } else {
-        const result = await mammoth.convertToHtml({ buffer: bufOrPath }, {
-          styleMap: [
-            "p[style-name='Title'] => h1:fresh",
-            "p[style-name='Subtitle'] => h2:fresh",
-            "p[style-name='Heading 1'] => h1:fresh",
-            "p[style-name='Heading 2'] => h2:fresh",
-            "p[style-name='Heading 3'] => h3:fresh",
-            "p[style-name='Heading 4'] => h4:fresh",
-            "p[style-name='Heading 5'] => h5:fresh",
-            "p[style-name='Heading 6'] => h6:fresh"
-          ]
-        })
-        return String(result?.value || '')
-      }
-    }
-
-    if (variant === 'original') {
-      if (fs.existsSync(docxPath)) {
-        const html = await docxToHtml(docxPath)
-        return res.json({ html, source: 'docx', kind: 'html' })
-      }
-      if (srcPath) {
-        const text = fs.readFileSync(srcPath, 'utf-8')
-        return res.json({ text, source: path.basename(srcPath) })
-      }
-      if (fs.existsSync(tmplHbsPath)) {
-        const text = fs.readFileSync(tmplHbsPath, 'utf-8')
-        return res.json({ text, source: 'template.hbs' })
-      }
-      return res.status(404).json({ error: 'No previewable source found' })
-    }
-
-    // compiled preview removed; always fall back to raw extraction for DOCX
+    // For DOCX/XLSX files, serve the raw file for download/opening
+    // Frontend will handle preview via Electron or external viewer
     if (fs.existsSync(docxPath)) {
-      const html = await docxToHtml(docxPath)
-      return res.json({ html, source: 'docx', kind: 'html' })
+      const relPath = path.relative(process.cwd(), docxPath).replace(/\\/g, '/');
+      return res.json({ 
+        type: 'binary',
+        format: 'docx', 
+        path: docxPath,
+        downloadUrl: `/api/templates/${encodeURIComponent(slug)}/download/docx`,
+        source: 'template.docx' 
+      })
     }
+    
+    if (fs.existsSync(xlsxPath)) {
+      const relPath = path.relative(process.cwd(), xlsxPath).replace(/\\/g, '/');
+      return res.json({ 
+        type: 'binary',
+        format: 'xlsx', 
+        path: xlsxPath,
+        downloadUrl: `/api/templates/${encodeURIComponent(slug)}/download/xlsx`,
+        source: 'template.xlsx' 
+      })
+    }
+
+    // For text-based templates
+    if (srcPath) {
+      const text = fs.readFileSync(srcPath, 'utf-8')
+      return res.json({ text, source: path.basename(srcPath) })
+    }
+    
+    if (fs.existsSync(tmplHbsPath)) {
+      const text = fs.readFileSync(tmplHbsPath, 'utf-8')
+      return res.json({ text, source: 'template.hbs' })
+    }
+    
     // For text templates: prefer suggested then compiled hbs
     const hbsFile = fs.existsSync(suggestedPath) ? suggestedPath : (fs.existsSync(tmplHbsPath) ? tmplHbsPath : '')
     if (hbsFile) {
@@ -194,15 +166,50 @@ router.get("/:slug/preview", async (req, res) => {
       if (isHtml) return res.json({ html: rendered, source: path.basename(hbsFile), kind: 'html' })
       return res.json({ text: rendered, source: path.basename(hbsFile) })
     }
-    if (srcPath) {
-      const text = fs.readFileSync(srcPath, 'utf-8')
-      return res.json({ text, source: path.basename(srcPath) })
-    }
+    
     return res.status(404).json({ error: 'No preview available' })
   } catch (e) {
     return res.status(500).json({ error: (e as Error).message })
   }
 })
+
+// Serve template files for download
+router.get("/:slug/download/:fileType", async (req, res) => {
+  const slug = String(req.params.slug);
+  const fileType = String(req.params.fileType);
+  try {
+    const dir = path.join(TEMPLATES_ROOT, slug);
+    if (!fs.existsSync(dir)) return res.status(404).json({ error: 'Template not found' });
+
+    let filePath: string;
+    let contentType: string;
+    let fileName: string;
+
+    if (fileType === 'docx') {
+      filePath = path.join(dir, 'template.docx');
+      contentType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+      fileName = `${slug}-template.docx`;
+    } else if (fileType === 'xlsx') {
+      filePath = path.join(dir, 'template.xlsx');
+      contentType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+      fileName = `${slug}-template.xlsx`;
+    } else {
+      return res.status(400).json({ error: 'Invalid file type' });
+    }
+
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'File not found' });
+    }
+
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Content-Disposition', `inline; filename="${fileName}"`);
+    
+    const fileStream = fs.createReadStream(filePath);
+    fileStream.pipe(res);
+  } catch (e) {
+    return res.status(500).json({ error: (e as Error).message });
+  }
+});
 
 // Generate a PDF preview locally (no third-party upload)
 // GET /api/templates/:slug/preview.pdf?variant=original

@@ -1,4 +1,6 @@
 import * as React from "react";
+import { renderAsync } from "docx-preview";
+import JSZip from "jszip";
 import { Card, CardHeader, CardContent, CardFooter, CardTitle, CardDescription } from "../components/ui/card";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/input";
@@ -10,7 +12,7 @@ import { Icon } from "../components/icons";
 import { Progress } from "../components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
-import { Search, FileText as FileTextIcon, FileSpreadsheet, FileCode, CheckCircle2, AlertTriangle, Loader2, Sparkles, Copy } from "lucide-react";
+import { Search, FileText as FileTextIcon, FileSpreadsheet, FileCode, CheckCircle2, AlertTriangle, Loader2, Sparkles, Copy, X, ExternalLink, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Minus, Plus } from "lucide-react";
 import { toast } from "sonner";
 import { apiFetch, apiEventSource } from '../lib/api';
 
@@ -19,6 +21,19 @@ type TItem = { slug: string; name?: string; dir?: string; hasTemplate?: boolean;
 type CompileStatus = 'idle' | 'running' | 'success' | 'error';
 type CompileState = { status: CompileStatus; startedAt?: number; finishedAt?: number; error?: string };
 type CompileStateMap = Record<string, CompileState>;
+
+// Document metadata extracted from DOCX
+interface DocxMetadata {
+  pageWidth?: string;
+  pageHeight?: string;
+  marginTop?: string;
+  marginBottom?: string;
+  marginLeft?: string;
+  marginRight?: string;
+  orientation?: 'portrait' | 'landscape';
+  defaultFont?: string;
+  defaultSize?: string;
+}
 
 export default function TemplatesPage() {
   const [items, setItems] = React.useState<TItem[]>([]);
@@ -54,6 +69,153 @@ export default function TemplatesPage() {
   const [q, setQ] = React.useState("");
   const [typeFilter, setTypeFilter] = React.useState<string>("all"); // all|docx|excel|text
   const [sortBy, setSortBy] = React.useState<string>("recent"); // recent|name
+  const [selectedSlug, setSelectedSlug] = React.useState<string | null>(null);
+  const [previewContent, setPreviewContent] = React.useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = React.useState(false);
+  const [previewType, setPreviewType] = React.useState<'html' | 'text' | 'binary' | null>(null);
+  const [previewSource, setPreviewSource] = React.useState<string | null>(null);
+  const [docxData, setDocxData] = React.useState<ArrayBuffer | null>(null);
+  const [docxMetadata, setDocxMetadata] = React.useState<DocxMetadata | null>(null);
+  const docxPreviewRef = React.useRef<HTMLDivElement | null>(null);
+  const viewerScrollRef = React.useRef<HTMLDivElement | null>(null);
+  
+  // PDF viewer controls
+  const [currentPage, setCurrentPage] = React.useState(1);
+  const [totalPages, setTotalPages] = React.useState(1);
+  const [zoomLevel, setZoomLevel] = React.useState(100);
+  const [pageElements, setPageElements] = React.useState<Element[]>([]);
+
+  // Format relative time helper (from Customers.tsx)
+  function formatRelativeTime(value?: string | number | Date): string {
+    if (!value) return "-";
+    try {
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) return "-";
+      const diffMs = date.getTime() - Date.now();
+      const diffSeconds = Math.round(diffMs / 1000);
+      const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' });
+      const absSeconds = Math.abs(diffSeconds);
+      if (absSeconds < 60) return rtf.format(diffSeconds, 'second');
+      const diffMinutes = Math.round(diffSeconds / 60);
+      if (Math.abs(diffMinutes) < 60) return rtf.format(diffMinutes, 'minute');
+      const diffHours = Math.round(diffMinutes / 60);
+      if (Math.abs(diffHours) < 24) return rtf.format(diffHours, 'hour');
+      const diffDays = Math.round(diffHours / 24);
+      if (Math.abs(diffDays) < 7) return rtf.format(diffDays, 'day');
+      const diffWeeks = Math.round(diffDays / 7);
+      if (Math.abs(diffWeeks) < 5) return rtf.format(diffWeeks, 'week');
+      const diffMonths = Math.round(diffDays / 30);
+      if (Math.abs(diffMonths) < 12) return rtf.format(diffMonths, 'month');
+      const diffYears = Math.round(diffDays / 365);
+      return rtf.format(diffYears, 'year');
+    } catch {
+      return "-";
+    }
+  }
+
+  // Extract document metadata from DOCX file
+  async function extractDocxMetadata(arrayBuffer: ArrayBuffer): Promise<DocxMetadata> {
+    try {
+      const zip = await JSZip.loadAsync(arrayBuffer);
+      
+      // Try to get document.xml to parse section properties
+      const documentXml = await zip.file('word/document.xml')?.async('text');
+      
+      const metadata: DocxMetadata = {};
+      
+      // Parse document.xml for page setup (most reliable source)
+      if (documentXml) {
+        const parser = new DOMParser();
+        const doc = parser.parseFromString(documentXml, 'text/xml');
+        
+        // Get page size and margins from section properties
+        const sectPr = doc.querySelector('sectPr');
+        if (sectPr) {
+          const pgSz = sectPr.querySelector('pgSz');
+          if (pgSz) {
+            const width = pgSz.getAttribute('w:w');
+            const height = pgSz.getAttribute('w:h');
+            const orient = pgSz.getAttribute('w:orient');
+            
+            // Convert twips to pixels (1440 twips = 1 inch, 96 DPI)
+            if (width) {
+              const widthInches = parseInt(width) / 1440;
+              metadata.pageWidth = `${widthInches}in`;
+              console.log(`Page width: ${widthInches}in`);
+            }
+            if (height) {
+              const heightInches = parseInt(height) / 1440;
+              metadata.pageHeight = `${heightInches}in`;
+              console.log(`Page height: ${heightInches}in`);
+            }
+            metadata.orientation = orient === 'landscape' ? 'landscape' : 'portrait';
+          }
+          
+          const pgMar = sectPr.querySelector('pgMar');
+          if (pgMar) {
+            const top = pgMar.getAttribute('w:top');
+            const bottom = pgMar.getAttribute('w:bottom');
+            const left = pgMar.getAttribute('w:left');
+            const right = pgMar.getAttribute('w:right');
+            
+            if (top) {
+              const topInches = parseInt(top) / 1440;
+              metadata.marginTop = `${topInches}in`;
+              console.log(`Margin top: ${topInches}in`);
+            }
+            if (bottom) {
+              const bottomInches = parseInt(bottom) / 1440;
+              metadata.marginBottom = `${bottomInches}in`;
+              console.log(`Margin bottom: ${bottomInches}in`);
+            }
+            if (left) {
+              const leftInches = parseInt(left) / 1440;
+              metadata.marginLeft = `${leftInches}in`;
+              console.log(`Margin left: ${leftInches}in`);
+            }
+            if (right) {
+              const rightInches = parseInt(right) / 1440;
+              metadata.marginRight = `${rightInches}in`;
+              console.log(`Margin right: ${rightInches}in`);
+            }
+          }
+        }
+      }
+      
+      // Parse styles.xml for default font
+      const stylesXml = await zip.file('word/styles.xml')?.async('text');
+      if (stylesXml) {
+        const parser = new DOMParser();
+        const stylesDoc = parser.parseFromString(stylesXml, 'text/xml');
+        
+        const defaultFont = stylesDoc.querySelector('docDefaults rPrDefault rPr rFonts');
+        if (defaultFont) {
+          const asciiFont = defaultFont.getAttribute('w:ascii');
+          if (asciiFont) {
+            metadata.defaultFont = asciiFont;
+            console.log(`Default font: ${asciiFont}`);
+          }
+        }
+        
+        const defaultSize = stylesDoc.querySelector('docDefaults rPrDefault rPr sz');
+        if (defaultSize) {
+          const size = defaultSize.getAttribute('w:val');
+          // Font size in Word is in half-points, convert to points
+          if (size) {
+            const sizePoints = parseInt(size) / 2;
+            metadata.defaultSize = `${sizePoints}pt`;
+            console.log(`Default size: ${sizePoints}pt`);
+          }
+        }
+      }
+      
+      console.log('Extracted DOCX metadata:', metadata);
+      return metadata;
+    } catch (error) {
+      console.error('Failed to extract DOCX metadata:', error);
+      return {};
+    }
+  }
 
   async function load() {
     setLoading(true);
@@ -65,6 +227,251 @@ export default function TemplatesPage() {
       setItems([]);
     } finally { setLoading(false) }
   }
+
+  async function loadPreview(slug: string) {
+    setPreviewLoading(true);
+    setPreviewContent(null);
+    setPreviewType(null);
+    setPreviewSource(null);
+    setDocxData(null);
+    
+    try {
+      // For text-based templates, fetch the preview
+      const r = await apiFetch(`/api/templates/${encodeURIComponent(slug)}/preview`);
+      if (!r.ok) {
+        const errorData = await r.json().catch(() => ({}));
+        console.error('Preview failed:', r.status, errorData);
+        throw new Error(errorData.error || String(r.status));
+      }
+      const data = await r.json();
+      console.log('Preview data received:', data);
+      
+      // Handle binary files (DOCX/XLSX)
+      if (data.type === 'binary') {
+        console.log('Binary file detected:', data.format, data.downloadUrl);
+        
+        // For Excel files, show a message and don't show preview
+        if (data.format === 'xlsx') {
+          toast.error?.('Excel preview not yet supported. Please download the template to view it.');
+          setPreviewLoading(false);
+          setSelectedSlug(null);
+          return;
+        }
+        
+        setPreviewType('binary');
+        setPreviewSource(data.downloadUrl);
+        setPreviewContent(data.format);
+        
+        // For DOCX files, fetch the data for rendering
+        if (data.format === 'docx' && data.downloadUrl) {
+          try {
+            console.log('Fetching DOCX file from:', data.downloadUrl);
+            const docxResponse = await fetch(data.downloadUrl);
+            const docxBlob = await docxResponse.blob();
+            const docxArrayBuffer = await docxBlob.arrayBuffer();
+            console.log('DOCX file loaded, size:', docxArrayBuffer.byteLength, 'bytes');
+            
+            // Extract metadata from the DOCX file
+            const metadata = await extractDocxMetadata(docxArrayBuffer);
+            setDocxMetadata(metadata);
+            setDocxData(docxArrayBuffer);
+          } catch (fetchError) {
+            console.error('DOCX fetch failed:', fetchError);
+            toast.error?.('Failed to load document preview.');
+            setSelectedSlug(null);
+          }
+        }
+      }
+      // Handle HTML response
+      else if (data.html) {
+        console.log('Setting HTML content, length:', data.html.length);
+        setPreviewContent(data.html);
+        setPreviewType('html');
+        setPreviewSource(data.source || 'template');
+      } 
+      // Handle text response (wrap in pre tag for proper formatting)
+      else if (data.text) {
+        console.log('Setting text content, length:', data.text.length);
+        setPreviewContent(`<pre class="whitespace-pre-wrap font-mono text-sm">${escapeHtml(data.text)}</pre>`);
+        setPreviewType('text');
+        setPreviewSource(data.source || 'template');
+      } 
+      else {
+        console.warn('No html or text in preview response:', data);
+        setPreviewContent(null);
+        setPreviewType(null);
+        setPreviewSource(null);
+      }
+    } catch (e) {
+      console.error('Preview load failed:', e);
+      toast.error?.('Failed to load preview: ' + (e as Error).message);
+      setPreviewContent(null);
+      setPreviewType(null);
+      setPreviewSource(null);
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+
+  function escapeHtml(text: string): string {
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+  }
+
+  // Page navigation functions
+  function goToPage(pageNum: number) {
+    if (pageNum < 1 || pageNum > totalPages) return;
+    
+    if (pageElements.length > 0 && pageElements[pageNum - 1]) {
+      pageElements[pageNum - 1].scrollIntoView({ behavior: 'smooth', block: 'start' });
+      setCurrentPage(pageNum);
+    } else if (viewerScrollRef.current) {
+      // Fallback: estimate scroll position based on page number
+      const pageHeight = 11 * 96 + 24; // 11in * 96dpi + margin
+      const scrollTop = (pageNum - 1) * pageHeight;
+      viewerScrollRef.current.scrollTo({ top: scrollTop, behavior: 'smooth' });
+      setCurrentPage(pageNum);
+    }
+  }
+
+  function handleZoom(direction: 'in' | 'out' | 'reset') {
+    if (direction === 'reset') {
+      setZoomLevel(100);
+    } else if (direction === 'in') {
+      setZoomLevel(prev => Math.min(prev + 10, 200));
+    } else {
+      setZoomLevel(prev => Math.max(prev - 10, 50));
+    }
+  }
+
+  // Effect to render DOCX when data is available and ref is mounted
+  React.useEffect(() => {
+    if (docxData && docxPreviewRef.current && previewType === 'binary' && previewContent === 'docx') {
+      const container = docxPreviewRef.current;
+      
+      // Clear previous content
+      container.innerHTML = '';
+      
+      // Reset page controls
+      setCurrentPage(1);
+      setTotalPages(1);
+      setZoomLevel(100);
+      
+      // Render DOCX with all formatting preserved including page breaks
+      renderAsync(docxData, container, undefined, {
+        className: 'docx',            // Use docx class for library styling
+        inWrapper: false,             // Don't wrap - let sections be direct children
+        ignoreWidth: false,           // Preserve document width
+        ignoreHeight: false,          // Preserve document height
+        ignoreFonts: false,           // Use document's fonts
+        breakPages: true,             // Render page breaks
+        ignoreLastRenderedPageBreak: false,  // Include all page breaks
+        experimental: true,           // Enable experimental features for better page break detection
+        trimXmlDeclaration: true,
+        useBase64URL: false,          // Use blob URLs for better performance
+        renderHeaders: true,          // Include headers
+        renderFooters: true,          // Include footers
+        renderFootnotes: true,        // Include footnotes
+        renderEndnotes: true,         // Include endnotes
+        debug: false
+      })
+        .then(() => {
+          console.log('DOCX preview rendered successfully');
+          
+          // First, try to find explicit section/page markers
+          let sections: NodeListOf<Element> | Element[] = container.querySelectorAll('section.docx');
+          
+          if (sections.length === 0) {
+            sections = container.querySelectorAll('section');
+          }
+          
+          if (sections.length === 0) {
+            sections = container.querySelectorAll('article');
+          }
+          
+          // If we found explicit sections, use them
+          if (sections.length > 0) {
+            console.log('Found explicit page sections:', sections.length);
+            setTotalPages(sections.length);
+            setPageElements(Array.from(sections));
+            
+            // Add page number attributes
+            sections.forEach((section, index) => {
+              section.setAttribute('data-page-number', String(index + 1));
+            });
+          } else {
+            // No explicit sections - we have continuous content
+            // Calculate pages based on document height and page height from metadata
+            console.log('No explicit sections found, calculating pages from content height');
+            
+            const pageHeightStr = docxMetadata?.pageHeight || '11in';
+            const pageHeightInches = parseFloat(pageHeightStr);
+            const pageHeightPx = pageHeightInches * 96; // 96 DPI
+            
+            const contentHeight = container.scrollHeight;
+            const calculatedPages = Math.ceil(contentHeight / pageHeightPx);
+            
+            console.log('Content height:', contentHeight, 'px');
+            console.log('Page height:', pageHeightPx, 'px');
+            console.log('Calculated pages:', calculatedPages);
+            
+            // Create virtual page markers by wrapping content in sections
+            if (calculatedPages > 1) {
+              const allContent = container.innerHTML;
+              container.innerHTML = ''; // Clear container
+              
+              // Create sections for each page based on height
+              for (let i = 0; i < calculatedPages; i++) {
+                const section = document.createElement('section');
+                section.className = 'docx-page';
+                section.setAttribute('data-page-number', String(i + 1));
+                section.style.minHeight = `${pageHeightPx}px`;
+                
+                // For first page, add all content (it will flow naturally)
+                if (i === 0) {
+                  section.innerHTML = allContent;
+                }
+                
+                container.appendChild(section);
+              }
+              
+              const newSections = container.querySelectorAll('section.docx-page');
+              setTotalPages(newSections.length);
+              setPageElements(Array.from(newSections));
+            } else {
+              // Single page document
+              setTotalPages(1);
+              setPageElements([container]);
+            }
+          }
+          
+          const pageCount = sections.length || 1;
+          console.log('Page count:', pageCount, 'sections found');
+          setTotalPages(pageCount);
+          setPageElements(Array.from(sections));
+          
+          // Add page number attributes
+          sections.forEach((section, index) => {
+            section.setAttribute('data-page-number', String(index + 1));
+          });
+        })
+        .catch((renderError) => {
+          console.error('DOCX rendering failed:', renderError);
+          toast.error?.('Unable to preview this document. Please download it to view in Word.');
+          // Close preview on error
+          setSelectedSlug(null);
+        });
+    }
+  }, [docxData, previewType, previewContent]);
+
+  React.useEffect(() => {
+    if (selectedSlug) {
+      loadPreview(selectedSlug);
+    } else {
+      setPreviewContent(null);
+    }
+  }, [selectedSlug]);
   React.useEffect(() => {
     setCompileStates((prev) => {
       let changed = false;
@@ -103,6 +510,15 @@ export default function TemplatesPage() {
   }, [items]);
 
   React.useEffect(() => { load(); }, []);
+
+  // Auto-select first template when items load
+  React.useEffect(() => {
+    if (items.length > 0 && !selectedSlug) {
+      const firstTemplate = items[0];
+      setSelectedSlug(firstTemplate.slug);
+      loadPreview(firstTemplate.slug);
+    }
+  }, [items, selectedSlug]);
 
   // Only Full Generator is supported now
 
@@ -397,8 +813,8 @@ export default function TemplatesPage() {
         </Card>
       ) : (
       <div className="grid grid-cols-12 gap-4 min-h-0">
-        {/* Cards list full width */}
-        <div className="col-span-12">
+        {/* Cards list - left side */}
+        <div className={selectedSlug ? "col-span-12 md:col-span-5" : "col-span-12"}>
           <Card className="h-[calc(100vh-220px)] flex flex-col border-0 shadow-lg overflow-hidden">
             <div className="p-4 border-b border-border/40 bg-muted/20">
               <div className="flex items-center gap-3">
@@ -456,89 +872,141 @@ export default function TemplatesPage() {
                       const compileLabel = isCompiling ? 'Compiling...' : (hadError ? 'Retry compile' : (hasCompiled ? 'Recompile' : 'Compile'));
                       const compileActionLabel = isCompiling ? 'Compiling template' : (hadError ? 'Retry compile for template' : (hasCompiled ? 'Recompile template' : 'Compile template'));
                       const compileTooltip = isCompiling ? 'Compilation running...' : (hadError ? 'Last attempt failed - try again' : (hasCompiled ? 'Generate a fresh FullGen script' : 'Create the FullGen script'));
+                      
+                      // Determine icon for template type
+                      const TemplateIcon = t.hasDocx ? FileTextIcon : (t.hasExcel ? FileSpreadsheet : FileCode);
+                      const iconWrapper = t.hasDocx ? 'bg-blue-100 text-blue-600' : (t.hasExcel ? 'bg-green-100 text-green-600' : 'bg-purple-100 text-purple-600');
+                      const typeLabel = t.hasDocx ? 'Word Document' : (t.hasExcel ? 'Excel Spreadsheet' : 'Text/Code');
+                      
                       return (
-                        <div key={t.slug} className="rounded-md border bg-card/50 transition px-4 py-3">
-                        {/* ... rest of your template item content stays the same ... */}
-                        <div className="flex items-center justify-between gap-3">
-                          <div>
-                            <div className="font-medium">{t.name || t.slug}</div>
-                            <div className="text-xs text-muted-foreground">{t.slug}</div>
-                          </div>
-                          <div className="flex items-center gap-2 shrink-0">
-                            <Tooltip>
-                              <TooltipTrigger>
-                                <span className={`text-xs px-2 py-0.5 rounded border ${t.hasFullGen ? 'bg-green-50 text-green-700 border-green-200' : 'bg-amber-50 text-amber-700 border-amber-200'}`}>{t.hasFullGen ? 'Compiled' : 'Not compiled'}</span>
-                              </TooltipTrigger>
-                              <TooltipContent>{t.hasFullGen ? 'Template has a generated FullGen script' : 'Template has not been compiled yet'}</TooltipContent>
-                            </Tooltip>
-                            <span className="text-xs px-2 py-0.5 rounded border">{t.hasDocx ? 'Word' : (t.hasExcel ? 'Excel' : 'Text')}</span>
+                        <div 
+                          key={t.slug} 
+                          className={`rounded-md border transition px-3 py-2 cursor-pointer ${
+                            selectedSlug === t.slug 
+                              ? 'bg-primary/10 border-primary/50 shadow-sm' 
+                              : 'bg-card/50 hover:bg-accent/50 hover:border-accent'
+                          }`}
+                          onClick={() => setSelectedSlug(t.slug)}
+                        >
+                          <div className="flex gap-3">
+                            <div className={`flex h-8 w-8 items-center justify-center rounded-md ${iconWrapper} shrink-0`} title={typeLabel}>
+                              <TemplateIcon className="h-4 w-4" />
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center justify-between gap-3">
+                                <div className="min-w-0 flex-1">
+                                  <div className="font-medium break-words leading-snug" title={t.name || t.slug}>
+                                    {t.name || t.slug}
+                                  </div>
+                                  <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                                    <span title={t.slug}>{t.slug}</span>
+                                    {t.workspaceSlug && (
+                                      <span className="text-primary" title={`Workspace: ${t.workspaceSlug}`}>
+                                        {t.workspaceSlug}
+                                      </span>
+                                    )}
+                                    {t.hasFullGen ? (
+                                      <span className="inline-flex items-center gap-1 text-green-600">
+                                        <CheckCircle2 className="h-3 w-3" />
+                                        Compiled
+                                      </span>
+                                    ) : (
+                                      <span className="inline-flex items-center gap-1 text-amber-600">
+                                        <AlertTriangle className="h-3 w-3" />
+                                        Not compiled
+                                      </span>
+                                    )}
+                                    {t.updatedAt && (
+                                      <span title={new Date(t.updatedAt).toLocaleString()}>
+                                        {formatRelativeTime(t.updatedAt)}
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+                                  <Tooltip>
+                                    <TooltipTrigger>
+                                      <Button
+                                        size="icon"
+                                        variant={hadError ? "outline" : "default"}
+                                        className={`h-9 w-9 ${
+                                          hadError ? 'border-amber-500 text-amber-700 hover:bg-amber-50' : ''
+                                        } ${isCompiling ? 'opacity-80' : ''}`}
+                                        aria-label={compileActionLabel}
+                                        onClick={(e) => { e.stopPropagation(); compile(t.slug); }}
+                                        disabled={disableCompileButton}
+                                        aria-busy={isCompiling}
+                                      >
+                                        {isCompiling ? (
+                                          <Loader2 className="h-4 w-4 animate-spin" />
+                                        ) : hadError ? (
+                                          <AlertTriangle className="h-4 w-4" />
+                                        ) : hasCompiled ? (
+                                          <Icon.Refresh className="h-4 w-4" />
+                                        ) : (
+                                          <Sparkles className="h-4 w-4" />
+                                        )}
+                                      </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>{compileTooltip}</TooltipContent>
+                                  </Tooltip>
+                                  <Tooltip>
+                                    <TooltipTrigger>
+                                      <Button
+                                        size="icon"
+                                        variant="ghost"
+                                        className="h-9 w-9"
+                                        aria-label="Open folder"
+                                        onClick={async (e) => {
+                                          e.stopPropagation();
+                                          try {
+                                            const r = await apiFetch(`/api/templates/${encodeURIComponent(t.slug)}/open-folder`, { method: 'POST' });
+                                            if (!r.ok) throw new Error(String(r.status));
+                                            toast.success('Opened folder');
+                                          } catch { toast.error('Failed to open folder') }
+                                        }}
+                                      >
+                                        <Icon.Folder className="h-4 w-4" />
+                                      </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>Open Folder</TooltipContent>
+                                  </Tooltip>
+                                  {t.hasFullGen && (
+                                    <Tooltip>
+                                      <TooltipTrigger>
+                                        <Button
+                                          size="icon"
+                                          variant="ghost"
+                                          className="h-9 w-9"
+                                          aria-label="View FullGen"
+                                          onClick={(e) => { e.stopPropagation(); viewFullGen(t.slug); }}
+                                        >
+                                          <Icon.File className="h-4 w-4" />
+                                        </Button>
+                                      </TooltipTrigger>
+                                      <TooltipContent>View FullGen Script</TooltipContent>
+                                    </Tooltip>
+                                  )}
+                                  <Tooltip>
+                                    <TooltipTrigger>
+                                      <Button
+                                        size="icon"
+                                        variant="destructive"
+                                        className="h-9 w-9"
+                                        aria-label="Delete"
+                                        onClick={(e) => { e.stopPropagation(); startDelete(t.slug); }}
+                                      >
+                                        <Icon.Trash className="h-4 w-4" />
+                                      </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>Delete Template</TooltipContent>
+                                  </Tooltip>
+                                </div>
+                              </div>
+                            </div>
                           </div>
                         </div>
-                        <div className="mt-2 grid grid-cols-3 gap-2 text-xs">
-                          <div>
-                            <div className="text-muted-foreground">Workspace</div>
-                            <div>{t.workspaceSlug || '—'}</div>
-                          </div>
-                          <div>
-                            <div className="text-muted-foreground">Compiled</div>
-                            <div>{t.compiledAt ? new Date(t.compiledAt).toLocaleString() : '—'}</div>
-                          </div>
-                          <div>
-                            <div className="text-muted-foreground">Updated</div>
-                            <div>{t.updatedAt ? new Date(t.updatedAt).toLocaleString() : '—'}</div>
-                          </div>
-                        </div>
-                        <div className="mt-2 flex flex-col items-end gap-2">
-                          <Tooltip>
-                            <TooltipTrigger>
-                              <Button
-                                size="default"
-                                variant="default"
-                                className={`gap-2 px-4 shadow-sm ${hadError ? 'ring-1 ring-warning/40' : ''}`}
-                                aria-label={compileActionLabel}
-                                title={compileActionLabel}
-                                onClick={() => compile(t.slug)}
-                                disabled={disableCompileButton}
-                                aria-busy={isCompiling}
-                              >
-                                <Icon.Refresh className={`h-4 w-4 ${isCompiling ? 'animate-spin' : ''}`} />
-                                <span>{compileLabel}</span>
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent>{compileTooltip}</TooltipContent>
-                          </Tooltip>
-                          <div className="flex items-center gap-2 flex-wrap justify-end">
-                            <Tooltip>
-                              <TooltipTrigger>
-                                <Button size="icon" variant="ghost" aria-label="Open folder" title="Open Folder" onClick={async () => {
-                                  try {
-                                    const r = await apiFetch(`/api/templates/${encodeURIComponent(t.slug)}/open-folder`, { method: 'POST' });
-                                    if (!r.ok) throw new Error(String(r.status));
-                                    toast.success('Opened folder');
-                                  } catch { toast.error('Failed to open folder') }
-                                }}>
-                                  <Icon.Folder className="h-4 w-4" />
-                                </Button>
-                              </TooltipTrigger>
-                              <TooltipContent>Open Folder</TooltipContent>
-                            </Tooltip>
-                            {t.hasFullGen ? (
-                              <Tooltip>
-                                <TooltipTrigger>
-                                  <Button size="icon" variant="ghost" aria-label="View FullGen" title="View FullGen" onClick={() => viewFullGen(t.slug)}>
-                                    <Icon.File className="h-4 w-4" />
-                                  </Button>
-                                </TooltipTrigger>
-                                <TooltipContent>View FullGen</TooltipContent>
-                              </Tooltip>
-                            ) : null}
-                            <Button size="icon" variant="destructive" aria-label="Delete" title="Delete" onClick={() => startDelete(t.slug)}>
-                              <Icon.Trash className="h-4 w-4" />
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
-                    );
+                      );
                     })}
                 </div>
               </div>
@@ -549,9 +1017,216 @@ export default function TemplatesPage() {
             )}
           </Card>
         </div>
+
+        {/* Preview panel - right side - always visible */}
+        <div className="col-span-12 md:col-span-7">
+          {selectedSlug ? (() => {
+            const selectedTemplate = items.find(t => t.slug === selectedSlug);
+            return (
+            <Card className="h-[calc(100vh-220px)] flex flex-col border-0 shadow-lg overflow-hidden">
+              <div className="p-4 border-b border-border/40 bg-muted/20 flex items-center justify-between">
+                <div>
+                  <div className="font-semibold">{selectedTemplate?.name || selectedSlug}</div>
+                  <div className="text-xs text-muted-foreground">Template Preview</div>
+                </div>
+              </div>
+              <div className="flex-1 overflow-auto bg-white">
+                {previewLoading ? (
+                  <div className="flex items-center justify-center h-full">
+                    <div className="text-center space-y-3">
+                      <Loader2 className="h-8 w-8 animate-spin text-muted-foreground mx-auto" />
+                      <div className="text-sm text-muted-foreground">Loading preview...</div>
+                    </div>
+                  </div>
+                ) : previewType === 'binary' && previewSource ? (
+                  <div className="h-full flex flex-col bg-muted/5">
+                    {/* PDF-style toolbar */}
+                    <div className="px-4 py-2 border-b border-border/40 bg-background/95 backdrop-blur">
+                      <div className="flex items-center justify-between gap-6">
+                        {/* Left: Document name */}
+                        <div className="flex items-center gap-2 min-w-0 overflow-hidden">
+                          <FileTextIcon className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                          <span className="text-sm text-foreground truncate whitespace-nowrap">
+                            {selectedTemplate?.name || 'Document Preview'}
+                          </span>
+                        </div>
+                        
+                        {/* Center: Page controls and zoom */}
+                        {previewContent === 'docx' && (
+                          <div className="flex items-center gap-6 flex-shrink-0">
+                            {/* Page navigation */}
+                            <div className="flex items-center gap-2">
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => goToPage(currentPage - 1)}
+                                disabled={currentPage <= 1}
+                                className="h-8 w-8 p-0"
+                              >
+                                <ChevronLeft className="h-5 w-5" />
+                              </Button>
+                              <div className="flex items-center gap-2">
+                                <Input
+                                  type="number"
+                                  min={1}
+                                  max={totalPages}
+                                  value={currentPage}
+                                  onChange={(e) => {
+                                    const val = e.target.value;
+                                    if (val === '') return;
+                                    const page = parseInt(val);
+                                    if (!isNaN(page)) {
+                                      goToPage(page);
+                                    }
+                                  }}
+                                  onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                      const page = parseInt(e.currentTarget.value);
+                                      if (!isNaN(page)) {
+                                        goToPage(page);
+                                      }
+                                    }
+                                  }}
+                                  className="h-8 w-14 text-center text-sm"
+                                />
+                                <span className="text-sm text-muted-foreground whitespace-nowrap">of {totalPages}</span>
+                              </div>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => goToPage(currentPage + 1)}
+                                disabled={currentPage >= totalPages}
+                                className="h-8 w-8 p-0"
+                              >
+                                <ChevronRight className="h-5 w-5" />
+                              </Button>
+                            </div>
+                            
+                            {/* Zoom controls */}
+                            <div className="flex items-center gap-2">
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => handleZoom('out')}
+                                disabled={zoomLevel <= 50}
+                                className="h-8 w-8 p-0"
+                              >
+                                <Minus className="h-5 w-5" />
+                              </Button>
+                              <span className="text-sm text-muted-foreground min-w-[3.5rem] text-center tabular-nums whitespace-nowrap">
+                                {zoomLevel}%
+                              </span>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => handleZoom('in')}
+                                disabled={zoomLevel >= 200}
+                                className="h-8 w-8 p-0"
+                              >
+                                <Plus className="h-5 w-5" />
+                              </Button>
+                            </div>
+                          </div>
+                        )}
+                        
+                        {/* Right: Download button */}
+                        <div className="flex items-center flex-shrink-0">
+                          <Button
+                            size="sm"
+                            variant="default"
+                            onClick={() => {
+                              const a = document.createElement('a');
+                              a.href = previewSource;
+                              a.download = `${selectedTemplate?.slug || 'template'}.${previewContent}`;
+                              document.body.appendChild(a);
+                              a.click();
+                              document.body.removeChild(a);
+                            }}
+                            className="h-7 px-3 whitespace-nowrap"
+                          >
+                            <Icon.Download className="h-4 w-4 mr-1.5" />
+                            Download
+                          </Button>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    {/* Document viewer area */}
+                    <div 
+                      ref={viewerScrollRef}
+                      className="flex-1 overflow-auto" 
+                      style={{ backgroundColor: '#525659' }}
+                    >
+                      {previewContent === 'docx' ? (
+                        <div className="min-h-full flex justify-center py-8 px-4">
+                          <div 
+                            className="docx-viewer-container transition-transform duration-200"
+                            style={{
+                              transform: `scale(${zoomLevel / 100})`,
+                              transformOrigin: 'top center',
+                              // Apply document metadata as CSS custom properties for dynamic styling
+                              ...(docxMetadata?.pageWidth && { '--docx-page-width': docxMetadata.pageWidth } as any),
+                              ...(docxMetadata?.pageHeight && { '--docx-page-height': docxMetadata.pageHeight } as any),
+                              ...(docxMetadata?.marginTop && { '--docx-margin-top': docxMetadata.marginTop } as any),
+                              ...(docxMetadata?.marginBottom && { '--docx-margin-bottom': docxMetadata.marginBottom } as any),
+                              ...(docxMetadata?.marginLeft && { '--docx-margin-left': docxMetadata.marginLeft } as any),
+                              ...(docxMetadata?.marginRight && { '--docx-margin-right': docxMetadata.marginRight } as any),
+                              ...(docxMetadata?.defaultFont && { '--docx-default-font': docxMetadata.defaultFont } as any),
+                              ...(docxMetadata?.defaultSize && { '--docx-default-size': docxMetadata.defaultSize } as any),
+                            }}
+                          >
+                            <div ref={docxPreviewRef} />
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-center h-full p-8">
+                          <div className="text-center space-y-3">
+                            <FileSpreadsheet className="h-16 w-16 mx-auto text-green-600 opacity-50" />
+                            <div className="text-sm text-muted-foreground max-w-md">
+                              Excel preview not yet supported.
+                              <br />
+                              Please download the file to view it in Excel.
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ) : previewContent ? (
+                  <div 
+                    className="prose prose-sm max-w-none p-6"
+                    dangerouslySetInnerHTML={{ __html: previewContent }}
+                  />
+                ) : (
+                  <div className="flex items-center justify-center h-full">
+                    <div className="text-center space-y-2 text-muted-foreground">
+                      <FileTextIcon className="h-12 w-12 mx-auto opacity-50" />
+                      <div className="text-sm">No preview available</div>
+                      <div className="text-xs">This template may not have a previewable format</div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </Card>
+            );
+          })() : (
+            <Card className="h-[calc(100vh-220px)] flex flex-col border-0 shadow-lg overflow-hidden">
+              <div className="flex items-center justify-center h-full">
+                <div className="text-center space-y-3 text-muted-foreground p-8">
+                  <FileTextIcon className="h-16 w-16 mx-auto opacity-30" />
+                  <div className="text-sm font-medium">No Template Selected</div>
+                  <div className="text-xs max-w-sm">
+                    {items.length === 0 
+                      ? "Upload a template to get started" 
+                      : "Select a template from the list to view its preview"}
+                  </div>
+                </div>
+              </div>
+            </Card>
+          )}
+        </div>
       </div>
       )}
-
 
       {/* Delete Template Confirm */}
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>

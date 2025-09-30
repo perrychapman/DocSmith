@@ -194,3 +194,175 @@ body {
 .no-drag {
   -webkit-app-region: no-drag;
 }
+
+/* DOCX Preview Styling - Comprehensive Word-like rendering */
+
+/* Create isolation layer - block Tailwind inheritance but allow library styles */
+.docx-viewer-container {
+  /* Don't inherit Tailwind's typography */
+  font-family: var(--docx-default-font, Calibri, 'Segoe UI', Arial, sans-serif);
+  font-size: var(--docx-default-size, 11pt);
+  line-height: 1.15;
+  color: #000000;
+  letter-spacing: normal;
+  word-spacing: normal;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  
+  /* Ensure block display */
+  display: block;
+}
+
+/* Remove any wrapper containers - we only want the sections */
+.docx-viewer-container > div {
+  all: unset;
+  display: block !important;
+}
+
+/* Critical: Prevent Tailwind's Preflight reset from affecting docx-preview elements */
+.docx-viewer-container *,
+.docx-viewer-container *::before,
+.docx-viewer-container *::after {
+  /* Undo Tailwind's border-box - Word uses content-box for internal elements */
+  box-sizing: border-box;
+}
+
+/* Undo Tailwind's aggressive resets - let inline styles work */
+.docx-viewer-container h1,
+.docx-viewer-container h2,
+.docx-viewer-container h3,
+.docx-viewer-container h4,
+.docx-viewer-container h5,
+.docx-viewer-container h6 {
+  font-weight: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  margin: 0;
+}
+
+.docx-viewer-container p {
+  margin: 0;
+  line-height: inherit;
+  white-space: normal;
+  word-wrap: break-word;
+  overflow-wrap: break-word;
+}
+
+.docx-viewer-container table {
+  border-collapse: collapse;
+  border-spacing: 0;
+}
+
+.docx-viewer-container td,
+.docx-viewer-container th {
+  padding: 0;
+  vertical-align: top;
+}
+
+.docx-viewer-container ul,
+.docx-viewer-container ol {
+  margin: 0;
+  padding: 0;
+}
+
+/* Remove 'all: revert' entirely - it was stripping colors and backgrounds */
+
+/* Apply document metadata to pages - use extracted margins */
+.docx-viewer-container section,
+.docx-viewer-container article,
+.docx-viewer-container .docx-page {
+  display: block !important;
+  background: white !important;
+  margin: 0 auto 20px auto !important;
+  box-shadow: 0 1px 3px rgba(0,0,0,0.12), 0 1px 2px rgba(0,0,0,0.08) !important;
+  position: relative !important;
+  border: none !important;
+  outline: none !important;
+  
+  /* Use document's actual page dimensions if available */
+  width: var(--docx-page-width, 8.5in) !important;
+  min-height: var(--docx-page-height, 11in) !important;
+  
+  /* Apply extracted margins - this creates the white space around content */
+  padding-top: var(--docx-margin-top, 0) !important;
+  padding-bottom: var(--docx-margin-bottom, 0) !important;
+  padding-left: var(--docx-margin-left, 0) !important;
+  padding-right: var(--docx-margin-right, 0) !important;
+  
+  box-sizing: border-box !important;
+  overflow: visible !important;
+}
+
+/* Remove extra borders/outlines/shadows from any wrapper elements */
+.docx-viewer-container .docx-wrapper,
+.docx-viewer-container > div,
+.docx-viewer-container > div > * {
+  border: none !important;
+  outline: none !important;
+  box-shadow: none !important;
+  background: transparent !important;
+  margin: 0 !important;
+  padding: 0 !important;
+}
+
+/* Ensure no pseudo-elements create duplicate shadows */
+.docx-viewer-container section::before,
+.docx-viewer-container section::after,
+.docx-viewer-container article::before,
+.docx-viewer-container article::after,
+.docx-viewer-container .docx-page::before,
+.docx-viewer-container .docx-page::after {
+  display: none !important;
+  content: none !important;
+}
+
+.docx-viewer-container section:last-child,
+.docx-viewer-container article:last-child,
+.docx-viewer-container .docx-page:last-child {
+  margin-bottom: 0 !important;
+}
+
+/* Force page break rendering - handle inline page break markers */
+.docx-viewer-container br[style*="page-break"],
+.docx-viewer-container .page-break,
+.docx-viewer-container [data-page-break],
+.docx-viewer-container .docx-page-break {
+  display: block !important;
+  page-break-after: always !important;
+  break-after: page !important;
+  height: 0 !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+}
+
+/* Ensure proper text rendering */
+.docx-viewer-container * {
+  text-rendering: optimizeLegibility;
+}
+
+/* Fix list rendering */
+.docx-viewer-container ul {
+  list-style-position: outside;
+  margin-left: 0.5in;
+}
+
+.docx-viewer-container ol {
+  list-style-position: outside;
+  margin-left: 0.5in;
+}
+
+/* Preserve hyperlinks */
+.docx-viewer-container a {
+  color: #0563c1;
+  text-decoration: underline;
+}
+
+/* Ensure images display correctly */
+.docx-viewer-container img {
+  max-width: 100%;
+  height: auto;
+  display: inline-block;
+  vertical-align: baseline;
+}

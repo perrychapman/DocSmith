@@ -1,0 +1,68 @@
+// Security Validation Test
+// Test the file security validator to ensure dangerous files are blocked
+
+### Test 1: Blocked Executable Files
+POST http://localhost:4000/api/uploads/1/open-file?name=malware.exe
+Content-Type: application/json
+
+### Expected: 403 Forbidden with security error
+
+### Test 2: Blocked Script File
+POST http://localhost:4000/api/uploads/1/open-file?name=script.bat
+Content-Type: application/json
+
+### Expected: 403 Forbidden with security error
+
+### Test 3: Blocked PowerShell Script
+POST http://localhost:4000/api/uploads/1/open-file?name=hack.ps1
+Content-Type: application/json
+
+### Expected: 403 Forbidden with security error
+
+### Test 4: Double Extension Attack (disguised executable)
+POST http://localhost:4000/api/uploads/1/open-file?name=document.pdf.exe
+Content-Type: application/json
+
+### Expected: 403 Forbidden with double extension warning
+
+### Test 5: Allowed PDF File
+POST http://localhost:4000/api/uploads/1/open-file?name=report.pdf
+Content-Type: application/json
+
+### Expected: 200 OK (if file exists) or 404 (if not found)
+
+### Test 6: Allowed Excel File
+POST http://localhost:4000/api/uploads/1/open-file?name=data.xlsx
+Content-Type: application/json
+
+### Expected: 200 OK (if file exists) or 404 (if not found)
+
+### Test 7: Allowed CSV File
+POST http://localhost:4000/api/uploads/1/open-file?name=report.csv
+Content-Type: application/json
+
+### Expected: 200 OK (if file exists) or 404 (if not found)
+
+### Test 8: Blocked Macro-Enabled Office File
+POST http://localhost:4000/api/uploads/1/open-file?name=document.docm
+Content-Type: application/json
+
+### Expected: 403 Forbidden (macro files are blocked)
+
+### Test 9: Allowed Regular Word Document
+POST http://localhost:4000/api/uploads/1/open-file?name=report.docx
+Content-Type: application/json
+
+### Expected: 200 OK (if file exists) or 404 (if not found)
+
+### Test 10: Test on Documents Endpoint - Blocked EXE
+POST http://localhost:4000/api/documents/1/open-file?name=virus.exe
+Content-Type: application/json
+
+### Expected: 403 Forbidden with security error
+
+### Test 11: Test on Documents Endpoint - Allowed PDF
+POST http://localhost:4000/api/documents/1/open-file?name=invoice.pdf
+Content-Type: application/json
+
+### Expected: 200 OK (if file exists) or 404 (if not found)

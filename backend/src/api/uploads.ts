@@ -8,6 +8,7 @@ import { getDB } from "../services/storage"
 import { ensureUploadsDir, resolveCustomerPaths } from "../services/customerLibrary"
 import { anythingllmRequest } from "../services/anythingllm"
 import { findDocsByFilename, documentExists, qualifiedNamesForShort } from "../services/anythingllmDocs"
+import { secureFileValidation } from "../services/fileSecurityValidator"
 
 // Lazy import multer to avoid types requirement at compile time
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -50,8 +51,14 @@ function openInDefaultApp(targetPath: string): boolean {
   const platform = process.platform
   try {
     if (platform === 'win32') {
-      const escaped = targetPath.replace(/"/g, '""')
-      const child = spawn('cmd', ['/c', 'start', '', '"' + escaped + '"'], { detached: true, stdio: 'ignore' })
+      // Use proper Windows start command syntax
+      // The empty string "" is the window title, then we pass the file path
+      // Using /B to not create a new console window
+      const child = spawn('cmd', ['/c', 'start', '/B', '""', targetPath], { 
+        detached: true, 
+        stdio: 'ignore',
+        shell: true 
+      })
       child.unref()
     } else if (platform === 'darwin') {
       const child = spawn('open', [targetPath], { detached: true, stdio: 'ignore' })
@@ -180,13 +187,23 @@ router.get("/:customerId/browse", (req, res) => {
   )
 })
 
-// POST /api/uploads/:customerId/open-file -> open an uploaded file in the host OS default application
+// POST /api/uploads/:customerId/open-file -> return file metadata for client-side opening (consistent with documents endpoint)
 router.post("/:customerId/open-file", (req, res) => {
   const id = Number(req.params.customerId)
   const nameRaw = String(req.query.name || (req.body as any)?.name || "").trim()
   const name = path.basename(nameRaw)
   if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "Invalid customerId" })
   if (!name) return res.status(400).json({ error: "Missing file name" })
+
+  // Security validation - prevent opening executable/dangerous files
+  const validation = secureFileValidation(name, true) // Use whitelist mode for strict security
+  if (!validation.allowed) {
+    return res.status(403).json({ 
+      error: "File type not allowed", 
+      reason: validation.reason,
+      extension: validation.extension 
+    })
+  }
 
   const db = getDB()
   db.get<CustomerRow>(
@@ -203,8 +220,8 @@ router.post("/:customerId/open-file", (req, res) => {
         const safeTarget = path.resolve(target)
         if (!safeTarget.startsWith(safeBase)) return res.status(400).json({ error: "Invalid file path" })
         if (!fs.existsSync(safeTarget)) return res.status(404).json({ error: "File not found" })
-        if (!openInDefaultApp(safeTarget)) return res.status(500).json({ error: "Failed to open file" })
-        return res.json({ ok: true })
+        // Return path and extension for client-side opening (Electron will use shell.openPath)
+        return res.json({ ok: true, path: safeTarget, extension: path.extname(safeTarget) })
       } catch (e) {
         return res.status(500).json({ error: (e as Error).message })
       }

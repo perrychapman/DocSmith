@@ -559,6 +559,16 @@ export function CustomersPage() {
     try {
       const response = await apiFetch(openUrl, { method: 'POST' })
       const payload = await response.json().catch(() => null)
+      
+      // Handle security/validation errors (403 Forbidden)
+      if (response.status === 403) {
+        const reason = (payload as any)?.reason || 'File type not allowed for security reasons'
+        const extension = (payload as any)?.extension || ''
+        toast.error?.(`Security: ${reason}`)
+        console.warn(`Blocked file open attempt: ${fileName} (${extension})`)
+        return
+      }
+      
       if (!response.ok) throw new Error(String(response.status))
       const targetPath = (payload as any)?.path
       const extension = typeof (payload as any)?.extension === 'string' ? String((payload as any).extension).toLowerCase() : undefined

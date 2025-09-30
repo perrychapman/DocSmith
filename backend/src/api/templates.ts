@@ -428,10 +428,131 @@ router.post("/:slug/compile", async (req, res) => {
 
     // Extract skeleton from docx/html/text for the AI to mirror structure
     let skeleton = ''
+    let documentStructure = ''
     try {
       const docxPath = path.join(dir, 'template.docx')
       if (fs.existsSync(docxPath)) {
         const buffer = fs.readFileSync(docxPath)
+        
+        // Comprehensive document analysis for intelligent compilation
+        try {
+          const rawTextResult = await (mammoth as any).extractRawText({ buffer })
+          const rawText = String(rawTextResult?.value || '').trim()
+          
+          if (rawText) {
+            const lines = rawText.split('\n').filter(l => l.trim())
+            
+            // Basic structure metrics
+            const hasTable = rawText.includes('\t') || /\|.*\|/.test(rawText)
+            const hasBullets = lines.some(l => /^[•\-*]/.test(l.trim()))
+            const hasNumbers = lines.some(l => /^\d+\./.test(l.trim()))
+            const wordCount = rawText.split(/\s+/).length
+            const sectionCount = lines.filter(l => l.length < 50 && l.toUpperCase() === l).length
+            
+            // Template purpose detection
+            const templateName = String(slug || '').toLowerCase()
+            const contentLower = rawText.toLowerCase()
+            let detectedPurpose = 'general document'
+            if (templateName.includes('invoice') || contentLower.includes('invoice') || contentLower.includes('bill to')) {
+              detectedPurpose = 'invoice/billing'
+            } else if (templateName.includes('report') || contentLower.includes('executive summary') || contentLower.includes('findings')) {
+              detectedPurpose = 'business report'
+            } else if (templateName.includes('resume') || templateName.includes('cv') || contentLower.includes('education') && contentLower.includes('experience')) {
+              detectedPurpose = 'resume/CV'
+            } else if (templateName.includes('letter') || contentLower.match(/dear\s+[a-z]/i)) {
+              detectedPurpose = 'formal letter'
+            } else if (templateName.includes('proposal') || contentLower.includes('scope of work') || contentLower.includes('deliverables')) {
+              detectedPurpose = 'business proposal'
+            } else if (templateName.includes('contract') || templateName.includes('agreement')) {
+              detectedPurpose = 'legal contract/agreement'
+            } else if (hasTable && (contentLower.includes('inventory') || contentLower.includes('stock') || contentLower.includes('quantity'))) {
+              detectedPurpose = 'inventory/catalog'
+            }
+            
+            // Smart field detection
+            const fieldPatterns = []
+            if (/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b|\b[A-Z][a-z]{2,8}\s+\d{1,2},?\s+\d{4}\b/i.test(rawText)) fieldPatterns.push('dates')
+            if (/\$[\d,]+\.\d{2}|USD|EUR|GBP/i.test(rawText)) fieldPatterns.push('currency/prices')
+            if (/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i.test(rawText)) fieldPatterns.push('email addresses')
+            if (/\(\d{3}\)\s*\d{3}-\d{4}|\d{3}-\d{3}-\d{4}/i.test(rawText)) fieldPatterns.push('phone numbers')
+            if (/\d+\s+[A-Z][a-z]+\s+(Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd)/i.test(rawText)) fieldPatterns.push('addresses')
+            if (/#[A-Z0-9-]+|ID:\s*[A-Z0-9]+|Order\s*#/i.test(rawText)) fieldPatterns.push('reference/ID numbers')
+            if (/\d+%|\bpercent\b/i.test(rawText)) fieldPatterns.push('percentages')
+            
+            // Section analysis - detect logical groupings
+            const sections = []
+            let currentSection = ''
+            for (const line of lines) {
+              if (line.length < 50 && line.toUpperCase() === line && line.length > 3) {
+                if (currentSection) sections.push(currentSection.trim())
+                currentSection = line + '\n'
+              } else {
+                currentSection += line + '\n'
+              }
+            }
+            if (currentSection) sections.push(currentSection.trim())
+            
+            // Extract example data patterns for AI guidance
+            const examplePatterns = []
+            const placeholderPattern = /\[(.*?)\]|\{(.*?)\}|<(.*?)>|___+|\.\.\./g
+            const matches = rawText.match(placeholderPattern)
+            if (matches && matches.length > 0) {
+              const uniquePlaceholders = [...new Set(matches.slice(0, 10))]
+              examplePatterns.push(`Placeholders found: ${uniquePlaceholders.join(', ')}`)
+            }
+            
+            // Detect tone/formality
+            let tone = 'neutral'
+            if (/\b(hereby|pursuant to|hereafter|whereas)\b/i.test(rawText)) {
+              tone = 'legal/formal'
+            } else if (/\b(Dear|Sincerely|Regards|Respectfully)\b/i.test(rawText)) {
+              tone = 'business formal'
+            } else if (/\b(Hi|Hey|Thanks|Cheers)\b/i.test(rawText)) {
+              tone = 'casual/informal'
+            }
+            
+            // Build comprehensive analysis
+            const parts = []
+            parts.push(`\n\nCOMPREHENSIVE DOCUMENT ANALYSIS:`)
+            parts.push(`\nTemplate Purpose: ${detectedPurpose}`)
+            parts.push(`Detected Tone: ${tone}`)
+            parts.push(`\nStructure Metrics:`)
+            parts.push(`- Word count: ${wordCount}`)
+            parts.push(`- Logical sections: ${sections.length}`)
+            parts.push(`- Contains tables: ${hasTable ? 'YES' : 'NO'}`)
+            parts.push(`- Contains bullet lists: ${hasBullets ? 'YES' : 'NO'}`)
+            parts.push(`- Contains numbered lists: ${hasNumbers ? 'YES' : 'NO'}`)
+            
+            if (fieldPatterns.length > 0) {
+              parts.push(`\nDetected Field Types: ${fieldPatterns.join(', ')}`)
+            }
+            
+            if (examplePatterns.length > 0) {
+              parts.push(`\nExample Patterns: ${examplePatterns.join('; ')}`)
+            }
+            
+            if (sections.length > 0 && sections.length <= 5) {
+              parts.push(`\nSection Breakdown:`)
+              sections.forEach((sec, idx) => {
+                const preview = sec.split('\n')[0].substring(0, 80)
+                parts.push(`  ${idx + 1}. ${preview}...`)
+              })
+            }
+            
+            parts.push(`\nDocument Preview (first 600 chars):${rawText.substring(0, 600)}...`)
+            parts.push(`\nCompilation Guidance:`)
+            parts.push(`- Create generator skeleton that respects the detected purpose: ${detectedPurpose}`)
+            parts.push(`- Preserve the detected tone: ${tone}`)
+            parts.push(`- Maintain field format patterns (dates, currency, etc.) in placeholders`)
+            parts.push(`- Structure code to make it easy for later workspace data integration`)
+            parts.push(`- If sections have clear purposes, create organized code blocks for each section\n`)
+            
+            documentStructure = parts.join('\n')
+          }
+        } catch {
+          // Structure analysis is optional, continue without it
+        }
+        
         const result = await (mammoth as any).convertToHtml({ buffer }, { styleMap: [
           "p[style-name='Title'] => h1:fresh",
           "p[style-name='Subtitle'] => h2:fresh",
@@ -485,7 +606,7 @@ router.post("/:slug/compile", async (req, res) => {
       }
     } catch {}
 
-    const prompt = `You are a senior TypeScript engineer and document automation specialist. Recreate this template faithfully while preserving layout, headers/footers, spacing, lists, tables, images, hyperlinks, and emphasis.\n\nOutput: ONLY TypeScript code that returns raw WordprocessingML (WML).\n\nExport exactly:\nexport async function generate(\n  toolkit: { json: (prompt: string) => Promise<any>; text: (prompt: string) => Promise<string>; query?: (prompt: string) => Promise<any>; getSkeleton?: (kind?: 'html'|'text') => Promise<string> },\n  builder: any,\n  context?: Record<string, any>\n): Promise<{ wml: string }>;\n\nHard requirements:\n- Return ONLY { wml } containing the inner <w:body> children (<w:p>, <w:tbl>, ...). Do NOT include <w:sectPr> or any package-level parts.\n- Mirror the TEMPLATE SKELETON (prefer HTML skeleton) for headings/order/grouping.\n- Apply formatting in WML: run properties (color, size, bold/italic/underline/strike, font) and paragraph properties (alignment, spacing, indents), table widths/styles, list/numbering with <w:numPr> matching template numbering.\n- Use STYLES, THEME, and NUMBERING XML excerpts to choose brand colors, fonts, and list styles. Convert theme colors to hex where needed.\n- Do NOT output HTML, Markdown, or a DOCX buffer. No external imports or file I/O.\n- Do NOT add any sections, paragraphs, tables, or content that are not present in the provided skeleton; if unsure, omit rather than invent.\n- Preserve styling exactly; do not change fonts, colors, sizes, spacing, numbering, or table properties beyond what the skeleton and excerpts imply.\n\nTEMPLATE ARTIFACTS (HTML skeleton + XML excerpts):\n${skeleton}`
+    const prompt = `You are a senior TypeScript engineer and document automation specialist. Recreate this template faithfully while preserving layout, headers/footers, spacing, lists, tables, images, hyperlinks, and emphasis.\n\nOutput: ONLY TypeScript code that returns raw WordprocessingML (WML).\n\nExport exactly:\nexport async function generate(\n  toolkit: { json: (prompt: string) => Promise<any>; text: (prompt: string) => Promise<string>; query?: (prompt: string) => Promise<any>; getSkeleton?: (kind?: 'html'|'text') => Promise<string> },\n  builder: any,\n  context?: Record<string, any>\n): Promise<{ wml: string }>;\n\nHard requirements:\n- Return ONLY { wml } containing the inner <w:body> children (<w:p>, <w:tbl>, ...). Do NOT include <w:sectPr> or any package-level parts.\n- Mirror the TEMPLATE SKELETON (prefer HTML skeleton) for headings/order/grouping.\n- Apply formatting in WML: run properties (color, size, bold/italic/underline/strike, font) and paragraph properties (alignment, spacing, indents), table widths/styles, list/numbering with <w:numPr> matching template numbering.\n- Use STYLES, THEME, and NUMBERING XML excerpts to choose brand colors, fonts, and list styles. Convert theme colors to hex where needed.\n- Do NOT output HTML, Markdown, or a DOCX buffer. No external imports or file I/O.\n- Do NOT add any sections, paragraphs, tables, or content that are not present in the provided skeleton; if unsure, omit rather than invent.\n- Preserve styling exactly; do not change fonts, colors, sizes, spacing, numbering, or table properties beyond what the skeleton and excerpts imply.\n- Use the DOCUMENT STRUCTURE ANALYSIS below to understand the content organization and make intelligent decisions about placeholder placement.${documentStructure}\n\nTEMPLATE ARTIFACTS (HTML skeleton + XML excerpts):\n${skeleton}`
 
     const chat = await anythingllmRequest<any>(`/workspace/${encodeURIComponent(String(wsSlug))}/chat`, 'POST', { message: prompt, mode: 'query' })
     const text = String(chat?.textResponse || chat?.message || chat || '')
@@ -535,6 +656,7 @@ router.get("/:slug/compile/stream", async (req, res) => {
     // Extract skeleton and XML hints
     stepStart('readTemplate')
     let skeleton = ''
+    let documentStructure = ''
     let isExcel = false
     try {
       const xlsxPath = path.join(dir, 'template.xlsx')
@@ -676,6 +798,126 @@ router.get("/:slug/compile/stream", async (req, res) => {
           const buffer = fs.readFileSync(docxPath)
           stepOk('readTemplate')
           stepStart('extractSkeleton')
+          
+          // Comprehensive document analysis for intelligent compilation
+          try {
+            const rawTextResult = await (mammoth as any).extractRawText({ buffer })
+            const rawText = String(rawTextResult?.value || '').trim()
+            
+            if (rawText) {
+              const lines = rawText.split('\n').filter(l => l.trim())
+              
+              // Basic structure metrics
+              const hasTable = rawText.includes('\t') || /\|.*\|/.test(rawText)
+              const hasBullets = lines.some(l => /^[•\-*]/.test(l.trim()))
+              const hasNumbers = lines.some(l => /^\d+\./.test(l.trim()))
+              const wordCount = rawText.split(/\s+/).length
+              const sectionCount = lines.filter(l => l.length < 50 && l.toUpperCase() === l).length
+              
+              // Template purpose detection
+              const templateName = String(slug || '').toLowerCase()
+              const contentLower = rawText.toLowerCase()
+              let detectedPurpose = 'general document'
+              if (templateName.includes('invoice') || contentLower.includes('invoice') || contentLower.includes('bill to')) {
+                detectedPurpose = 'invoice/billing'
+              } else if (templateName.includes('report') || contentLower.includes('executive summary') || contentLower.includes('findings')) {
+                detectedPurpose = 'business report'
+              } else if (templateName.includes('resume') || templateName.includes('cv') || contentLower.includes('education') && contentLower.includes('experience')) {
+                detectedPurpose = 'resume/CV'
+              } else if (templateName.includes('letter') || contentLower.match(/dear\s+[a-z]/i)) {
+                detectedPurpose = 'formal letter'
+              } else if (templateName.includes('proposal') || contentLower.includes('scope of work') || contentLower.includes('deliverables')) {
+                detectedPurpose = 'business proposal'
+              } else if (templateName.includes('contract') || templateName.includes('agreement')) {
+                detectedPurpose = 'legal contract/agreement'
+              } else if (hasTable && (contentLower.includes('inventory') || contentLower.includes('stock') || contentLower.includes('quantity'))) {
+                detectedPurpose = 'inventory/catalog'
+              }
+              
+              // Smart field detection
+              const fieldPatterns = []
+              if (/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b|\b[A-Z][a-z]{2,8}\s+\d{1,2},?\s+\d{4}\b/i.test(rawText)) fieldPatterns.push('dates')
+              if (/\$[\d,]+\.\d{2}|USD|EUR|GBP/i.test(rawText)) fieldPatterns.push('currency/prices')
+              if (/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i.test(rawText)) fieldPatterns.push('email addresses')
+              if (/\(\d{3}\)\s*\d{3}-\d{4}|\d{3}-\d{3}-\d{4}/i.test(rawText)) fieldPatterns.push('phone numbers')
+              if (/\d+\s+[A-Z][a-z]+\s+(Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd)/i.test(rawText)) fieldPatterns.push('addresses')
+              if (/#[A-Z0-9-]+|ID:\s*[A-Z0-9]+|Order\s*#/i.test(rawText)) fieldPatterns.push('reference/ID numbers')
+              if (/\d+%|\bpercent\b/i.test(rawText)) fieldPatterns.push('percentages')
+              
+              // Section analysis - detect logical groupings
+              const sections = []
+              let currentSection = ''
+              for (const line of lines) {
+                if (line.length < 50 && line.toUpperCase() === line && line.length > 3) {
+                  if (currentSection) sections.push(currentSection.trim())
+                  currentSection = line + '\n'
+                } else {
+                  currentSection += line + '\n'
+                }
+              }
+              if (currentSection) sections.push(currentSection.trim())
+              
+              // Extract example data patterns for AI guidance
+              const examplePatterns = []
+              const placeholderPattern = /\[(.*?)\]|\{(.*?)\}|<(.*?)>|___+|\.\.\./g
+              const matches = rawText.match(placeholderPattern)
+              if (matches && matches.length > 0) {
+                const uniquePlaceholders = [...new Set(matches.slice(0, 10))]
+                examplePatterns.push(`Placeholders found: ${uniquePlaceholders.join(', ')}`)
+              }
+              
+              // Detect tone/formality
+              let tone = 'neutral'
+              if (/\b(hereby|pursuant to|hereafter|whereas)\b/i.test(rawText)) {
+                tone = 'legal/formal'
+              } else if (/\b(Dear|Sincerely|Regards|Respectfully)\b/i.test(rawText)) {
+                tone = 'business formal'
+              } else if (/\b(Hi|Hey|Thanks|Cheers)\b/i.test(rawText)) {
+                tone = 'casual/informal'
+              }
+              
+              // Build comprehensive analysis
+              const parts = []
+              parts.push(`\n\nCOMPREHENSIVE DOCUMENT ANALYSIS:`)
+              parts.push(`\nTemplate Purpose: ${detectedPurpose}`)
+              parts.push(`Detected Tone: ${tone}`)
+              parts.push(`\nStructure Metrics:`)
+              parts.push(`- Word count: ${wordCount}`)
+              parts.push(`- Logical sections: ${sections.length}`)
+              parts.push(`- Contains tables: ${hasTable ? 'YES' : 'NO'}`)
+              parts.push(`- Contains bullet lists: ${hasBullets ? 'YES' : 'NO'}`)
+              parts.push(`- Contains numbered lists: ${hasNumbers ? 'YES' : 'NO'}`)
+              
+              if (fieldPatterns.length > 0) {
+                parts.push(`\nDetected Field Types: ${fieldPatterns.join(', ')}`)
+              }
+              
+              if (examplePatterns.length > 0) {
+                parts.push(`\nExample Patterns: ${examplePatterns.join('; ')}`)
+              }
+              
+              if (sections.length > 0 && sections.length <= 5) {
+                parts.push(`\nSection Breakdown:`)
+                sections.forEach((sec, idx) => {
+                  const preview = sec.split('\n')[0].substring(0, 80)
+                  parts.push(`  ${idx + 1}. ${preview}...`)
+                })
+              }
+              
+              parts.push(`\nDocument Preview (first 600 chars):${rawText.substring(0, 600)}...`)
+              parts.push(`\nCompilation Guidance:`)
+              parts.push(`- Create generator skeleton that respects the detected purpose: ${detectedPurpose}`)
+              parts.push(`- Preserve the detected tone: ${tone}`)
+              parts.push(`- Maintain field format patterns (dates, currency, etc.) in placeholders`)
+              parts.push(`- Structure code to make it easy for later workspace data integration`)
+              parts.push(`- If sections have clear purposes, create organized code blocks for each section\n`)
+              
+              documentStructure = parts.join('\n')
+            }
+          } catch {
+            // Structure analysis is optional, continue without it
+          }
+          
           const result = await (mammoth as any).convertToHtml({ buffer }, { styleMap: [
             "p[style-name='Title'] => h1:fresh",
             "p[style-name='Subtitle'] => h2:fresh",
@@ -727,7 +969,7 @@ router.get("/:slug/compile/stream", async (req, res) => {
     stepStart('buildPrompt')
       const prompt = isExcel
         ? `You are a senior TypeScript engineer and spreadsheet automation specialist. Recreate this Excel template faithfully while preserving existing colors and formatting (fonts, fills, borders, number formats, alignment), sheet order, headers, merged ranges, column widths, and general layout.\n\nOutput: ONLY TypeScript code.\n\nExport exactly:\nexport async function generate(\n  toolkit: { json: (prompt: string) => Promise<any>; text: (prompt: string) => Promise<string>; query?: (prompt: string) => Promise<any>; getSkeleton?: (kind?: 'text') => Promise<string> },\n  builder: any,\n  context?: Record<string, any>\n): Promise<{ sheets: Array<{ name: string; insertRows?: Array<{ at: number; count: number; copyStyleFromRow?: number }>; cells?: Array<{ ref: string; v: string|number|boolean; numFmt?: string; bold?: boolean; italic?: boolean; underline?: boolean; strike?: boolean; color?: string; bg?: string; align?: 'left'|'center'|'right'; wrap?: boolean }>; ranges?: Array<{ start: string; values: any[][]; numFmt?: string }> }> }>;\n\nHard requirements:\n- Mirror the EXCEL TEMPLATE SKELETON for sheet names/order and structure. You MAY add new sheets when necessary to represent additional, clearly-related data, but do not remove or reorder existing sheets.\n- You MAY append or insert new rows when necessary to accommodate variable-length data. Prefer preserving existing row/column styles; use insertRows with copyStyleFromRow when appropriate.\n- If the template has a merged and centered header row, do not break its merge; write data starting below it unless the header text itself must be updated.\n- Populate values and, only when required, formatting (number formats, bold/italic/underline/strike, font color via hex, background fill, horizontal alignment, wrap).\n- Use A1 references in 'cells' and a 2D array for 'ranges' anchored at 'start'.\n- No imports or file I/O. Encode any workspace/context-derived knowledge directly in the returned structure.\n- Do not invent content unrelated to the skeleton/context; if unknown, leave blank.\n\nEXCEL TEMPLATE ARTIFACTS (includes merges, column widths, and alignment samples):\n${skeleton}`
-        : `You are a senior TypeScript engineer and document automation specialist. Recreate this template faithfully while preserving layout, headers/footers, spacing, lists, tables, images, hyperlinks, and emphasis.\n\nOutput: ONLY TypeScript code that returns raw WordprocessingML (WML).\n\nExport exactly:\nexport async function generate(\n  toolkit: { json: (prompt: string) => Promise<any>; text: (prompt: string) => Promise<string>; query?: (prompt: string) => Promise<any>; getSkeleton?: (kind?: 'html'|'text') => Promise<string> },\n  builder: any,\n  context?: Record<string, any>\n): Promise<{ wml: string }>;\n\nHard requirements:\n- Return ONLY { wml } containing the inner <w:body> children (<w:p>, <w:tbl>, ...). Do NOT include <w:sectPr> or any package-level parts.\n- Mirror the TEMPLATE SKELETON (prefer HTML skeleton) for headings/order/grouping.\n- Apply formatting in WML: run properties (color, size, bold/italic/underline/strike, font) and paragraph properties (alignment, spacing, indents), table widths/styles, list/numbering with <w:numPr> matching template numbering.\n- Use STYLES, THEME, and NUMBERING XML excerpts to choose brand colors, fonts, and list styles. Convert theme colors to hex where needed.\n- Do NOT output HTML, Markdown, or a DOCX buffer. No external imports or file I/O.\n- Do NOT add any sections, paragraphs, tables, or content that are not present in the provided skeleton; if unsure, omit rather than invent.\n- Preserve styling exactly; do not change fonts, colors, sizes, spacing, numbering, or table properties beyond what the skeleton and excerpts imply.\n\nTEMPLATE ARTIFACTS (HTML skeleton + XML excerpts):\n${skeleton}`
+        : `You are a senior TypeScript engineer and document automation specialist. Recreate this template faithfully while preserving layout, headers/footers, spacing, lists, tables, images, hyperlinks, and emphasis.\n\nOutput: ONLY TypeScript code that returns raw WordprocessingML (WML).\n\nExport exactly:\nexport async function generate(\n  toolkit: { json: (prompt: string) => Promise<any>; text: (prompt: string) => Promise<string>; query?: (prompt: string) => Promise<any>; getSkeleton?: (kind?: 'html'|'text') => Promise<string> },\n  builder: any,\n  context?: Record<string, any>\n): Promise<{ wml: string }>;\n\nHard requirements:\n- Return ONLY { wml } containing the inner <w:body> children (<w:p>, <w:tbl>, ...). Do NOT include <w:sectPr> or any package-level parts.\n- Mirror the TEMPLATE SKELETON (prefer HTML skeleton) for headings/order/grouping.\n- Apply formatting in WML: run properties (color, size, bold/italic/underline/strike, font) and paragraph properties (alignment, spacing, indents), table widths/styles, list/numbering with <w:numPr> matching template numbering.\n- Use STYLES, THEME, and NUMBERING XML excerpts to choose brand colors, fonts, and list styles. Convert theme colors to hex where needed.\n- Do NOT output HTML, Markdown, or a DOCX buffer. No external imports or file I/O.\n- Do NOT add any sections, paragraphs, tables, or content that are not present in the provided skeleton; if unsure, omit rather than invent.\n- Preserve styling exactly; do not change fonts, colors, sizes, spacing, numbering, or table properties beyond what the skeleton and excerpts imply.\n- Use the DOCUMENT STRUCTURE ANALYSIS below to understand the content organization and make intelligent decisions about placeholder placement.${documentStructure}\n\nTEMPLATE ARTIFACTS (HTML skeleton + XML excerpts):\n${skeleton}`
     stepOk('buildPrompt')
 
     // AI request

@@ -110,12 +110,138 @@ router.post("/", async (req, res) => {
               // Ask the AI (customer workspace) to update the generator code to use workspace data
               try {
                 if (forceRefresh || !(logs.includes('ai-cache:hit'))) {
+                
+                // Analyze template document structure to help AI understand purpose and tone
+                let documentStructure = ''
+                try {
+                  if ((tpl as any).templatePath && fs.existsSync((tpl as any).templatePath)) {
+                    const mammoth = require('mammoth')
+                    const buffer = fs.readFileSync((tpl as any).templatePath)
+                    const result = await mammoth.extractRawText({ buffer })
+                    const rawText = String(result?.value || '').trim()
+                    
+                    if (rawText) {
+                      const lines = rawText.split('\n').filter(l => l.trim())
+                      
+                      // Basic structure metrics
+                      const hasTable = rawText.includes('\t') || /\|.*\|/.test(rawText)
+                      const hasBullets = lines.some(l => /^[•\-*]/.test(l.trim()))
+                      const hasNumbers = lines.some(l => /^\d+\./.test(l.trim()))
+                      const wordCount = rawText.split(/\s+/).length
+                      const sectionCount = lines.filter(l => l.length < 50 && l.toUpperCase() === l).length
+                      
+                      // Template purpose detection
+                      const templateName = String((tpl as any).slug || '').toLowerCase()
+                      const contentLower = rawText.toLowerCase()
+                      let detectedPurpose = 'general document'
+                      if (templateName.includes('invoice') || contentLower.includes('invoice') || contentLower.includes('bill to')) {
+                        detectedPurpose = 'invoice/billing'
+                      } else if (templateName.includes('report') || contentLower.includes('executive summary') || contentLower.includes('findings')) {
+                        detectedPurpose = 'business report'
+                      } else if (templateName.includes('resume') || templateName.includes('cv') || contentLower.includes('education') && contentLower.includes('experience')) {
+                        detectedPurpose = 'resume/CV'
+                      } else if (templateName.includes('letter') || contentLower.match(/dear\s+[a-z]/i)) {
+                        detectedPurpose = 'formal letter'
+                      } else if (templateName.includes('proposal') || contentLower.includes('scope of work') || contentLower.includes('deliverables')) {
+                        detectedPurpose = 'business proposal'
+                      } else if (templateName.includes('contract') || templateName.includes('agreement')) {
+                        detectedPurpose = 'legal contract/agreement'
+                      } else if (hasTable && (contentLower.includes('inventory') || contentLower.includes('stock') || contentLower.includes('quantity'))) {
+                        detectedPurpose = 'inventory/catalog'
+                      }
+                      
+                      // Smart field detection
+                      const fieldPatterns = []
+                      if (/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b|\b[A-Z][a-z]{2,8}\s+\d{1,2},?\s+\d{4}\b/i.test(rawText)) fieldPatterns.push('dates')
+                      if (/\$[\d,]+\.\d{2}|USD|EUR|GBP/i.test(rawText)) fieldPatterns.push('currency/prices')
+                      if (/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i.test(rawText)) fieldPatterns.push('email addresses')
+                      if (/\(\d{3}\)\s*\d{3}-\d{4}|\d{3}-\d{3}-\d{4}/i.test(rawText)) fieldPatterns.push('phone numbers')
+                      if (/\d+\s+[A-Z][a-z]+\s+(Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd)/i.test(rawText)) fieldPatterns.push('addresses')
+                      if (/#[A-Z0-9-]+|ID:\s*[A-Z0-9]+|Order\s*#/i.test(rawText)) fieldPatterns.push('reference/ID numbers')
+                      if (/\d+%|\bpercent\b/i.test(rawText)) fieldPatterns.push('percentages')
+                      
+                      // Section analysis - detect logical groupings
+                      const sections = []
+                      let currentSection = ''
+                      for (const line of lines) {
+                        if (line.length < 50 && line.toUpperCase() === line && line.length > 3) {
+                          if (currentSection) sections.push(currentSection.trim())
+                          currentSection = line + '\n'
+                        } else {
+                          currentSection += line + '\n'
+                        }
+                      }
+                      if (currentSection) sections.push(currentSection.trim())
+                      
+                      // Extract example data patterns for AI guidance
+                      const examplePatterns = []
+                      const placeholderPattern = /\[(.*?)\]|\{(.*?)\}|<(.*?)>|___+|\.\.\./g
+                      const matches = rawText.match(placeholderPattern)
+                      if (matches && matches.length > 0) {
+                        const uniquePlaceholders = [...new Set(matches.slice(0, 10))]
+                        examplePatterns.push(`Placeholders found: ${uniquePlaceholders.join(', ')}`)
+                      }
+                      
+                      // Detect tone/formality
+                      let tone = 'neutral'
+                      if (/\b(hereby|pursuant to|hereafter|whereas)\b/i.test(rawText)) {
+                        tone = 'legal/formal'
+                      } else if (/\b(Dear|Sincerely|Regards|Respectfully)\b/i.test(rawText)) {
+                        tone = 'business formal'
+                      } else if (/\b(Hi|Hey|Thanks|Cheers)\b/i.test(rawText)) {
+                        tone = 'casual/informal'
+                      }
+                      
+                      // Build comprehensive analysis
+                      const parts = []
+                      parts.push(`\n\nCOMPREHENSIVE DOCUMENT ANALYSIS:`)
+                      parts.push(`\nTemplate Purpose: ${detectedPurpose}`)
+                      parts.push(`Detected Tone: ${tone}`)
+                      parts.push(`\nStructure Metrics:`)
+                      parts.push(`- Word count: ${wordCount}`)
+                      parts.push(`- Logical sections: ${sections.length}`)
+                      parts.push(`- Contains tables: ${hasTable ? 'YES' : 'NO'}`)
+                      parts.push(`- Contains bullet lists: ${hasBullets ? 'YES' : 'NO'}`)
+                      parts.push(`- Contains numbered lists: ${hasNumbers ? 'YES' : 'NO'}`)
+                      
+                      if (fieldPatterns.length > 0) {
+                        parts.push(`\nDetected Field Types: ${fieldPatterns.join(', ')}`)
+                      }
+                      
+                      if (examplePatterns.length > 0) {
+                        parts.push(`\nExample Patterns: ${examplePatterns.join('; ')}`)
+                      }
+                      
+                      if (sections.length > 0 && sections.length <= 5) {
+                        parts.push(`\nSection Breakdown:`)
+                        sections.forEach((sec, idx) => {
+                          const preview = sec.split('\n')[0].substring(0, 80)
+                          parts.push(`  ${idx + 1}. ${preview}...`)
+                        })
+                      }
+                      
+                      parts.push(`\nDocument Preview (first 600 chars):${rawText.substring(0, 600)}...`)
+                      parts.push(`\nGuidance for AI:`)
+                      parts.push(`- Fetch workspace data that aligns with the detected purpose: ${detectedPurpose}`)
+                      parts.push(`- Match the detected tone: ${tone}`)
+                      parts.push(`- Respect field format patterns (dates, currency, etc.) shown in the template`)
+                      parts.push(`- You MAY dynamically adjust structure (add table rows, extend lists) when workspace data requires it`)
+                      parts.push(`- Preserve overall layout, styling, and section organization`)
+                      parts.push(`- If sections have clear purposes, ensure data placement matches those purposes\n`)
+                      
+                      documentStructure = parts.join('\n')
+                    }
+                  }
+                } catch {
+                  // Structure analysis is optional, continue without it
+                }
+                
                 const userAddendum = instructions && String(instructions).trim().length
                   ? `\n\nUSER ADDITIONAL INSTRUCTIONS (prioritize when choosing workspace data):\n${String(instructions).trim()}\n`
                   : ''
                 const aiPrompt = ((tpl as any).kind === 'excel')
-                  ? `You are a senior TypeScript engineer and spreadsheet specialist. Update the following DocSmith Excel generator function to incorporate customer-specific data inferred from THIS WORKSPACE and the provided user instructions. Keep the EXACT export signature. Compose the final output by returning { sheets } (sheet ops). Do not import external modules or do file I/O.\n\nSTRICT CONSTRAINTS:\n- PRESERVE EXISTING SHEET STRUCTURE AND FORMATTING from the CURRENT GENERATOR CODE: do not alter existing fonts, colors, fills, borders, number formats, alignment, merged ranges, column widths, or sheet order unless absolutely necessary.\n- You MAY append or insert new rows to accommodate variable-length data. Use insertRows with copyStyleFromRow when appropriate to preserve formatting. You MAY add new sheets when clearly necessary, but do not remove or reorder existing sheets.\n- Prefer preserving existing row/column styles; only specify formatting (numFmt, bold/italic/underline/strike, font color via hex, background fill, horizontal alignment, wrap) for new or dynamically added content.\n- If the template has a merged and centered header row, do not break its merge; write data starting below it unless the header text itself must be updated.\n- At runtime, toolkit.json/query/text are DISABLED. Encode workspace-informed content directly into the returned { sheets } or via the provided context parameter.\n- Use minimal LLM calls (within this single update).${userAddendum}\n\nReturn type reminder:\nPromise<{ sheets: Array<{ name: string; insertRows?: Array<{ at: number; count: number; copyStyleFromRow?: number }>; cells?: Array<{ ref: string; v: string|number|boolean; numFmt?: string; bold?: boolean; italic?: boolean; underline?: boolean; strike?: boolean; color?: string; bg?: string; align?: 'left'|'center'|'right'; wrap?: boolean }>; ranges?: Array<{ start: string; values: any[][]; numFmt?: string }> }> }>;\n\nOnly output TypeScript code with the updated generate implementation.\n\nCURRENT GENERATOR CODE:\n\n\`\`\`ts\n${tsCode}\n\`\`\``
-                  : `You are a senior TypeScript engineer. Update the following DocSmith generator function to incorporate customer-specific data from THIS WORKSPACE. Keep the EXACT export signature. Compose the final output as raw WordprocessingML (WML) via return { wml }. Do not import external modules or do file I/O. Maintain formatting with runs (color/size/bold/italic/underline/strike/font) and paragraph props (align/spacing/indents).\n\nSTRICT CONSTRAINTS:\n- PRESERVE ALL EXISTING WML STRUCTURE AND STYLING from the CURRENT GENERATOR CODE: do not alter fonts, colors, sizes, spacing, numbering, table properties, headers/footers, or section settings.\n- ONLY substitute text content (and list/table cell values) with workspace-derived strings.\n- DO NOT add, remove, or reorder sections/paragraphs/tables/runs unless absolutely necessary. If no data is found, keep the section and leave values empty rather than inventing content.\n- No boilerplate or extra headings; do not add content beyond what the template structure implies.\n- IMPORTANT: At runtime, toolkit.json/query/text are DISABLED. Do not rely on them. Encode all workspace-informed content directly in the returned WML or via the provided context parameter.\n- Use minimal LLM calls (within this single update).${userAddendum}\n\nOnly output TypeScript code with the updated generate implementation.\n\nCURRENT GENERATOR CODE:\n\n\`\`\`ts\n${tsCode}\n\`\`\``
+                  ? `You are a senior TypeScript engineer and spreadsheet specialist. Update the following DocSmith Excel generator function to incorporate customer-specific data inferred from THIS WORKSPACE and the provided user instructions. Keep the EXACT export signature. Compose the final output by returning { sheets } (sheet ops). Do not import external modules or do file I/O.\n\nSTRICT CONSTRAINTS:\n- PRESERVE EXISTING SHEET STRUCTURE AND FORMATTING from the CURRENT GENERATOR CODE: do not alter existing fonts, colors, fills, borders, number formats, alignment, merged ranges, column widths, or sheet order unless absolutely necessary.\n- You MAY append or insert new rows to accommodate variable-length data. Use insertRows with copyStyleFromRow when appropriate to preserve formatting. You MAY add new sheets when clearly necessary, but do not remove or reorder existing sheets.\n- Prefer preserving existing row/column styles; only specify formatting (numFmt, bold/italic/underline/strike, font color via hex, background fill, horizontal alignment, wrap) for new or dynamically added content.\n- If the template has a merged and centered header row, do not break its merge; write data starting below it unless the header text itself must be updated.\n- At runtime, toolkit.json/query/text are DISABLED. Encode workspace-informed content directly into the returned { sheets } or via the provided context parameter.\n- Use minimal LLM calls (within this single update).${documentStructure}${userAddendum}\n\nReturn type reminder:\nPromise<{ sheets: Array<{ name: string; insertRows?: Array<{ at: number; count: number; copyStyleFromRow?: number }>; cells?: Array<{ ref: string; v: string|number|boolean; numFmt?: string; bold?: boolean; italic?: boolean; underline?: boolean; strike?: boolean; color?: string; bg?: string; align?: 'left'|'center'|'right'; wrap?: boolean }>; ranges?: Array<{ start: string; values: any[][]; numFmt?: string }> }> }>;\n\nOnly output TypeScript code with the updated generate implementation.\n\nCURRENT GENERATOR CODE:\n\n\`\`\`ts\n${tsCode}\n\`\`\``
+                  : `You are a senior TypeScript engineer. Update the following DocSmith generator function to incorporate customer-specific data from THIS WORKSPACE. Keep the EXACT export signature. Compose the final output as raw WordprocessingML (WML) via return { wml }. Do not import external modules or do file I/O. Maintain formatting with runs (color/size/bold/italic/underline/strike/font) and paragraph props (align/spacing/indents).\n\nSTRICT CONSTRAINTS:\n- PRESERVE ALL EXISTING WML STRUCTURE AND STYLING from the CURRENT GENERATOR CODE: do not alter fonts, colors, sizes, spacing, numbering, table properties, headers/footers, or section settings.\n- ONLY substitute text content (and list/table cell values) with workspace-derived strings.\n- DO NOT add, remove, or reorder sections/paragraphs/tables/runs unless absolutely necessary. If no data is found, keep the section and leave values empty rather than inventing content.\n- No boilerplate or extra headings; do not add content beyond what the template structure implies.\n- IMPORTANT: At runtime, toolkit.json/query/text are DISABLED. Do not rely on them. Encode all workspace-informed content directly in the returned WML or via the provided context parameter.\n- Use minimal LLM calls (within this single update).${documentStructure}${userAddendum}\n\nOnly output TypeScript code with the updated generate implementation.\n\nCURRENT GENERATOR CODE:\n\n\`\`\`ts\n${tsCode}\n\`\`\``
                 stepStartRec('aiUpdate')
                 const r = await anythingllmRequest<any>(`/workspace/${encodeURIComponent(wsForGen)}/chat`, 'POST', { message: aiPrompt, mode: 'query' })
                 const t = String(r?.textResponse || r?.message || r || '')
@@ -514,12 +640,137 @@ router.get("/stream", async (req, res) => {
         logAndPush('ai-modified:start')
         stepStartRec('aiUpdate')
         try {
+          // Analyze template document structure to help AI understand purpose and tone
+          let documentStructure = ''
+          try {
+            if ((tpl as any).templatePath && fs.existsSync((tpl as any).templatePath)) {
+              const mammoth = require('mammoth')
+              const buffer = fs.readFileSync((tpl as any).templatePath)
+              const result = await mammoth.extractRawText({ buffer })
+              const rawText = String(result?.value || '').trim()
+              
+              if (rawText) {
+                const lines = rawText.split('\n').filter(l => l.trim())
+                
+                // Basic structure metrics
+                const hasTable = rawText.includes('\t') || /\|.*\|/.test(rawText)
+                const hasBullets = lines.some(l => /^[•\-*]/.test(l.trim()))
+                const hasNumbers = lines.some(l => /^\d+\./.test(l.trim()))
+                const wordCount = rawText.split(/\s+/).length
+                const sectionCount = lines.filter(l => l.length < 50 && l.toUpperCase() === l).length
+                
+                // Template purpose detection
+                const templateName = String((tpl as any).slug || '').toLowerCase()
+                const contentLower = rawText.toLowerCase()
+                let detectedPurpose = 'general document'
+                if (templateName.includes('invoice') || contentLower.includes('invoice') || contentLower.includes('bill to')) {
+                  detectedPurpose = 'invoice/billing'
+                } else if (templateName.includes('report') || contentLower.includes('executive summary') || contentLower.includes('findings')) {
+                  detectedPurpose = 'business report'
+                } else if (templateName.includes('resume') || templateName.includes('cv') || contentLower.includes('education') && contentLower.includes('experience')) {
+                  detectedPurpose = 'resume/CV'
+                } else if (templateName.includes('letter') || contentLower.match(/dear\s+[a-z]/i)) {
+                  detectedPurpose = 'formal letter'
+                } else if (templateName.includes('proposal') || contentLower.includes('scope of work') || contentLower.includes('deliverables')) {
+                  detectedPurpose = 'business proposal'
+                } else if (templateName.includes('contract') || templateName.includes('agreement')) {
+                  detectedPurpose = 'legal contract/agreement'
+                } else if (hasTable && (contentLower.includes('inventory') || contentLower.includes('stock') || contentLower.includes('quantity'))) {
+                  detectedPurpose = 'inventory/catalog'
+                }
+                
+                // Smart field detection
+                const fieldPatterns = []
+                if (/\b\d{1,2}\/\d{1,2}\/\d{2,4}\b|\b[A-Z][a-z]{2,8}\s+\d{1,2},?\s+\d{4}\b/i.test(rawText)) fieldPatterns.push('dates')
+                if (/\$[\d,]+\.\d{2}|USD|EUR|GBP/i.test(rawText)) fieldPatterns.push('currency/prices')
+                if (/[a-z0-9._%+-]+@[a-z0-9.-]+\.[a-z]{2,}/i.test(rawText)) fieldPatterns.push('email addresses')
+                if (/\(\d{3}\)\s*\d{3}-\d{4}|\d{3}-\d{3}-\d{4}/i.test(rawText)) fieldPatterns.push('phone numbers')
+                if (/\d+\s+[A-Z][a-z]+\s+(Street|St|Avenue|Ave|Road|Rd|Boulevard|Blvd)/i.test(rawText)) fieldPatterns.push('addresses')
+                if (/#[A-Z0-9-]+|ID:\s*[A-Z0-9]+|Order\s*#/i.test(rawText)) fieldPatterns.push('reference/ID numbers')
+                if (/\d+%|\bpercent\b/i.test(rawText)) fieldPatterns.push('percentages')
+                
+                // Section analysis - detect logical groupings
+                const sections = []
+                let currentSection = ''
+                for (const line of lines) {
+                  if (line.length < 50 && line.toUpperCase() === line && line.length > 3) {
+                    if (currentSection) sections.push(currentSection.trim())
+                    currentSection = line + '\n'
+                  } else {
+                    currentSection += line + '\n'
+                  }
+                }
+                if (currentSection) sections.push(currentSection.trim())
+                
+                // Extract example data patterns for AI guidance
+                const examplePatterns = []
+                const placeholderPattern = /\[(.*?)\]|\{(.*?)\}|<(.*?)>|___+|\.\.\./g
+                const matches = rawText.match(placeholderPattern)
+                if (matches && matches.length > 0) {
+                  const uniquePlaceholders = [...new Set(matches.slice(0, 10))]
+                  examplePatterns.push(`Placeholders found: ${uniquePlaceholders.join(', ')}`)
+                }
+                
+                // Detect tone/formality
+                let tone = 'neutral'
+                if (/\b(hereby|pursuant to|hereafter|whereas)\b/i.test(rawText)) {
+                  tone = 'legal/formal'
+                } else if (/\b(Dear|Sincerely|Regards|Respectfully)\b/i.test(rawText)) {
+                  tone = 'business formal'
+                } else if (/\b(Hi|Hey|Thanks|Cheers)\b/i.test(rawText)) {
+                  tone = 'casual/informal'
+                }
+                
+                // Build comprehensive analysis
+                const parts = []
+                parts.push(`\n\nCOMPREHENSIVE DOCUMENT ANALYSIS:`)
+                parts.push(`\nTemplate Purpose: ${detectedPurpose}`)
+                parts.push(`Detected Tone: ${tone}`)
+                parts.push(`\nStructure Metrics:`)
+                parts.push(`- Word count: ${wordCount}`)
+                parts.push(`- Logical sections: ${sections.length}`)
+                parts.push(`- Contains tables: ${hasTable ? 'YES' : 'NO'}`)
+                parts.push(`- Contains bullet lists: ${hasBullets ? 'YES' : 'NO'}`)
+                parts.push(`- Contains numbered lists: ${hasNumbers ? 'YES' : 'NO'}`)
+                
+                if (fieldPatterns.length > 0) {
+                  parts.push(`\nDetected Field Types: ${fieldPatterns.join(', ')}`)
+                }
+                
+                if (examplePatterns.length > 0) {
+                  parts.push(`\nExample Patterns: ${examplePatterns.join('; ')}`)
+                }
+                
+                if (sections.length > 0 && sections.length <= 5) {
+                  parts.push(`\nSection Breakdown:`)
+                  sections.forEach((sec, idx) => {
+                    const preview = sec.split('\n')[0].substring(0, 80)
+                    parts.push(`  ${idx + 1}. ${preview}...`)
+                  })
+                }
+                
+                parts.push(`\nDocument Preview (first 600 chars):${rawText.substring(0, 600)}...`)
+                parts.push(`\nGuidance for AI:`)
+                parts.push(`- Fetch workspace data that aligns with the detected purpose: ${detectedPurpose}`)
+                parts.push(`- Match the detected tone: ${tone}`)
+                parts.push(`- Respect field format patterns (dates, currency, etc.) shown in the template`)
+                parts.push(`- You MAY dynamically adjust structure (add table rows, extend lists) when workspace data requires it`)
+                parts.push(`- Preserve overall layout, styling, and section organization`)
+                parts.push(`- If sections have clear purposes, ensure data placement matches those purposes\n`)
+                
+                documentStructure = parts.join('\n')
+              }
+            }
+          } catch {
+            // Structure analysis is optional, continue without it
+          }
+          
           const userAddendum = instructions && String(instructions).trim().length
             ? `\n\nUSER ADDITIONAL INSTRUCTIONS (prioritize when choosing workspace data):\n${String(instructions).trim()}\n`
             : ''
           const aiPrompt = ((tpl as any).kind === 'excel')
-            ? `You are a senior TypeScript engineer and spreadsheet specialist. Update the following DocSmith Excel generator function to incorporate customer-specific data inferred from THIS WORKSPACE and the provided user instructions. Keep the EXACT export signature. Compose the final output by returning { sheets } (sheet ops). Do not import external modules or do file I/O.\n\nSTRICT CONSTRAINTS:\n- PRESERVE EXISTING SHEET STRUCTURE AND FORMATTING from the CURRENT GENERATOR CODE: do not alter existing fonts, colors, fills, borders, number formats, alignment, merged ranges, column widths, or sheet order unless absolutely necessary.\n- You MAY append or insert new rows to accommodate variable-length data. Use insertRows with copyStyleFromRow when appropriate to preserve formatting. You MAY add new sheets when clearly necessary, but do not remove or reorder existing sheets.\n- Prefer preserving existing row/column styles; only specify formatting (numFmt, bold/italic/underline/strike, font color via hex, background fill, horizontal alignment, wrap) for new or dynamically added content.\n- If the template has a merged and centered header row, do not break its merge; write data starting below it unless the header text itself must be updated.\n- At runtime, toolkit.json/query/text are DISABLED. Encode workspace-informed content directly into the returned { sheets } or via the provided context parameter.\n- Use minimal LLM calls (within this single update).${userAddendum}\n\nReturn type reminder:\nPromise<{ sheets: Array<{ name: string; insertRows?: Array<{ at: number; count: number; copyStyleFromRow?: number }>; cells?: Array<{ ref: string; v: string|number|boolean; numFmt?: string; bold?: boolean; italic?: boolean; underline?: boolean; strike?: boolean; color?: string; bg?: string; align?: 'left'|'center'|'right'; wrap?: boolean }>; ranges?: Array<{ start: string; values: any[][]; numFmt?: string }> }> }>;\n\nOnly output TypeScript code with the updated generate implementation.\n\nCURRENT GENERATOR CODE:\n\n\`\`\`ts\n${tsCode}\n\`\`\``
-            : `You are a senior TypeScript engineer. Update the following document generator function to incorporate customer-specific data from THIS WORKSPACE. Keep the EXACT export signature. Compose the final output as raw WordprocessingML (WML) via return { wml }. Do not import external modules or do file I/O. Maintain formatting with runs (color/size/bold/italic/underline/strike/font) and paragraph props (align/spacing/indents).\n\nSTRICT CONSTRAINTS:\n- PRESERVE ALL EXISTING WML STRUCTURE AND STYLING from the CURRENT GENERATOR CODE: do not alter fonts, colors, sizes, spacing, numbering, table properties, headers/footers, or section settings.\n- ONLY substitute text content (and list/table cell values) with workspace-derived strings.\n- DO NOT add, remove, or reorder sections/paragraphs/tables/runs unless absolutely necessary. If no data is found, keep the section and leave values empty rather than inventing content.\n- No boilerplate or extra headings; do not add content beyond what the template structure implies.\n- IMPORTANT: At runtime, toolkit.json/query/text are DISABLED. Do not rely on them. Encode all workspace-informed content directly in the returned WML or via the provided context parameter.\n- Use minimal LLM calls (within this single update).${userAddendum}\n\nOnly output TypeScript code with the updated generate implementation.\n\nCURRENT GENERATOR CODE:\n\n\`\`\`ts\n${tsCode}\n\`\`\``
+            ? `You are a senior TypeScript engineer and spreadsheet specialist. Update the following DocSmith Excel generator function to incorporate customer-specific data inferred from THIS WORKSPACE and the provided user instructions. Keep the EXACT export signature. Compose the final output by returning { sheets } (sheet ops). Do not import external modules or do file I/O.\n\nSTRICT CONSTRAINTS:\n- PRESERVE EXISTING SHEET STRUCTURE AND FORMATTING from the CURRENT GENERATOR CODE: do not alter existing fonts, colors, fills, borders, number formats, alignment, merged ranges, column widths, or sheet order unless absolutely necessary.\n- You MAY append or insert new rows to accommodate variable-length data. Use insertRows with copyStyleFromRow when appropriate to preserve formatting. You MAY add new sheets when clearly necessary, but do not remove or reorder existing sheets.\n- Prefer preserving existing row/column styles; only specify formatting (numFmt, bold/italic/underline/strike, font color via hex, background fill, horizontal alignment, wrap) for new or dynamically added content.\n- If the template has a merged and centered header row, do not break its merge; write data starting below it unless the header text itself must be updated.\n- At runtime, toolkit.json/query/text are DISABLED. Encode workspace-informed content directly into the returned { sheets } or via the provided context parameter.\n- Use minimal LLM calls (within this single update).${documentStructure}${userAddendum}\n\nReturn type reminder:\nPromise<{ sheets: Array<{ name: string; insertRows?: Array<{ at: number; count: number; copyStyleFromRow?: number }>; cells?: Array<{ ref: string; v: string|number|boolean; numFmt?: string; bold?: boolean; italic?: boolean; underline?: boolean; strike?: boolean; color?: string; bg?: string; align?: 'left'|'center'|'right'; wrap?: boolean }>; ranges?: Array<{ start: string; values: any[][]; numFmt?: string }> }> }>;\n\nOnly output TypeScript code with the updated generate implementation.\n\nCURRENT GENERATOR CODE:\n\n\`\`\`ts\n${tsCode}\n\`\`\``
+            : `You are a senior TypeScript engineer. Update the following document generator function to incorporate customer-specific data from THIS WORKSPACE. Keep the EXACT export signature. Compose the final output as raw WordprocessingML (WML) via return { wml }. Do not import external modules or do file I/O. Maintain formatting with runs (color/size/bold/italic/underline/strike/font) and paragraph props (align/spacing/indents).\n\nSTRICT CONSTRAINTS:\n- PRESERVE ALL EXISTING WML STRUCTURE AND STYLING from the CURRENT GENERATOR CODE: do not alter fonts, colors, sizes, spacing, numbering, table properties, headers/footers, or section settings.\n- ONLY substitute text content (and list/table cell values) with workspace-derived strings.\n- DO NOT add, remove, or reorder sections/paragraphs/tables/runs unless absolutely necessary. If no data is found, keep the section and leave values empty rather than inventing content.\n- No boilerplate or extra headings; do not add content beyond what the template structure implies.\n- IMPORTANT: At runtime, toolkit.json/query/text are DISABLED. Do not rely on them. Encode all workspace-informed content directly in the returned WML or via the provided context parameter.\n- Use minimal LLM calls (within this single update).${documentStructure}${userAddendum}\n\nOnly output TypeScript code with the updated generate implementation.\n\nCURRENT GENERATOR CODE:\n\n\`\`\`ts\n${tsCode}\n\`\`\``
           const r = await anythingllmRequest<any>(`/workspace/${encodeURIComponent(wsForGen)}/chat`, 'POST', { message: aiPrompt, mode: 'query' })
           const t = String(r?.textResponse || r?.message || r || '')
           const m = t.match(/```[a-z]*\s*([\s\S]*?)```/i)

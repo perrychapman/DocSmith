@@ -1,6 +1,4 @@
 import * as React from "react";
-import { renderAsync } from "docx-preview";
-import JSZip from "jszip";
 import { Card, CardHeader, CardContent, CardFooter, CardTitle, CardDescription } from "../components/ui/card";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/input";
@@ -12,7 +10,8 @@ import { Icon } from "../components/icons";
 import { Progress } from "../components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
-import { Search, FileText as FileTextIcon, FileSpreadsheet, FileCode, CheckCircle2, AlertTriangle, Loader2, Sparkles, Copy, X, ExternalLink, ChevronLeft, ChevronRight, ZoomIn, ZoomOut, Minus, Plus } from "lucide-react";
+import { DocxPreview } from "../components/DocxPreview";
+import { Search, FileText as FileTextIcon, FileSpreadsheet, FileCode, CheckCircle2, AlertTriangle, Loader2, Sparkles, Copy, X, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import { apiFetch, apiEventSource } from '../lib/api';
 
@@ -21,19 +20,6 @@ type TItem = { slug: string; name?: string; dir?: string; hasTemplate?: boolean;
 type CompileStatus = 'idle' | 'running' | 'success' | 'error';
 type CompileState = { status: CompileStatus; startedAt?: number; finishedAt?: number; error?: string };
 type CompileStateMap = Record<string, CompileState>;
-
-// Document metadata extracted from DOCX
-interface DocxMetadata {
-  pageWidth?: string;
-  pageHeight?: string;
-  marginTop?: string;
-  marginBottom?: string;
-  marginLeft?: string;
-  marginRight?: string;
-  orientation?: 'portrait' | 'landscape';
-  defaultFont?: string;
-  defaultSize?: string;
-}
 
 export default function TemplatesPage() {
   const [items, setItems] = React.useState<TItem[]>([]);
@@ -74,16 +60,6 @@ export default function TemplatesPage() {
   const [previewLoading, setPreviewLoading] = React.useState(false);
   const [previewType, setPreviewType] = React.useState<'html' | 'text' | 'binary' | null>(null);
   const [previewSource, setPreviewSource] = React.useState<string | null>(null);
-  const [docxData, setDocxData] = React.useState<ArrayBuffer | null>(null);
-  const [docxMetadata, setDocxMetadata] = React.useState<DocxMetadata | null>(null);
-  const docxPreviewRef = React.useRef<HTMLDivElement | null>(null);
-  const viewerScrollRef = React.useRef<HTMLDivElement | null>(null);
-  
-  // PDF viewer controls
-  const [currentPage, setCurrentPage] = React.useState(1);
-  const [totalPages, setTotalPages] = React.useState(1);
-  const [zoomLevel, setZoomLevel] = React.useState(100);
-  const [pageElements, setPageElements] = React.useState<Element[]>([]);
 
   // Format relative time helper (from Customers.tsx)
   function formatRelativeTime(value?: string | number | Date): string {
@@ -113,109 +89,7 @@ export default function TemplatesPage() {
     }
   }
 
-  // Extract document metadata from DOCX file
-  async function extractDocxMetadata(arrayBuffer: ArrayBuffer): Promise<DocxMetadata> {
-    try {
-      const zip = await JSZip.loadAsync(arrayBuffer);
-      
-      // Try to get document.xml to parse section properties
-      const documentXml = await zip.file('word/document.xml')?.async('text');
-      
-      const metadata: DocxMetadata = {};
-      
-      // Parse document.xml for page setup (most reliable source)
-      if (documentXml) {
-        const parser = new DOMParser();
-        const doc = parser.parseFromString(documentXml, 'text/xml');
-        
-        // Get page size and margins from section properties
-        const sectPr = doc.querySelector('sectPr');
-        if (sectPr) {
-          const pgSz = sectPr.querySelector('pgSz');
-          if (pgSz) {
-            const width = pgSz.getAttribute('w:w');
-            const height = pgSz.getAttribute('w:h');
-            const orient = pgSz.getAttribute('w:orient');
-            
-            // Convert twips to pixels (1440 twips = 1 inch, 96 DPI)
-            if (width) {
-              const widthInches = parseInt(width) / 1440;
-              metadata.pageWidth = `${widthInches}in`;
-              console.log(`Page width: ${widthInches}in`);
-            }
-            if (height) {
-              const heightInches = parseInt(height) / 1440;
-              metadata.pageHeight = `${heightInches}in`;
-              console.log(`Page height: ${heightInches}in`);
-            }
-            metadata.orientation = orient === 'landscape' ? 'landscape' : 'portrait';
-          }
-          
-          const pgMar = sectPr.querySelector('pgMar');
-          if (pgMar) {
-            const top = pgMar.getAttribute('w:top');
-            const bottom = pgMar.getAttribute('w:bottom');
-            const left = pgMar.getAttribute('w:left');
-            const right = pgMar.getAttribute('w:right');
-            
-            if (top) {
-              const topInches = parseInt(top) / 1440;
-              metadata.marginTop = `${topInches}in`;
-              console.log(`Margin top: ${topInches}in`);
-            }
-            if (bottom) {
-              const bottomInches = parseInt(bottom) / 1440;
-              metadata.marginBottom = `${bottomInches}in`;
-              console.log(`Margin bottom: ${bottomInches}in`);
-            }
-            if (left) {
-              const leftInches = parseInt(left) / 1440;
-              metadata.marginLeft = `${leftInches}in`;
-              console.log(`Margin left: ${leftInches}in`);
-            }
-            if (right) {
-              const rightInches = parseInt(right) / 1440;
-              metadata.marginRight = `${rightInches}in`;
-              console.log(`Margin right: ${rightInches}in`);
-            }
-          }
-        }
-      }
-      
-      // Parse styles.xml for default font
-      const stylesXml = await zip.file('word/styles.xml')?.async('text');
-      if (stylesXml) {
-        const parser = new DOMParser();
-        const stylesDoc = parser.parseFromString(stylesXml, 'text/xml');
-        
-        const defaultFont = stylesDoc.querySelector('docDefaults rPrDefault rPr rFonts');
-        if (defaultFont) {
-          const asciiFont = defaultFont.getAttribute('w:ascii');
-          if (asciiFont) {
-            metadata.defaultFont = asciiFont;
-            console.log(`Default font: ${asciiFont}`);
-          }
-        }
-        
-        const defaultSize = stylesDoc.querySelector('docDefaults rPrDefault rPr sz');
-        if (defaultSize) {
-          const size = defaultSize.getAttribute('w:val');
-          // Font size in Word is in half-points, convert to points
-          if (size) {
-            const sizePoints = parseInt(size) / 2;
-            metadata.defaultSize = `${sizePoints}pt`;
-            console.log(`Default size: ${sizePoints}pt`);
-          }
-        }
-      }
-      
-      console.log('Extracted DOCX metadata:', metadata);
-      return metadata;
-    } catch (error) {
-      console.error('Failed to extract DOCX metadata:', error);
-      return {};
-    }
-  }
+
 
   async function load() {
     setLoading(true);
@@ -229,79 +103,20 @@ export default function TemplatesPage() {
   }
 
   async function loadPreview(slug: string) {
+    // Preview is now handled by DocxPreview component
     setPreviewLoading(true);
-    setPreviewContent(null);
-    setPreviewType(null);
-    setPreviewSource(null);
-    setDocxData(null);
     
     try {
-      // For text-based templates, fetch the preview
+      // Just fetch preview metadata to determine type
       const r = await apiFetch(`/api/templates/${encodeURIComponent(slug)}/preview`);
       if (!r.ok) {
-        const errorData = await r.json().catch(() => ({}));
-        console.error('Preview failed:', r.status, errorData);
-        throw new Error(errorData.error || String(r.status));
+        throw new Error('Failed to load preview');
       }
       const data = await r.json();
-      console.log('Preview data received:', data);
       
-      // Handle binary files (DOCX/XLSX)
-      if (data.type === 'binary') {
-        console.log('Binary file detected:', data.format, data.downloadUrl);
-        
-        // For Excel files, show a message and don't show preview
-        if (data.format === 'xlsx') {
-          toast.error?.('Excel preview not yet supported. Please download the template to view it.');
-          setPreviewLoading(false);
-          setSelectedSlug(null);
-          return;
-        }
-        
-        setPreviewType('binary');
-        setPreviewSource(data.downloadUrl);
-        setPreviewContent(data.format);
-        
-        // For DOCX files, fetch the data for rendering
-        if (data.format === 'docx' && data.downloadUrl) {
-          try {
-            console.log('Fetching DOCX file from:', data.downloadUrl);
-            const docxResponse = await fetch(data.downloadUrl);
-            const docxBlob = await docxResponse.blob();
-            const docxArrayBuffer = await docxBlob.arrayBuffer();
-            console.log('DOCX file loaded, size:', docxArrayBuffer.byteLength, 'bytes');
-            
-            // Extract metadata from the DOCX file
-            const metadata = await extractDocxMetadata(docxArrayBuffer);
-            setDocxMetadata(metadata);
-            setDocxData(docxArrayBuffer);
-          } catch (fetchError) {
-            console.error('DOCX fetch failed:', fetchError);
-            toast.error?.('Failed to load document preview.');
-            setSelectedSlug(null);
-          }
-        }
-      }
-      // Handle HTML response
-      else if (data.html) {
-        console.log('Setting HTML content, length:', data.html.length);
-        setPreviewContent(data.html);
-        setPreviewType('html');
-        setPreviewSource(data.source || 'template');
-      } 
-      // Handle text response (wrap in pre tag for proper formatting)
-      else if (data.text) {
-        console.log('Setting text content, length:', data.text.length);
-        setPreviewContent(`<pre class="whitespace-pre-wrap font-mono text-sm">${escapeHtml(data.text)}</pre>`);
-        setPreviewType('text');
-        setPreviewSource(data.source || 'template');
-      } 
-      else {
-        console.warn('No html or text in preview response:', data);
-        setPreviewContent(null);
-        setPreviewType(null);
-        setPreviewSource(null);
-      }
+      setPreviewType(data.type || 'html');
+      setPreviewSource(data.downloadUrl || null);
+      setPreviewContent(data.format || data.html || data.text || null);
     } catch (e) {
       console.error('Preview load failed:', e);
       toast.error?.('Failed to load preview: ' + (e as Error).message);
@@ -319,151 +134,9 @@ export default function TemplatesPage() {
     return div.innerHTML;
   }
 
-  // Page navigation functions
-  function goToPage(pageNum: number) {
-    if (pageNum < 1 || pageNum > totalPages) return;
-    
-    if (pageElements.length > 0 && pageElements[pageNum - 1]) {
-      pageElements[pageNum - 1].scrollIntoView({ behavior: 'smooth', block: 'start' });
-      setCurrentPage(pageNum);
-    } else if (viewerScrollRef.current) {
-      // Fallback: estimate scroll position based on page number
-      const pageHeight = 11 * 96 + 24; // 11in * 96dpi + margin
-      const scrollTop = (pageNum - 1) * pageHeight;
-      viewerScrollRef.current.scrollTo({ top: scrollTop, behavior: 'smooth' });
-      setCurrentPage(pageNum);
-    }
-  }
 
-  function handleZoom(direction: 'in' | 'out' | 'reset') {
-    if (direction === 'reset') {
-      setZoomLevel(100);
-    } else if (direction === 'in') {
-      setZoomLevel(prev => Math.min(prev + 10, 200));
-    } else {
-      setZoomLevel(prev => Math.max(prev - 10, 50));
-    }
-  }
 
-  // Effect to render DOCX when data is available and ref is mounted
-  React.useEffect(() => {
-    if (docxData && docxPreviewRef.current && previewType === 'binary' && previewContent === 'docx') {
-      const container = docxPreviewRef.current;
-      
-      // Clear previous content
-      container.innerHTML = '';
-      
-      // Reset page controls
-      setCurrentPage(1);
-      setTotalPages(1);
-      setZoomLevel(100);
-      
-      // Render DOCX with all formatting preserved including page breaks
-      renderAsync(docxData, container, undefined, {
-        className: 'docx',            // Use docx class for library styling
-        inWrapper: false,             // Don't wrap - let sections be direct children
-        ignoreWidth: false,           // Preserve document width
-        ignoreHeight: false,          // Preserve document height
-        ignoreFonts: false,           // Use document's fonts
-        breakPages: true,             // Render page breaks
-        ignoreLastRenderedPageBreak: false,  // Include all page breaks
-        experimental: true,           // Enable experimental features for better page break detection
-        trimXmlDeclaration: true,
-        useBase64URL: false,          // Use blob URLs for better performance
-        renderHeaders: true,          // Include headers
-        renderFooters: true,          // Include footers
-        renderFootnotes: true,        // Include footnotes
-        renderEndnotes: true,         // Include endnotes
-        debug: false
-      })
-        .then(() => {
-          console.log('DOCX preview rendered successfully');
-          
-          // First, try to find explicit section/page markers
-          let sections: NodeListOf<Element> | Element[] = container.querySelectorAll('section.docx');
-          
-          if (sections.length === 0) {
-            sections = container.querySelectorAll('section');
-          }
-          
-          if (sections.length === 0) {
-            sections = container.querySelectorAll('article');
-          }
-          
-          // If we found explicit sections, use them
-          if (sections.length > 0) {
-            console.log('Found explicit page sections:', sections.length);
-            setTotalPages(sections.length);
-            setPageElements(Array.from(sections));
-            
-            // Add page number attributes
-            sections.forEach((section, index) => {
-              section.setAttribute('data-page-number', String(index + 1));
-            });
-          } else {
-            // No explicit sections - we have continuous content
-            // Calculate pages based on document height and page height from metadata
-            console.log('No explicit sections found, calculating pages from content height');
-            
-            const pageHeightStr = docxMetadata?.pageHeight || '11in';
-            const pageHeightInches = parseFloat(pageHeightStr);
-            const pageHeightPx = pageHeightInches * 96; // 96 DPI
-            
-            const contentHeight = container.scrollHeight;
-            const calculatedPages = Math.ceil(contentHeight / pageHeightPx);
-            
-            console.log('Content height:', contentHeight, 'px');
-            console.log('Page height:', pageHeightPx, 'px');
-            console.log('Calculated pages:', calculatedPages);
-            
-            // Create virtual page markers by wrapping content in sections
-            if (calculatedPages > 1) {
-              const allContent = container.innerHTML;
-              container.innerHTML = ''; // Clear container
-              
-              // Create sections for each page based on height
-              for (let i = 0; i < calculatedPages; i++) {
-                const section = document.createElement('section');
-                section.className = 'docx-page';
-                section.setAttribute('data-page-number', String(i + 1));
-                section.style.minHeight = `${pageHeightPx}px`;
-                
-                // For first page, add all content (it will flow naturally)
-                if (i === 0) {
-                  section.innerHTML = allContent;
-                }
-                
-                container.appendChild(section);
-              }
-              
-              const newSections = container.querySelectorAll('section.docx-page');
-              setTotalPages(newSections.length);
-              setPageElements(Array.from(newSections));
-            } else {
-              // Single page document
-              setTotalPages(1);
-              setPageElements([container]);
-            }
-          }
-          
-          const pageCount = sections.length || 1;
-          console.log('Page count:', pageCount, 'sections found');
-          setTotalPages(pageCount);
-          setPageElements(Array.from(sections));
-          
-          // Add page number attributes
-          sections.forEach((section, index) => {
-            section.setAttribute('data-page-number', String(index + 1));
-          });
-        })
-        .catch((renderError) => {
-          console.error('DOCX rendering failed:', renderError);
-          toast.error?.('Unable to preview this document. Please download it to view in Word.');
-          // Close preview on error
-          setSelectedSlug(null);
-        });
-    }
-  }, [docxData, previewType, previewContent]);
+
 
   React.useEffect(() => {
     if (selectedSlug) {
@@ -1020,194 +693,56 @@ export default function TemplatesPage() {
 
         {/* Preview panel - right side - always visible */}
         <div className="col-span-12 md:col-span-7">
-          {selectedSlug ? (() => {
+          {selectedSlug && previewSource ? (() => {
             const selectedTemplate = items.find(t => t.slug === selectedSlug);
+            const format = previewContent || 'docx';
+            
+            // Show DocxPreview for binary files (docx/xlsx)
+            if (previewType === 'binary' && previewSource) {
+              return (
+                <DocxPreview
+                  url={previewSource}
+                  format={format}
+                  displayName={selectedTemplate?.name || selectedSlug}
+                  className="h-[calc(100vh-220px)]"
+                  showToolbar={true}
+                />
+              );
+            }
+            
+            // Show custom preview for HTML/text content
             return (
-            <Card className="h-[calc(100vh-220px)] flex flex-col border-0 shadow-lg overflow-hidden">
-              <div className="p-4 border-b border-border/40 bg-muted/20 flex items-center justify-between">
-                <div>
-                  <div className="font-semibold">{selectedTemplate?.name || selectedSlug}</div>
-                  <div className="text-xs text-muted-foreground">Template Preview</div>
-                </div>
-              </div>
-              <div className="flex-1 overflow-auto bg-white">
-                {previewLoading ? (
-                  <div className="flex items-center justify-center h-full">
-                    <div className="text-center space-y-3">
-                      <Loader2 className="h-8 w-8 animate-spin text-muted-foreground mx-auto" />
-                      <div className="text-sm text-muted-foreground">Loading preview...</div>
-                    </div>
+              <Card className="h-[calc(100vh-220px)] flex flex-col border-0 shadow-lg overflow-hidden">
+                <div className="p-4 border-b border-border/40 bg-muted/20 flex items-center justify-between">
+                  <div>
+                    <div className="font-semibold">{selectedTemplate?.name || selectedSlug}</div>
+                    <div className="text-xs text-muted-foreground">Template Preview</div>
                   </div>
-                ) : previewType === 'binary' && previewSource ? (
-                  <div className="h-full flex flex-col bg-muted/5">
-                    {/* PDF-style toolbar */}
-                    <div className="px-4 py-2 border-b border-border/40 bg-background/95 backdrop-blur">
-                      <div className="flex items-center justify-between gap-6">
-                        {/* Left: Document name */}
-                        <div className="flex items-center gap-2 min-w-0 overflow-hidden">
-                          <FileTextIcon className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-                          <span className="text-sm text-foreground truncate whitespace-nowrap">
-                            {selectedTemplate?.name || 'Document Preview'}
-                          </span>
-                        </div>
-                        
-                        {/* Center: Page controls and zoom */}
-                        {previewContent === 'docx' && (
-                          <div className="flex items-center gap-6 flex-shrink-0">
-                            {/* Page navigation */}
-                            <div className="flex items-center gap-2">
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                onClick={() => goToPage(currentPage - 1)}
-                                disabled={currentPage <= 1}
-                                className="h-8 w-8 p-0"
-                              >
-                                <ChevronLeft className="h-5 w-5" />
-                              </Button>
-                              <div className="flex items-center gap-2">
-                                <Input
-                                  type="number"
-                                  min={1}
-                                  max={totalPages}
-                                  value={currentPage}
-                                  onChange={(e) => {
-                                    const val = e.target.value;
-                                    if (val === '') return;
-                                    const page = parseInt(val);
-                                    if (!isNaN(page)) {
-                                      goToPage(page);
-                                    }
-                                  }}
-                                  onKeyDown={(e) => {
-                                    if (e.key === 'Enter') {
-                                      const page = parseInt(e.currentTarget.value);
-                                      if (!isNaN(page)) {
-                                        goToPage(page);
-                                      }
-                                    }
-                                  }}
-                                  className="h-8 w-14 text-center text-sm"
-                                />
-                                <span className="text-sm text-muted-foreground whitespace-nowrap">of {totalPages}</span>
-                              </div>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                onClick={() => goToPage(currentPage + 1)}
-                                disabled={currentPage >= totalPages}
-                                className="h-8 w-8 p-0"
-                              >
-                                <ChevronRight className="h-5 w-5" />
-                              </Button>
-                            </div>
-                            
-                            {/* Zoom controls */}
-                            <div className="flex items-center gap-2">
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                onClick={() => handleZoom('out')}
-                                disabled={zoomLevel <= 50}
-                                className="h-8 w-8 p-0"
-                              >
-                                <Minus className="h-5 w-5" />
-                              </Button>
-                              <span className="text-sm text-muted-foreground min-w-[3.5rem] text-center tabular-nums whitespace-nowrap">
-                                {zoomLevel}%
-                              </span>
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                onClick={() => handleZoom('in')}
-                                disabled={zoomLevel >= 200}
-                                className="h-8 w-8 p-0"
-                              >
-                                <Plus className="h-5 w-5" />
-                              </Button>
-                            </div>
-                          </div>
-                        )}
-                        
-                        {/* Right: Download button */}
-                        <div className="flex items-center flex-shrink-0">
-                          <Button
-                            size="sm"
-                            variant="default"
-                            onClick={() => {
-                              const a = document.createElement('a');
-                              a.href = previewSource;
-                              a.download = `${selectedTemplate?.slug || 'template'}.${previewContent}`;
-                              document.body.appendChild(a);
-                              a.click();
-                              document.body.removeChild(a);
-                            }}
-                            className="h-7 px-3 whitespace-nowrap"
-                          >
-                            <Icon.Download className="h-4 w-4 mr-1.5" />
-                            Download
-                          </Button>
-                        </div>
+                </div>
+                <div className="flex-1 overflow-auto bg-white">
+                  {previewLoading ? (
+                    <div className="flex items-center justify-center h-full">
+                      <div className="text-center space-y-3">
+                        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground mx-auto" />
+                        <div className="text-sm text-muted-foreground">Loading preview...</div>
                       </div>
                     </div>
-                    
-                    {/* Document viewer area */}
+                  ) : previewContent ? (
                     <div 
-                      ref={viewerScrollRef}
-                      className="flex-1 overflow-auto" 
-                      style={{ backgroundColor: '#525659' }}
-                    >
-                      {previewContent === 'docx' ? (
-                        <div className="min-h-full flex justify-center py-8 px-4">
-                          <div 
-                            className="docx-viewer-container transition-transform duration-200"
-                            style={{
-                              transform: `scale(${zoomLevel / 100})`,
-                              transformOrigin: 'top center',
-                              // Apply document metadata as CSS custom properties for dynamic styling
-                              ...(docxMetadata?.pageWidth && { '--docx-page-width': docxMetadata.pageWidth } as any),
-                              ...(docxMetadata?.pageHeight && { '--docx-page-height': docxMetadata.pageHeight } as any),
-                              ...(docxMetadata?.marginTop && { '--docx-margin-top': docxMetadata.marginTop } as any),
-                              ...(docxMetadata?.marginBottom && { '--docx-margin-bottom': docxMetadata.marginBottom } as any),
-                              ...(docxMetadata?.marginLeft && { '--docx-margin-left': docxMetadata.marginLeft } as any),
-                              ...(docxMetadata?.marginRight && { '--docx-margin-right': docxMetadata.marginRight } as any),
-                              ...(docxMetadata?.defaultFont && { '--docx-default-font': docxMetadata.defaultFont } as any),
-                              ...(docxMetadata?.defaultSize && { '--docx-default-size': docxMetadata.defaultSize } as any),
-                            }}
-                          >
-                            <div ref={docxPreviewRef} />
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="flex items-center justify-center h-full p-8">
-                          <div className="text-center space-y-3">
-                            <FileSpreadsheet className="h-16 w-16 mx-auto text-green-600 opacity-50" />
-                            <div className="text-sm text-muted-foreground max-w-md">
-                              Excel preview not yet supported.
-                              <br />
-                              Please download the file to view it in Excel.
-                            </div>
-                          </div>
-                        </div>
-                      )}
+                      className="prose prose-sm max-w-none p-6"
+                      dangerouslySetInnerHTML={{ __html: previewContent }}
+                    />
+                  ) : (
+                    <div className="flex items-center justify-center h-full">
+                      <div className="text-center space-y-2 text-muted-foreground">
+                        <FileTextIcon className="h-12 w-12 mx-auto opacity-50" />
+                        <div className="text-sm">No preview available</div>
+                        <div className="text-xs">This template may not have a previewable format</div>
+                      </div>
                     </div>
-                  </div>
-                ) : previewContent ? (
-                  <div 
-                    className="prose prose-sm max-w-none p-6"
-                    dangerouslySetInnerHTML={{ __html: previewContent }}
-                  />
-                ) : (
-                  <div className="flex items-center justify-center h-full">
-                    <div className="text-center space-y-2 text-muted-foreground">
-                      <FileTextIcon className="h-12 w-12 mx-auto opacity-50" />
-                      <div className="text-sm">No preview available</div>
-                      <div className="text-xs">This template may not have a previewable format</div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </Card>
+                  )}
+                </div>
+              </Card>
             );
           })() : (
             <Card className="h-[calc(100vh-220px)] flex flex-col border-0 shadow-lg overflow-hidden">

@@ -91,14 +91,20 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[95vw] sm:max-w-4xl h-[85vh] max-h-[800px] grid-rows-[auto_auto_1fr_auto] p-6 gap-4">
+      <DialogContent className="w-[95vw] sm:max-w-4xl h-[85vh] max-h-[800px] grid-rows-[auto_auto_1fr_auto] p-6 gap-4 overflow-hidden">
         <DialogHeader>
+<<<<<<< HEAD
           <DialogTitle className="flex items-center gap-2">
             {getDocumentIcon(metadata.documentType)}
             Document Metadata
           </DialogTitle>
           <DialogDescription className="flex items-center justify-between gap-3">
             <span className="truncate">{metadata.filename}</span>
+=======
+          <DialogTitle>Document Metadata</DialogTitle>
+          <DialogDescription className="flex items-start justify-between gap-3 flex-wrap">
+            <span className="break-words min-w-0 flex-1">{metadata.filename}</span>
+>>>>>>> cc22d7db0713ae4b6eb3d821794f8357beb628d2
             <div className="flex items-center gap-2 shrink-0">
               {metadata.documentType && (
                 <Badge variant="secondary">{metadata.documentType}</Badge>
@@ -122,11 +128,16 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
                   {/* Purpose */}
                   {metadata.purpose && (
                     <div className="space-y-2">
+<<<<<<< HEAD
                       <label className="text-sm font-medium flex items-center gap-2">
                         <Target className="h-4 w-4" />
                         Purpose
                       </label>
                       <div className="rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground leading-relaxed">
+=======
+                      <label className="text-sm font-medium">Purpose</label>
+                      <div className="rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground leading-relaxed break-words whitespace-pre-wrap">
+>>>>>>> cc22d7db0713ae4b6eb3d821794f8357beb628d2
                         {metadata.purpose}
                       </div>
                     </div>
@@ -144,14 +155,14 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
 
                   {/* Primary Entities & Data Structure */}
                   {(metadata.extraFields?.primaryEntities || metadata.extraFields?.dataStructure) && (
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       {metadata.extraFields?.primaryEntities && Array.isArray(metadata.extraFields.primaryEntities) && 
                       metadata.extraFields.primaryEntities.length > 0 && (
-                        <div className="space-y-2">
+                        <div className="space-y-2 min-w-0">
                           <label className="text-sm font-medium">Primary Entities</label>
                           <div className="flex flex-wrap gap-2">
                             {metadata.extraFields.primaryEntities.map((entity: string, idx: number) => (
-                              <Badge key={idx} variant="default" className="text-xs">
+                              <Badge key={idx} variant="default" className="text-xs break-words">
                                 {entity}
                               </Badge>
                             ))}
@@ -159,9 +170,9 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
                         </div>
                       )}
                       {metadata.extraFields?.dataStructure && (
-                        <div className="space-y-2">
+                        <div className="space-y-2 min-w-0">
                           <label className="text-sm font-medium">Data Structure</label>
-                          <Badge variant="secondary" className="text-xs">{metadata.extraFields.dataStructure}</Badge>
+                          <Badge variant="secondary" className="text-xs break-words">{metadata.extraFields.dataStructure}</Badge>
                         </div>
                       )}
                     </div>
@@ -176,7 +187,7 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
                       </label>
                       <div className="flex flex-wrap gap-2">
                         {metadata.keyTopics.map((topic, idx) => (
-                          <Badge key={idx} variant="default" className="text-xs">
+                          <Badge key={idx} variant="default" className="text-xs break-words">
                             {topic}
                           </Badge>
                         ))}

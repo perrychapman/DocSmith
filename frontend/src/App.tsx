@@ -118,14 +118,14 @@ export default function App() {
         {/* Mobile Menu Button - Only visible on mobile */}
         <button
           onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-          className="lg:hidden fixed top-2 left-2 z-50 w-10 h-10 flex items-center justify-center bg-background border border-border rounded-lg shadow-lg hover:bg-accent transition-colors"
+          className="lg:hidden fixed left-2 z-50 w-10 h-10 sm:w-12 sm:h-12 flex items-center justify-center bg-background border border-border rounded-lg shadow-lg hover:bg-accent transition-colors"
           style={{ top: isElectron ? '2.5rem' : '0.5rem' }}
           aria-label="Toggle menu"
         >
           {mobileMenuOpen ? (
-            <Icon.X className="w-5 h-5" />
+            <Icon.X className="w-5 h-5 sm:w-6 sm:h-6" />
           ) : (
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-5 h-5 sm:w-6 sm:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
             </svg>
           )}
@@ -289,8 +289,8 @@ export default function App() {
         </aside>
         
         {/* Main Content - responsive margins for sidebar */}
-        <main className={`flex-1 lg:ml-[200px] xl:ml-[260px] ${hash === '#settings' ? 'p-3 sm:p-4 md:p-6 overflow-y-auto' : 'p-3 sm:p-4 md:p-6 overflow-hidden flex flex-col h-full'}`}>
-          <div className={`mx-auto w-full ${hash === '#settings' ? 'space-y-4 sm:space-y-6 pb-20 sm:pb-32' : 'flex-1 flex flex-col min-h-0'}`}>
+        <main className={`flex-1 lg:ml-[200px] xl:ml-[260px] ${hash === '#settings' ? 'p-3 sm:p-4 md:p-6 overflow-y-auto' : 'p-3 sm:p-4 md:p-6 overflow-y-auto lg:overflow-hidden flex flex-col h-full'}`}>
+          <div className={`mx-auto w-full ${hash === '#settings' ? 'space-y-4 sm:space-y-6 pb-20 sm:pb-32' : 'lg:flex-1 lg:flex lg:flex-col lg:min-h-0'}`}>
             {content}
           </div>
         </main>

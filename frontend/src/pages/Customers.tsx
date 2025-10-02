@@ -716,10 +716,10 @@ export function CustomersPage() {
           </div>
         </Card>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 sm:gap-4 md:gap-2 min-h-0">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 sm:gap-4 min-h-0">
           {/* Left: Customers list full-height */}
           <div className="lg:col-span-4 xl:col-span-3">
-            <div className="sticky top-0">
+            <div className="lg:sticky lg:top-0">
               <Card className="h-[400px] sm:h-[500px] lg:h-[calc(100vh-220px)] flex flex-col border-0 shadow-lg overflow-hidden">
                 <div className="p-3 sm:p-4 border-b border-border/40 bg-muted/20">
                   <div className="flex items-center justify-between">

@@ -7,6 +7,34 @@ import { spawn } from 'child_process';
 // ES module-compatible __dirname
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+// Wait for backend to be ready by polling health endpoint
+async function waitForBackend(port, maxAttempts = 30, delayMs = 500) {
+    logToFile(`Waiting for backend on port ${port} (max ${maxAttempts} attempts)...`);
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            const response = await fetch(`http://localhost:${port}/api/health`, {
+                method: 'GET',
+                signal: AbortSignal.timeout(1000)
+            });
+            if (response.ok) {
+                logToFile(`Backend ready on port ${port} after ${attempt} attempt(s)`);
+                return true;
+            }
+            logToFile(`Backend health check attempt ${attempt}/${maxAttempts} - status ${response.status}`);
+        }
+        catch (error) {
+            // Backend not ready yet, will retry
+            if (attempt === 1 || attempt % 5 === 0) {
+                logToFile(`Backend health check attempt ${attempt}/${maxAttempts} - not ready yet`);
+            }
+        }
+        if (attempt < maxAttempts) {
+            await new Promise(resolve => setTimeout(resolve, delayMs));
+        }
+    }
+    logToFile(`Backend failed to start after ${maxAttempts} attempts`);
+    return false;
+}
 // Log configuration
 const LOG_PATH = path.join(os.tmpdir(), 'docsmith-electron.log');
 const MAX_LOG_SIZE = 5 * 1024 * 1024; // 5MB
@@ -100,7 +128,7 @@ function logToFile(message) {
     const timestamp = new Date().toISOString();
     fs.appendFileSync(LOG_PATH, `[${timestamp}] ${message}\n`);
 }
-function createWindow() {
+async function createWindow() {
     // Clean up logs on startup
     cleanupLogs();
     const win = new BrowserWindow({
@@ -193,7 +221,15 @@ function createWindow() {
         });
     });
     if (!isProduction) {
-        logToFile('Loading Vite dev server at http://localhost:5173');
+        logToFile('Development mode - waiting for backend to be ready...');
+        // Wait for backend to be ready before loading frontend
+        const backendReady = await waitForBackend(backendPort);
+        if (!backendReady) {
+            logToFile('Backend failed to start, showing error page');
+            await win.loadURL('data:text/html,<h1>DocSmith</h1><p style="color:red;">Backend server failed to start.</p><p>Please check the logs and ensure the backend is running on port ' + backendPort + '.</p>');
+            return;
+        }
+        logToFile('Backend ready, loading Vite dev server at http://localhost:5173');
         // Try to load Vite dev server, with fallback to static build if it fails
         const loadDevServer = async () => {
             try {
@@ -253,14 +289,23 @@ function createWindow() {
         backendProcess.on('exit', (code, signal) => {
             logToFile(`Backend process exited with code ${code} and signal ${signal}`);
         });
+        // Wait for backend to be ready before loading frontend
+        logToFile('Production mode - waiting for backend to be ready...');
+        const backendReady = await waitForBackend(backendPort, 60, 500); // 30 seconds timeout
+        if (!backendReady) {
+            logToFile('Backend failed to start in production mode');
+            await win.loadURL('data:text/html,<h1>DocSmith</h1><p style="color:red;">Backend server failed to start.</p><p>Please check the logs for more information.</p>');
+            return;
+        }
+        logToFile('Backend ready in production mode');
         // Try to load static build, fallback to dev server if missing
         if (fs.existsSync(distPath)) {
             logToFile('Loading static build: ' + distPath);
-            win.loadFile(distPath);
+            await win.loadFile(distPath);
         }
         else {
             logToFile('Static build not found, loading Vite dev server at http://localhost:5173');
-            win.loadURL('http://localhost:5173');
+            await win.loadURL('http://localhost:5173');
         }
     }
     // Store reference to backend process for cleanup

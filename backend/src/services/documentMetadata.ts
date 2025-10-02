@@ -383,8 +383,8 @@ Return ONLY a valid JSON object with the exact structure specified above. No mar
       'POST',
       { 
         message: analysisPrompt, 
-        mode: 'query',
-        temperature: 1  // Override workspace temperature to avoid model compatibility issues
+        mode: 'query'
+        // Note: temperature parameter removed - not supported by all models
         // Note: Some AnythingLLM versions support 'sources' parameter to pin specific documents
         // sources: documentName ? [documentName] : undefined
       }

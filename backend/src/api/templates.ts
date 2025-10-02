@@ -1,4 +1,3 @@
-// backend/src/api/templates.ts
 import { Router } from "express"
 import fs from "fs"
 import path from "path"
@@ -9,6 +8,7 @@ import { createJob, appendLog as jobLog, markJobDone, markJobError, listJobs, ge
 import { libraryRoot } from "../services/fs"
 import { readSettings, writeSettings } from "../services/settings"
 import { analyzeDocumentIntelligently } from "../services/documentIntelligence"
+import { analyzeTemplateMetadata, saveTemplateMetadata, loadTemplateMetadata, loadAllTemplateMetadata, deleteTemplateMetadata } from "../services/templateMetadata"
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const Handlebars = require('handlebars')
 // Placeholder-based DOCX engines removed
@@ -22,6 +22,108 @@ const PizZip = require('pizzip')
 const router = Router()
 
 const TEMPLATES_ROOT = path.join(libraryRoot(), "templates")
+
+// In-memory notification store for template metadata extraction events
+type TemplateMetadataNotification = {
+  templateSlug: string
+  status: 'processing' | 'complete' | 'error'
+  message?: string
+  metadata?: any
+  timestamp: number
+}
+
+const templateMetadataNotifications: TemplateMetadataNotification[] = []
+const MAX_TEMPLATE_NOTIFICATIONS = 100
+const TEMPLATE_DEDUP_WINDOW_MS = 2000 // 2 seconds
+
+function addTemplateNotification(notification: TemplateMetadataNotification) {
+  // Prevent duplicate notifications for same template within short time window
+  const recent = templateMetadataNotifications.find(
+    n => n.templateSlug === notification.templateSlug &&
+         n.status === notification.status &&
+         (Date.now() - n.timestamp) < TEMPLATE_DEDUP_WINDOW_MS
+  )
+  
+  if (recent) {
+    console.log(`[TEMPLATE-METADATA-NOTIF] Skipping duplicate ${notification.status} notification for ${notification.templateSlug}`)
+    return
+  }
+  
+  templateMetadataNotifications.unshift(notification)
+  if (templateMetadataNotifications.length > MAX_TEMPLATE_NOTIFICATIONS) {
+    templateMetadataNotifications.pop()
+  }
+}
+
+/**
+ * Extracts template metadata in the background after successful upload
+ */
+async function extractTemplateMetadataInBackground(
+  templateSlug: string,
+  templateName: string,
+  templatePath: string,
+  workspaceSlug: string
+): Promise<void> {
+  // Notify: processing started
+  addTemplateNotification({
+    templateSlug,
+    status: 'processing',
+    message: 'Analyzing template structure and requirements...',
+    timestamp: Date.now()
+  })
+  
+  try {
+    console.log(`[TEMPLATE-METADATA] Starting background extraction for ${templateSlug}`)
+    console.log(`[TEMPLATE-METADATA] Workspace: ${workspaceSlug}`)
+    
+    // Wait for AnythingLLM to finish indexing the template
+    console.log(`[TEMPLATE-METADATA] Waiting 3s for template indexing...`)
+    await new Promise(resolve => setTimeout(resolve, 3000))
+    
+    console.log(`[TEMPLATE-METADATA] Sending AI analysis request for "${templateName}"`)
+    const metadata = await analyzeTemplateMetadata(templatePath, templateSlug, templateName, workspaceSlug)
+    
+    console.log(`[TEMPLATE-METADATA] Analysis complete for ${templateSlug}:`, {
+      type: metadata.templateType,
+      complexity: metadata.complexity,
+      requiredDataTypes: metadata.requiredDataTypes?.length
+    })
+    
+    await saveTemplateMetadata(metadata)
+    
+    console.log(`[TEMPLATE-METADATA] Metadata saved to database for ${templateSlug}`)
+    
+    // Give SQLite a moment to commit
+    await new Promise(resolve => setTimeout(resolve, 100))
+    
+    // Notify: success
+    addTemplateNotification({
+      templateSlug,
+      status: 'complete',
+      message: `Template metadata extracted successfully for ${templateName}`,
+      metadata: {
+        templateType: metadata.templateType,
+        complexity: metadata.complexity,
+        requiredDataTypesCount: metadata.requiredDataTypes?.length || 0,
+        expectedEntitiesCount: metadata.expectedEntities?.length || 0
+      },
+      timestamp: Date.now()
+    })
+  } catch (err) {
+    console.error(`[TEMPLATE-METADATA] Background extraction failed for ${templateSlug}:`, err)
+    
+    // Notify: error
+    addTemplateNotification({
+      templateSlug,
+      status: 'error',
+      message: `Failed to extract template metadata: ${(err as Error).message}`,
+      timestamp: Date.now()
+    })
+    
+    throw err
+  }
+}
+
 
 // List available templates (directory-based)
 router.get("/", (_req, res) => {
@@ -406,6 +508,14 @@ router.post("/upload", (req, res) => {
           try { const cur = JSON.parse(fs.readFileSync(metaPath,'utf-8')); cur.workspaceSlug = wsSlug; fs.writeFileSync(metaPath, JSON.stringify(cur, null, 2), 'utf-8') } catch {}
         }
       } catch {}
+
+      // Trigger background metadata extraction (don't block response)
+      if (wsSlug) {
+        setImmediate(() => {
+          extractTemplateMetadataInBackground(providedSlug, name, target, wsSlug!)
+            .catch(err => console.error('[TEMPLATE-METADATA-BG] Failed:', err))
+        })
+      }
 
       // Do not compile here; user triggers compile explicitly later
       return res.status(201).json({ ok: true, slug: providedSlug, workspaceSlug: wsSlug })
@@ -1094,9 +1204,153 @@ router.delete("/:slug", async (req, res) => {
 
     // Remove local folder
     try { fs.rmSync(safeDir, { recursive: true, force: true }) } catch {}
+    
+    // Delete template metadata from database
+    try {
+      await deleteTemplateMetadata(slug)
+    } catch (err) {
+      console.error('[TEMPLATE-DELETE] Failed to delete metadata:', err)
+      // Non-fatal, continue
+    }
+    
     return res.json({ ok: true, deleted: slug, ...(workspaceSlug ? { workspaceSlug } : {}), workspaceDeleted })
   } catch (e) {
     return res.status(500).json({ error: (e as Error).message })
   }
 })
+
+// ---- Template Metadata Endpoints ----
+
+// GET /api/templates/:slug/metadata -> get template metadata
+router.get("/:slug/metadata", async (req, res) => {
+  const slug = String(req.params.slug)
+  try {
+    const metadata = await loadTemplateMetadata(slug)
+    if (!metadata) {
+      return res.status(404).json({ error: "Metadata not found" })
+    }
+    return res.json({ metadata })
+  } catch (err) {
+    return res.status(500).json({ error: (err as Error).message })
+  }
+})
+
+// POST /api/templates/:slug/metadata-extract -> manually trigger metadata extraction
+router.post("/:slug/metadata-extract", async (req, res) => {
+  const slug = String(req.params.slug)
+  
+  try {
+    const dir = path.join(TEMPLATES_ROOT, slug)
+    if (!fs.existsSync(dir)) {
+      return res.status(404).json({ error: "Template not found" })
+    }
+    
+    // Load template metadata
+    const metaPath = path.join(dir, 'template.json')
+    let meta: any = {}
+    let wsSlug: string | undefined
+    try {
+      if (fs.existsSync(metaPath)) {
+        meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'))
+        wsSlug = meta?.workspaceSlug
+      }
+    } catch {}
+    
+    if (!wsSlug) {
+      return res.status(400).json({ error: "Template has no workspace configured" })
+    }
+    
+    const name = meta?.name || slug
+    
+    // Find template file
+    const docxPath = path.join(dir, 'template.docx')
+    const xlsxPath = path.join(dir, 'template.xlsx')
+    const templatePath = fs.existsSync(docxPath) ? docxPath : (fs.existsSync(xlsxPath) ? xlsxPath : '')
+    
+    if (!templatePath) {
+      return res.status(404).json({ error: "Template file not found" })
+    }
+    
+    // Return immediately and process in background
+    res.json({ ok: true, message: "Template metadata extraction started" })
+    
+    // Start background extraction
+    setImmediate(() => {
+      extractTemplateMetadataInBackground(slug, name, templatePath, wsSlug!)
+        .catch(err => console.error('[TEMPLATE-METADATA-RETRY] Failed:', err))
+    })
+  } catch (err) {
+    return res.status(500).json({ error: (err as Error).message })
+  }
+})
+
+// GET /api/templates/metadata/notifications -> get recent template metadata notifications
+router.get("/metadata/notifications", (_req, res) => {
+  return res.json({ notifications: templateMetadataNotifications.slice(0, 20) })
+})
+
+// GET /api/templates/metadata/stream -> Server-Sent Events stream for real-time notifications
+router.get("/metadata/stream", (req, res) => {
+  // Optional: slug to track specifically
+  const trackSlug = req.query.slug ? String(req.query.slug) : null
+  
+  // Set SSE headers
+  res.setHeader('Content-Type', 'text/event-stream')
+  res.setHeader('Cache-Control', 'no-cache')
+  res.setHeader('Connection', 'keep-alive')
+  res.flushHeaders()
+  
+  // Send initial connection message
+  res.write(`data: ${JSON.stringify({ type: 'connected' })}\n\n`)
+  
+  // If tracking a specific template, send any recent notification for it (within last 5 seconds)
+  if (trackSlug) {
+    const fiveSecondsAgo = Date.now() - 5000
+    const recentNotification = templateMetadataNotifications
+      .filter(n => n.templateSlug === trackSlug && n.timestamp > fiveSecondsAgo)
+      .sort((a, b) => b.timestamp - a.timestamp)[0]
+    
+    if (recentNotification) {
+      console.log(`[TEMPLATE-SSE] Sending recent notification for tracked template: ${trackSlug}`)
+      res.write(`data: ${JSON.stringify({ type: 'notification', notification: recentNotification })}\n\n`)
+    }
+  }
+  
+  // Set lastCheck to NOW so we only get NEW notifications from this point forward
+  let lastCheck = Date.now()
+  console.log(`[TEMPLATE-SSE] New connection, lastCheck set to ${lastCheck}`, trackSlug ? `tracking: ${trackSlug}` : '')
+  
+  // Check for new notifications every 2 seconds
+  const interval = setInterval(() => {
+    const newNotifications = templateMetadataNotifications
+      .filter(n => n.timestamp > lastCheck)
+    
+    if (newNotifications.length > 0) {
+      console.log(`[TEMPLATE-SSE] Sending ${newNotifications.length} notifications`)
+      newNotifications.forEach(notification => {
+        console.log(`[TEMPLATE-SSE] Notification: ${notification.templateSlug} - ${notification.status}`)
+        res.write(`data: ${JSON.stringify({ type: 'notification', notification })}\n\n`)
+      })
+      lastCheck = Date.now()
+    }
+  }, 2000)
+  
+  // Cleanup on client disconnect
+  req.on('close', () => {
+    console.log(`[TEMPLATE-SSE] Connection closed`)
+    clearInterval(interval)
+    res.end()
+  })
+})
+
+// GET /api/templates/metadata/all -> get all template metadata
+router.get("/metadata/all", async (_req, res) => {
+  try {
+    const allMetadata = await loadAllTemplateMetadata()
+    return res.json({ templates: allMetadata })
+  } catch (err) {
+    return res.status(500).json({ error: (err as Error).message })
+  }
+})
+
 // Versioning routes removed; single upload endpoint above handles both new and replacement uploads without version history.

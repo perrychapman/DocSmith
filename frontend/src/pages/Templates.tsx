@@ -11,7 +11,9 @@ import { Progress } from "../components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import { DocxPreview } from "../components/DocxPreview";
-import { Search, FileText as FileTextIcon, FileSpreadsheet, FileCode, CheckCircle2, AlertTriangle, Loader2, Sparkles, Copy, X, ExternalLink } from "lucide-react";
+import { TemplateMetadataModal, type TemplateMetadata } from "../components/TemplateMetadataModal";
+import { useTemplateMetadata } from "../contexts/TemplateMetadataContext";
+import { Search, FileText as FileTextIcon, FileSpreadsheet, FileCode, CheckCircle2, AlertTriangle, Loader2, Sparkles, Copy, X, ExternalLink, Info } from "lucide-react";
 import { toast } from "sonner";
 import { apiFetch, apiEventSource } from '../lib/api';
 
@@ -61,6 +63,10 @@ export default function TemplatesPage() {
   const [previewType, setPreviewType] = React.useState<'html' | 'text' | 'binary' | null>(null);
   const [previewSource, setPreviewSource] = React.useState<string | null>(null);
 
+  // Template metadata modal state
+  const [metadataModal, setMetadataModal] = React.useState<TemplateMetadata | null>(null);
+  const { metadataProcessing, startTracking, setRefreshCallback } = useTemplateMetadata();
+
   // Format relative time helper (from Customers.tsx)
   function formatRelativeTime(value?: string | number | Date): string {
     if (!value) return "-";
@@ -89,6 +95,43 @@ export default function TemplatesPage() {
     }
   }
 
+  // Load template metadata
+  async function loadMetadata(templateSlug: string) {
+    try {
+      const r = await apiFetch(`/api/templates/${encodeURIComponent(templateSlug)}/metadata`);
+      if (!r.ok) {
+        if (r.status === 404) {
+          toast.error?.('No metadata available for this template yet');
+          return;
+        }
+        throw new Error('Failed to load metadata');
+      }
+      const data = await r.json();
+      setMetadataModal(data.metadata);
+    } catch (err) {
+      console.error('Failed to load metadata:', err);
+      toast.error?.('Failed to load template metadata');
+    }
+  }
+
+  // Trigger metadata extraction
+  async function extractMetadata(templateSlug: string) {
+    try {
+      const r = await apiFetch(`/api/templates/${encodeURIComponent(templateSlug)}/metadata-extract`, {
+        method: 'POST'
+      });
+      if (!r.ok) {
+        throw new Error('Failed to start metadata extraction');
+      }
+      
+      // Start tracking the metadata extraction
+      startTracking(templateSlug);
+      toast.success?.('Metadata extraction started');
+    } catch (err) {
+      console.error('Failed to extract metadata:', err);
+      toast.error?.('Failed to start metadata extraction');
+    }
+  }
 
 
   async function load() {
@@ -183,6 +226,15 @@ export default function TemplatesPage() {
   }, [items]);
 
   React.useEffect(() => { load(); }, []);
+
+  // Set up metadata refresh callback
+  React.useEffect(() => {
+    setRefreshCallback(() => {
+      console.log('[TEMPLATE-METADATA] Refresh callback triggered, reloading templates');
+      load();
+    });
+    return () => setRefreshCallback(null);
+  }, [setRefreshCallback]);
 
   // Auto-select first template when items load
   React.useEffect(() => {
@@ -292,9 +344,17 @@ export default function TemplatesPage() {
       const j = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(String(r.status));
       const ws = j?.workspaceSlug ? ` (Workspace: ${j.workspaceSlug})` : '';
+      const uploadedSlug = j?.slug || slug.trim();
       if (j?.warning) toast.warning?.(String(j.warning));
       toast.success(`Template uploaded${ws}${j?.hasScript ? ' • Script generated' : ''}`);
       setUploadOpen(false); setFile(null); setName(""); setSlug("");
+      
+      // Start tracking metadata extraction for this template
+      if (uploadedSlug) {
+        console.log('[TEMPLATE-UPLOAD] Starting metadata tracking for:', uploadedSlug);
+        startTracking(uploadedSlug);
+      }
+      
       await load();
     } catch { toast.error("Upload failed") }
     finally { setUploading(false) }
@@ -644,6 +704,30 @@ export default function TemplatesPage() {
                                     </TooltipTrigger>
                                     <TooltipContent>Open Folder</TooltipContent>
                                   </Tooltip>
+                                  <Tooltip>
+                                    <TooltipTrigger>
+                                      <Button
+                                        size="icon"
+                                        variant="ghost"
+                                        className={`h-9 w-9 ${metadataProcessing.has(t.slug) ? 'opacity-80' : ''}`}
+                                        aria-label={`View metadata for ${t.name || t.slug}`}
+                                        onClick={(e) => { e.stopPropagation(); loadMetadata(t.slug); }}
+                                        disabled={metadataProcessing.has(t.slug)}
+                                      >
+                                        {metadataProcessing.has(t.slug) ? (
+                                          <Loader2 className="h-4 w-4 animate-spin" />
+                                        ) : (
+                                          <Info className="h-4 w-4" />
+                                        )}
+                                      </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                      {metadataProcessing.has(t.slug) 
+                                        ? 'Extracting template metadata...' 
+                                        : 'View Template Metadata'
+                                      }
+                                    </TooltipContent>
+                                  </Tooltip>
                                   {t.hasFullGen && (
                                     <Tooltip>
                                       <TooltipTrigger>
@@ -832,6 +916,17 @@ export default function TemplatesPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Template Metadata Modal */}
+      <TemplateMetadataModal
+        metadata={metadataModal}
+        open={!!metadataModal}
+        onOpenChange={(open) => !open && setMetadataModal(null)}
+        onRetry={(templateSlug) => {
+          setMetadataModal(null);
+          extractMetadata(templateSlug);
+        }}
+      />
     </div>
   );
 }

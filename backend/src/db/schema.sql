@@ -81,3 +81,60 @@ CREATE TABLE IF NOT EXISTS document_metadata (
 
 CREATE INDEX IF NOT EXISTS idx_doc_meta_customer ON document_metadata(customerId);
 CREATE INDEX IF NOT EXISTS idx_doc_meta_filename ON document_metadata(customerId, filename);
+
+-- Template metadata for template structure and characteristics
+CREATE TABLE IF NOT EXISTS template_metadata (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  templateSlug TEXT NOT NULL UNIQUE,
+  templateName TEXT NOT NULL,
+  uploadedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  fileSize INTEGER,
+  
+  -- Template characteristics (HOW/WHY, not data content)
+  templateType TEXT, -- 'Report', 'Invoice', 'Letter', 'Spreadsheet', 'Dashboard', 'Form'
+  purpose TEXT, -- What this template is designed to generate
+  outputFormat TEXT, -- 'docx', 'xlsx', 'pdf'
+  
+  -- Structure and requirements
+  requiredDataTypes TEXT, -- JSON array: ['Financial', 'Inventory', 'Customer', 'Timeline']
+  expectedEntities TEXT, -- JSON array: ['Products', 'Orders', 'Customers', 'Employees']
+  dataStructureNeeds TEXT, -- JSON array: ['Tabular data', 'Time series', 'Hierarchical', 'Key-value pairs']
+  
+  -- Template content structure
+  hasSections TEXT, -- JSON array: section names/types ['Executive Summary', 'Data Tables', 'Charts']
+  hasCharts INTEGER DEFAULT 0,
+  hasTables INTEGER DEFAULT 0,
+  hasFormulas INTEGER DEFAULT 0,
+  tableCount INTEGER,
+  chartTypes TEXT, -- JSON array: ['Bar', 'Line', 'Pie']
+  
+  -- Formatting and styling
+  styleTheme TEXT, -- 'Corporate', 'Modern', 'Minimal', 'Formal', 'Technical'
+  colorScheme TEXT, -- 'Blue/Gray', 'Green/White', 'Multi-color'
+  fontFamily TEXT,
+  pageOrientation TEXT, -- 'Portrait', 'Landscape'
+  
+  -- Content requirements
+  requiresAggregation INTEGER DEFAULT 0, -- Needs summaries, totals, averages
+  requiresTimeSeries INTEGER DEFAULT 0, -- Needs date-based ordering
+  requiresComparisons INTEGER DEFAULT 0, -- Needs before/after, period-over-period
+  requiresFiltering INTEGER DEFAULT 0, -- Needs subset of data based on criteria
+  
+  -- Metadata about the template itself
+  complexity TEXT, -- 'Simple', 'Moderate', 'Complex'
+  estimatedGenerationTime TEXT, -- 'Fast (<5s)', 'Moderate (5-15s)', 'Slow (>15s)'
+  targetAudience TEXT, -- 'Executives', 'Technical Teams', 'Customers', 'Internal Staff'
+  useCases TEXT, -- JSON array: scenarios where this template is appropriate
+  
+  -- Relationships and compatibility
+  compatibleDocumentTypes TEXT, -- JSON array: document types that work well with this template
+  recommendedWorkspaceSize TEXT, -- 'Small (<10 docs)', 'Medium (10-50)', 'Large (>50)'
+  
+  -- System metadata
+  lastAnalyzed TIMESTAMP,
+  analysisVersion INTEGER DEFAULT 1,
+  workspaceSlug TEXT -- Associated AnythingLLM workspace
+);
+
+CREATE INDEX IF NOT EXISTS idx_template_meta_slug ON template_metadata(templateSlug);
+CREATE INDEX IF NOT EXISTS idx_template_meta_type ON template_metadata(templateType);

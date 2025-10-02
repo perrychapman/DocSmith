@@ -10,6 +10,7 @@ import Setup from "./components/Setup";
 import { Separator } from "./components/ui/separator";
 import { Icon } from "./components/icons";
 import { MetadataProvider } from "./contexts/MetadataContext";
+import { TemplateMetadataProvider } from "./contexts/TemplateMetadataContext";
 
 function useHashRoute() {
   const [hash, setHash] = React.useState<string>(() => location.hash || "#customers");
@@ -77,6 +78,7 @@ export default function App() {
 
   return (
     <MetadataProvider>
+      <TemplateMetadataProvider>
       <div className="h-screen bg-background flex flex-col">
       {/* Custom title bar for Electron - Fixed at top */}
       {isElectron && (
@@ -296,6 +298,7 @@ export default function App() {
         </main>
       </div>
       </div>
+      </TemplateMetadataProvider>
     </MetadataProvider>
   );
 }

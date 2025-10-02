@@ -9,6 +9,7 @@ import { ensureUploadsDir, resolveCustomerPaths } from "../services/customerLibr
 import { anythingllmRequest } from "../services/anythingllm"
 import { findDocsByFilename, documentExists, qualifiedNamesForShort } from "../services/anythingllmDocs"
 import { secureFileValidation } from "../services/fileSecurityValidator"
+import { analyzeDocumentMetadata, saveDocumentMetadata, loadDocumentMetadata, deleteDocumentMetadata, generateWorkspaceIndex } from "../services/documentMetadata"
 
 // Lazy import multer to avoid types requirement at compile time
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -17,6 +18,116 @@ const multer = require("multer")
 const router = Router()
 
 type CustomerRow = { id: number; name: string; workspaceSlug?: string | null; createdAt: string }
+
+// In-memory notification store for metadata extraction events
+type MetadataNotification = {
+  customerId: number
+  filename: string
+  status: 'processing' | 'complete' | 'error'
+  message?: string
+  metadata?: any
+  timestamp: number
+}
+
+const metadataNotifications: MetadataNotification[] = []
+const MAX_NOTIFICATIONS = 100
+const DEDUP_WINDOW_MS = 2000 // 2 seconds
+
+function addNotification(notification: MetadataNotification) {
+  // Prevent duplicate notifications for same file within short time window
+  const recent = metadataNotifications.find(
+    n => n.customerId === notification.customerId &&
+         n.filename === notification.filename &&
+         n.status === notification.status &&
+         (Date.now() - n.timestamp) < DEDUP_WINDOW_MS
+  )
+  
+  if (recent) {
+    console.log(`[METADATA-NOTIF] Skipping duplicate ${notification.status} notification for ${notification.filename} (within ${DEDUP_WINDOW_MS}ms window)`)
+    return
+  }
+  
+  metadataNotifications.unshift(notification)
+  if (metadataNotifications.length > MAX_NOTIFICATIONS) {
+    metadataNotifications.pop()
+  }
+}
+
+/**
+ * Extracts document metadata in the background after successful upload
+ * This runs asynchronously and doesn't block the upload response
+ */
+async function extractMetadataInBackground(
+  customerId: number,
+  filePath: string,
+  filename: string,
+  workspaceSlug: string,
+  documentName?: string
+): Promise<void> {
+  // Notify: processing started
+  addNotification({
+    customerId,
+    filename,
+    status: 'processing',
+    message: 'Analyzing document metadata...',
+    timestamp: Date.now()
+  })
+  
+  try {
+    const targetDoc = documentName || filename
+    console.log(`[METADATA] Starting background extraction for ${filename}`)
+    console.log(`[METADATA] Workspace: ${workspaceSlug}`)
+    console.log(`[METADATA] Target document name: "${targetDoc}"`)
+    
+    // Wait for AnythingLLM to finish indexing the document
+    console.log(`[METADATA] Waiting 3s for document indexing...`)
+    await new Promise(resolve => setTimeout(resolve, 3000))
+    
+    console.log(`[METADATA] Sending AI analysis request for "${targetDoc}"`)
+    const metadata = await analyzeDocumentMetadata(filePath, filename, workspaceSlug, documentName)
+    
+    console.log(`[METADATA] Analysis complete for ${filename}:`, {
+      type: metadata.documentType,
+      topics: metadata.keyTopics?.length,
+      stakeholders: metadata.stakeholders?.length
+    })
+    
+    metadata.customerId = customerId
+    await saveDocumentMetadata(customerId, metadata)
+    
+    console.log(`[METADATA] Metadata saved to database for ${filename}`)
+    
+    // Give SQLite a moment to commit the transaction before notifying frontend
+    await new Promise(resolve => setTimeout(resolve, 100))
+    
+    // Notify: success
+    addNotification({
+      customerId,
+      filename,
+      status: 'complete',
+      message: `Metadata extracted successfully for ${filename}`,
+      metadata: {
+        documentType: metadata.documentType,
+        keyTopicsCount: metadata.keyTopics?.length || 0,
+        stakeholdersCount: metadata.stakeholders?.length || 0
+      },
+      timestamp: Date.now()
+    })
+  } catch (err) {
+    console.error(`[METADATA] Background extraction failed for ${filename}:`, err)
+    
+    // Notify: error
+    addNotification({
+      customerId,
+      filename,
+      status: 'error',
+      message: `Failed to extract metadata: ${(err as Error).message}`,
+      timestamp: Date.now()
+    })
+    
+    throw err
+  }
+}
 
 // --- Local sidecar mapping helpers (store AnythingLLM doc mapping next to upload) ---
 type Sidecar = {
@@ -72,8 +183,151 @@ function openInDefaultApp(targetPath: string): boolean {
     return false
   }
 }
+
+// POST /api/uploads/:customerId/metadata-extract -> manually trigger metadata extraction for a specific file
+router.post("/:customerId/metadata-extract", (req, res) => {
+  const id = Number(req.params.customerId)
+  const { filename } = req.body
+  
+  if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "Invalid customerId" })
+  if (!filename || typeof filename !== 'string') return res.status(400).json({ error: "Missing filename" })
+  
+  const db = getDB()
+  db.get<CustomerRow>(
+    "SELECT id, name, workspaceSlug, createdAt FROM customers WHERE id = ?",
+    [id],
+    async (err, row) => {
+      if (err) return res.status(500).json({ error: err.message })
+      if (!row) return res.status(404).json({ error: "Customer not found" })
+      if (!row.workspaceSlug) return res.status(400).json({ error: "Customer has no workspace configured" })
+      
+      try {
+        const { uploadsDir } = resolveCustomerPaths(row.id, row.name, new Date(row.createdAt))
+        const filePath = path.join(uploadsDir, filename)
+        
+        // Verify file exists
+        if (!fs.existsSync(filePath)) {
+          return res.status(404).json({ error: "File not found" })
+        }
+        
+        // Get document name from sidecar if available
+        const sidecar = readSidecar(uploadsDir, filename)
+        const documentName = sidecar?.docName || filename
+        
+        // Return immediately and process in background
+        res.json({ ok: true, message: "Metadata extraction started" })
+        
+        // Start background extraction
+        setImmediate(() => {
+          extractMetadataInBackground(id, filePath, filename, row.workspaceSlug!, documentName)
+            .catch(err => console.error('[METADATA-RETRY] Failed:', err))
+        })
+      } catch (err) {
+        return res.status(500).json({ error: (err as Error).message })
+      }
+    }
+  )
+})
+
+// GET /api/uploads/metadata-notifications/:customerId -> get recent metadata extraction notifications
+router.get("/metadata-notifications/:customerId", (req, res) => {
+  const id = Number(req.params.customerId)
+  if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "Invalid customerId" })
+  
+  const customerNotifications = metadataNotifications
+    .filter(n => n.customerId === id)
+    .slice(0, 20) // Last 20 notifications
+  
+  return res.json({ notifications: customerNotifications })
+})
+
+// GET /api/uploads/metadata-stream/:customerId -> Server-Sent Events stream for real-time notifications
+router.get("/metadata-stream/:customerId", (req, res) => {
+  const id = Number(req.params.customerId)
+  if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "Invalid customerId" })
+  
+  // Optional: filename to track specifically (for initial connection)
+  const trackFilename = req.query.filename ? String(req.query.filename) : null
+  
+  // Set SSE headers
+  res.setHeader('Content-Type', 'text/event-stream')
+  res.setHeader('Cache-Control', 'no-cache')
+  res.setHeader('Connection', 'keep-alive')
+  res.flushHeaders()
+  
+  // Send initial connection message
+  res.write(`data: ${JSON.stringify({ type: 'connected', customerId: id })}\n\n`)
+  
+  // If tracking a specific file, send any recent notification for it (within last 5 seconds)
+  if (trackFilename) {
+    const fiveSecondsAgo = Date.now() - 5000
+    const recentNotification = metadataNotifications
+      .filter(n => n.customerId === id && n.filename === trackFilename && n.timestamp > fiveSecondsAgo)
+      .sort((a, b) => b.timestamp - a.timestamp)[0] // Get most recent
+    
+    if (recentNotification) {
+      console.log(`[SSE] Sending recent notification for tracked file: ${trackFilename}`)
+      res.write(`data: ${JSON.stringify({ type: 'notification', notification: recentNotification })}\n\n`)
+    }
+  }
+  
+  // Set lastCheck to NOW so we only get NEW notifications from this point forward
+  let lastCheck = Date.now()
+  console.log(`[SSE] New connection for customer ${id}, lastCheck set to ${lastCheck}`, trackFilename ? `tracking: ${trackFilename}` : '')
+  
+  // Check for new notifications every 2 seconds
+  const interval = setInterval(() => {
+    const newNotifications = metadataNotifications
+      .filter(n => n.customerId === id && n.timestamp > lastCheck)
+    
+    if (newNotifications.length > 0) {
+      console.log(`[SSE] Sending ${newNotifications.length} notifications for customer ${id}`)
+      newNotifications.forEach(notification => {
+        console.log(`[SSE] Notification: ${notification.filename} - ${notification.status}`)
+        res.write(`data: ${JSON.stringify({ type: 'notification', notification })}\n\n`)
+      })
+      lastCheck = Date.now()
+    }
+  }, 2000)
+  
+  // Cleanup on client disconnect
+  req.on('close', () => {
+    console.log(`[SSE] Connection closed for customer ${id}`)
+    clearInterval(interval)
+    res.end()
+  })
+})
+
+// GET /api/uploads/:customerId/metadata?name=<filename> -> get metadata for a specific file
+router.get("/:customerId/metadata", async (req, res) => {
+  const id = Number(req.params.customerId)
+  if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "Invalid customerId" })
+  
+  const filename = req.query.name ? String(req.query.name) : null
+  if (!filename) return res.status(400).json({ error: "Missing filename query parameter" })
+  
+  try {
+    const metadata = await loadDocumentMetadata(id, filename)
+    
+    if (!metadata) {
+      return res.status(404).json({ 
+        error: "Metadata not found",
+        message: `No metadata found for ${filename}. It may not have been analyzed yet.`
+      })
+    }
+    
+    res.json({ metadata })
+  } catch (err) {
+    console.error(`[METADATA] Failed to load metadata for ${filename}:`, err)
+    res.status(500).json({ 
+      error: "Failed to load metadata",
+      message: err instanceof Error ? err.message : String(err)
+    })
+  }
+})
+
 // GET /api/uploads/:customerId -> list files in uploads folder
-router.get("/:customerId", (req, res) => {
+router.get("/:customerId", async (req, res) => {
   const id = Number(req.params.customerId)
   if (!Number.isFinite(id) || id <= 0) return res.status(400).json({ error: "Invalid customerId" })
 
@@ -81,26 +335,32 @@ router.get("/:customerId", (req, res) => {
   db.get<CustomerRow>(
     "SELECT id, name, workspaceSlug, createdAt FROM customers WHERE id = ?",
     [id],
-    (err, row) => {
+    async (err, row) => {
       if (err) return res.status(500).json({ error: err.message })
       if (!row) return res.status(404).json({ error: "Customer not found" })
       try {
         const { uploadsDir } = resolveCustomerPaths(row.id, row.name, new Date(row.createdAt))
         fs.mkdirSync(uploadsDir, { recursive: true })
-        const items = fs
+        const entries = fs
           .readdirSync(uploadsDir, { withFileTypes: true })
-          .filter((e) => e.isFile())
-          .map((e) => {
-            const full = path.join(uploadsDir, e.name)
-            const stat = fs.statSync(full)
-            return {
-              name: e.name,
-              path: full,
-              size: stat.size,
-              modifiedAt: stat.mtime.toISOString(),
-            }
-          })
-          .sort((a, b) => (a.modifiedAt < b.modifiedAt ? 1 : -1))
+          .filter((e) => e.isFile() && !e.name.endsWith('.allm.json') && !e.name.endsWith('.metadata.json'))
+        
+        const items = await Promise.all(entries.map(async (e) => {
+          const full = path.join(uploadsDir, e.name)
+          const stat = fs.statSync(full)
+          const sidecar = readSidecar(uploadsDir, e.name)
+          const metadata = await loadDocumentMetadata(id, e.name)
+          return {
+            name: e.name,
+            path: full,
+            size: stat.size,
+            modifiedAt: stat.mtime.toISOString(),
+            sidecar,
+            metadata
+          }
+        }))
+        
+        items.sort((a, b) => (a.modifiedAt < b.modifiedAt ? 1 : -1))
         return res.json(items)
       } catch (e) {
         return res.status(500).json({ error: (e as Error).message })
@@ -320,6 +580,8 @@ router.post("/:customerId", (req, res, next) => {
                   const docs = Array.isArray(resp?.documents) ? resp.documents : []
                   const first = docs[0]
                   if (first?.name) docName = String(first.name)
+                  console.log(`[UPLOAD] Document name from AnythingLLM: "${docName || 'not captured'}"`)
+                  
                   // If we got a docName, try to resolve its id via GET /document/:name
                   let docId: string | undefined
                   if (docName) {
@@ -329,11 +591,20 @@ router.post("/:customerId", (req, res, next) => {
                       const match = items.find((x: any) => (String(x?.name || "") === docName))
                       if (match?.id) docId = String(match.id)
                     } catch {}
-                  }
-                  if (docName) {
                     writeSidecar(uploadsDir, file.filename, { docName, docId, workspaceSlug: slug, uploadedAt: new Date().toISOString() })
                   }
                 } catch {}
+
+                // Kick off metadata extraction in background (non-blocking)
+                // Don't await - let it run asynchronously after upload completes
+                console.log(`[UPLOAD] Kicking off background metadata extraction`)
+                console.log(`[UPLOAD] Will analyze document: "${docName || file.filename}"`)
+                setImmediate(() => {
+                  extractMetadataInBackground(id, file.path, file.filename, slug, docName)
+                    .catch(err => console.error('[METADATA] Background extraction failed:', err))
+                })
+                
+                return res.status(201).json({ ok: true, file: { name: file.filename, path: file.path } })
               } catch (e) {
                 return res.status(201).json({
                   ok: true,
@@ -380,7 +651,18 @@ router.delete("/:customerId", (req, res) => {
 
       let removedLocal = false
       try {
-        if (fs.existsSync(safeTarget)) { fs.unlinkSync(safeTarget); removedLocal = true }
+        if (fs.existsSync(safeTarget)) { 
+          fs.unlinkSync(safeTarget)
+          removedLocal = true
+          
+          // Delete metadata from database
+          try {
+            await deleteDocumentMetadata(id, name)
+          } catch (metaErr) {
+            console.error("Failed to delete metadata:", metaErr)
+            // Non-blocking - document was still deleted
+          }
+        }
       } catch {}
 
       // Remove from AnythingLLM by robust two-step (with verification & fallbacks)

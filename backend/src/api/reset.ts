@@ -18,11 +18,12 @@ async function resetApp(req: Request, res: Response) {
       DELETE FROM documents;
       DELETE FROM prompts;
       DELETE FROM customers;
+      DELETE FROM document_metadata;
     `);
     
     // Reset auto-increment counters
     db.exec(`
-      DELETE FROM sqlite_sequence WHERE name IN ('customers', 'prompts', 'documents', 'gen_cards');
+      DELETE FROM sqlite_sequence WHERE name IN ('customers', 'prompts', 'documents', 'gen_cards', 'document_metadata');
     `);
     
     console.log('Database tables cleared');
@@ -108,7 +109,8 @@ async function getResetStatus(req: Request, res: Response) {
       customers: 0,
       prompts: 0,
       documents: 0,
-      genCards: 0
+      genCards: 0,
+      documentMetadata: 0
     };
     
     // Get counts using callbacks since this is sqlite3, not better-sqlite3
@@ -123,6 +125,9 @@ async function getResetStatus(req: Request, res: Response) {
     });
     db.get('SELECT COUNT(*) as count FROM gen_cards', (err, row: any) => {
       if (!err && row) counts.genCards = row.count;
+    });
+    db.get('SELECT COUNT(*) as count FROM document_metadata', (err, row: any) => {
+      if (!err && row) counts.documentMetadata = row.count;
     });
     
     // Count files in directories

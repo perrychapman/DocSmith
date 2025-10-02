@@ -8,17 +8,6 @@ function getBaseUrl(): string {
   const isProd = import.meta.env.MODE === 'production';
   const isFileProtocol = typeof window !== 'undefined' && window.location.protocol === 'file:';
   
-  // Debug logging in development
-  if (import.meta.env.DEV) {
-    console.log('API Base URL Detection:', {
-      isElectron,
-      isProd,
-      isFileProtocol,
-      userAgent: navigator.userAgent,
-      protocol: window.location.protocol
-    });
-  }
-  
   // In Electron/desktop contexts, point directly at the backend server
   if (isElectron || isFileProtocol) {
     const configuredPort = Number(import.meta.env.VITE_BACKEND_PORT) || Number(import.meta.env.VITE_ELECTRON_BACKEND_PORT);

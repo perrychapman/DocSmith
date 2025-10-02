@@ -9,6 +9,7 @@ import HelpPage from "./pages/Help";
 import Setup from "./components/Setup";
 import { Separator } from "./components/ui/separator";
 import { Icon } from "./components/icons";
+import { MetadataProvider } from "./contexts/MetadataContext";
 
 function useHashRoute() {
   const [hash, setHash] = React.useState<string>(() => location.hash || "#customers");
@@ -74,7 +75,8 @@ export default function App() {
   const isElectron = typeof window !== 'undefined' && window.electronAPI;
 
   return (
-    <div className="h-screen bg-background flex flex-col">
+    <MetadataProvider>
+      <div className="h-screen bg-background flex flex-col">
       {/* Custom title bar for Electron - Fixed at top */}
       {isElectron && (
         <div className="fixed top-0 left-0 right-0 z-50 flex justify-between items-center h-8 bg-background border-b border-border/50 drag-region">
@@ -190,6 +192,7 @@ export default function App() {
           </div>
         </main>
       </div>
-    </div>
+      </div>
+    </MetadataProvider>
   );
 }

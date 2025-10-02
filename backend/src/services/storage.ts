@@ -38,6 +38,7 @@ export function getDB(): sqlite3.Database {
     db.exec(schema)
     // Lightweight migrations for existing DBs
     try { ensureCustomersWorkspaceSlugColumn(db) } catch {}
+    try { ensureDocumentMetadataExtraFieldsColumn(db) } catch {}
   }
   return db
 }
@@ -73,6 +74,21 @@ export function ensureCustomersWorkspaceSlugColumn(handle: sqlite3.Database) {
       const has = Array.isArray(rows) && rows.some((r) => String(r?.name) === "workspaceSlug")
       if (has) return
       handle.run("ALTER TABLE customers ADD COLUMN workspaceSlug TEXT", () => {})
+    })
+  })
+}
+
+export function ensureDocumentMetadataExtraFieldsColumn(handle: sqlite3.Database) {
+  handle.serialize(() => {
+    handle.all("PRAGMA table_info(document_metadata)", (err, rows: any[]) => {
+      if (err) return
+      const has = Array.isArray(rows) && rows.some((r) => String(r?.name) === "extraFields")
+      if (has) return
+      console.log('[MIGRATION] Adding extraFields column to document_metadata table')
+      handle.run("ALTER TABLE document_metadata ADD COLUMN extraFields TEXT", (err) => {
+        if (err) console.error('[MIGRATION] Failed to add extraFields column:', err)
+        else console.log('[MIGRATION] Successfully added extraFields column')
+      })
     })
   })
 }

@@ -203,6 +203,48 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
     if (/```\s*ts[\s\S]*```/i.test(s)) return true;
     return false;
   };
+
+  // Detect prompts/responses from metadata extraction (hidden from UI)
+  const isMetadataPrompt = (txt: string) => {
+    const s = String(txt || '').toLowerCase();
+    if (!s) return false;
+    // Must have multiple specific metadata indicators to avoid false positives
+    const hasAnalyzeDocument = s.includes('please analyze the document named');
+    const hasMetadataInstruction = s.includes('extract precise metadata') || s.includes('critical instructions');
+    const hasDocumentType = (
+      s.includes('this is a spreadsheet file') ||
+      s.includes('this is a presentation file') ||
+      s.includes('this is a code/script file') ||
+      s.includes('this is an image file') ||
+      s.includes('this is a document file')
+    );
+    return (hasAnalyzeDocument && hasMetadataInstruction) || (hasDocumentType && hasMetadataInstruction);
+  };
+  const isMetadataResponse = (txt: string) => {
+    const s = String(txt || '');
+    if (!s) return false;
+    // Must be valid JSON AND have ALL the metadata-specific fields
+    // AND have metadata structure indicators like arrays and specific field combinations
+    try {
+      const jsonMatch = s.match(/\{[\s\S]*\}/);
+      if (!jsonMatch) return false;
+      const parsed = JSON.parse(jsonMatch[0]);
+      // Must have documentType AND at least 3 other metadata-specific fields
+      const hasDocType = parsed.hasOwnProperty('documentType');
+      const hasPurpose = parsed.hasOwnProperty('purpose');
+      const hasKeyTopics = parsed.hasOwnProperty('keyTopics');
+      const hasDataCategories = parsed.hasOwnProperty('dataCategories');
+      const hasStakeholders = parsed.hasOwnProperty('stakeholders');
+      const hasMentionedSystems = parsed.hasOwnProperty('mentionedSystems');
+      
+      const metadataFieldCount = [hasPurpose, hasKeyTopics, hasDataCategories, hasStakeholders, hasMentionedSystems].filter(Boolean).length;
+      
+      return hasDocType && metadataFieldCount >= 3;
+    } catch {
+      return false;
+    }
+  };
+
   const looksLikeCode = (txt: string) => {
     const s = String(txt || '');
     if (!s) return false;
@@ -465,12 +507,16 @@ return (
               const text = String(m.content || m.message || m.text || '');
               const card = (m as any).card as ExternalCard | undefined;
               const shouldHideAsCode = (isGenJobPrompt(text) || isGenJobResponse(text) || (!isUser && looksLikeCode(text)));
+              const isMetadata = (isMetadataPrompt(text) || isMetadataResponse(text));
               const job = shouldHideAsCode ? latestRelevantJob() : null;
               const jobStatus = job?.status;
               
               // Extract timestamp from message
               const timestamp = m.sentAt ?? m.createdAt ?? m.created_at ?? m.timestamp ?? m.date;
               const timeAgo = formatTimeAgo(timestamp);
+              
+              // Hide metadata extraction prompts and responses completely
+              if (isMetadata) return null;
               
               // For generation prompts we inject our own sent card; skip rendering the raw prompt replacement
               if (shouldHideAsCode && isUser) return null;

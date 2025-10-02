@@ -6,7 +6,7 @@ import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbP
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, DialogDescription, DialogClose } from "../components/ui/dialog";
 import { Icon } from "../components/icons";
-import { Maximize2, Minimize2, Search, ExternalLink, Download, FileText, FileSpreadsheet, FileCode, FileQuestion, FileType } from "lucide-react";
+import { Maximize2, Minimize2, Search, ExternalLink, Download, FileText, FileSpreadsheet, FileCode, FileQuestion, FileType, Info, Loader2 } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "../components/ui/tooltip";
 import { A, apiFetch, apiEventSource } from "../lib/api";
 import WorkspaceChat from "../components/WorkspaceChat";
@@ -17,6 +17,8 @@ import { Textarea } from "../components/ui/textarea";
 import { Badge } from "../components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
 import JobsPanel from "../components/JobsPanel";
+import { MetadataModal, type DocumentMetadata } from "../components/MetadataModal";
+import { useMetadata } from "../contexts/MetadataContext";
 
 type Customer = { id: number; name: string; createdAt: string };
 type UploadItem = { name: string; path: string; size: number; modifiedAt: string };
@@ -61,6 +63,10 @@ export function CustomersPage() {
   const [genError, setGenError] = React.useState<string | null>(null);
   // External chat cards to display generation metadata in chat
   const [chatCards, setChatCards] = React.useState<Array<{ id: string; template?: string; jobId?: string; jobStatus?: 'running' | 'done' | 'error' | 'cancelled'; filename?: string; aiContext?: string; timestamp?: number; side?: 'user' | 'assistant' }>>([]);
+
+  // Metadata modal state
+  const [metadataModal, setMetadataModal] = React.useState<DocumentMetadata | null>(null);
+  const { metadataProcessing, startTracking, setRefreshCallback } = useMetadata();
 
   // No localStorage persistence; cards are saved to SQL via backend
   const [panelMode, setPanelMode] = React.useState<'split' | 'chat' | 'docs'>('split');
@@ -131,6 +137,26 @@ export function CustomersPage() {
     }
     return { Icon: FileQuestion, wrapper: 'bg-muted text-muted-foreground', label: 'Document' };
   }
+
+  // Set up metadata refresh callback
+  React.useEffect(() => {
+    setRefreshCallback(async (customerId: number) => {
+      if (customerId === selectedId) {
+        console.log('[METADATA] Refresh callback triggered, reloading uploads list');
+        try {
+          const r = await apiFetch(`/api/uploads/${customerId}`);
+          if (r.ok) {
+            const data = await r.json();
+            setUploads(data);
+            console.log('[METADATA] Uploads list refreshed with new metadata');
+          }
+        } catch (err) {
+          console.error('[METADATA] Failed to refresh uploads:', err);
+        }
+      }
+    });
+    return () => setRefreshCallback(null);
+  }, [selectedId, setRefreshCallback]);
 
   React.useEffect(() => {
     let ignore = false;
@@ -505,6 +531,12 @@ export function CustomersPage() {
       const r = await apiFetch(`/api/uploads/${selectedId}`, { method: "POST", body: fd });
       const json = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(String(r.status));
+      
+      // Start tracking metadata extraction for this file
+      const uploadedFilename = (json as any)?.file?.name || file.name;
+      console.log('[UPLOAD] Starting metadata tracking for:', uploadedFilename);
+      startTracking(selectedId, uploadedFilename);
+      
       // refresh list
       const r2 = await apiFetch(`/api/uploads/${selectedId}`);
       const d2: UploadItem[] = await r2.json();
@@ -1055,6 +1087,39 @@ export function CustomersPage() {
                                     </div>
                                   </div>
                                   <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+                                    {/* Metadata Button */}
+                                    <Tooltip>
+                                      <TooltipTrigger>
+                                        <Button 
+                                          size="icon" 
+                                          variant="ghost" 
+                                          className="h-9 w-9" 
+                                          aria-label={`View metadata for ${u.name}`}
+                                          disabled={metadataProcessing.has(u.name)}
+                                          onClick={async () => {
+                                            if (!selectedId) return;
+                                            try {
+                                              const r = await apiFetch(`/api/uploads/${selectedId}/metadata?name=${encodeURIComponent(u.name)}`);
+                                              if (!r.ok) throw new Error('Failed to load metadata');
+                                              const data = await r.json();
+                                              setMetadataModal(data.metadata || null);
+                                            } catch (err) {
+                                              console.error('Failed to load metadata:', err);
+                                              toast.error('Failed to load metadata');
+                                            }
+                                          }}
+                                        >
+                                          {metadataProcessing.has(u.name) ? (
+                                            <Loader2 className="h-4 w-4 animate-spin" />
+                                          ) : (
+                                            <Info className="h-4 w-4" />
+                                          )}
+                                        </Button>
+                                      </TooltipTrigger>
+                                      <TooltipContent>
+                                        {metadataProcessing.has(u.name) ? 'Extracting metadata...' : 'View Metadata'}
+                                      </TooltipContent>
+                                    </Tooltip>
                                     <Tooltip>
                                       <TooltipTrigger>
                                         <Button size="icon" variant="ghost" className="h-9 w-9" aria-label={`Download ${u.name}`} onClick={() => { const a = document.createElement('a'); a.href = `/api/uploads/${selectedId}/file?name=${encodeURIComponent(u.name)}`; a.download = u.name; document.body.appendChild(a); a.click(); a.remove(); }}>
@@ -1294,6 +1359,35 @@ export function CustomersPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+      
+      {/* Document Metadata Modal */}
+      <MetadataModal 
+        metadata={metadataModal} 
+        open={!!metadataModal} 
+        onOpenChange={(open) => !open && setMetadataModal(null)}
+        onRetry={async (filename: string) => {
+          if (!selectedId) return;
+          try {
+            const r = await apiFetch(`/api/uploads/${selectedId}/metadata-extract`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ filename })
+            });
+            if (!r.ok) throw new Error('Failed to start metadata extraction');
+            const data = await r.json();
+            toast.success(data.message || 'Metadata extraction started');
+            
+            // Start tracking the re-extraction
+            startTracking(selectedId, filename);
+            
+            // Close the modal
+            setMetadataModal(null);
+          } catch (err) {
+            console.error('Failed to retry metadata extraction:', err);
+            toast.error('Failed to start metadata extraction');
+          }
+        }}
+      />
     </div>
   );
 }

@@ -93,18 +93,12 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="w-[95vw] sm:max-w-4xl h-[85vh] max-h-[800px] grid-rows-[auto_auto_1fr_auto] p-6 gap-4 overflow-hidden">
         <DialogHeader>
-<<<<<<< HEAD
           <DialogTitle className="flex items-center gap-2">
             {getDocumentIcon(metadata.documentType)}
             Document Metadata
           </DialogTitle>
           <DialogDescription className="flex items-center justify-between gap-3">
             <span className="truncate">{metadata.filename}</span>
-=======
-          <DialogTitle>Document Metadata</DialogTitle>
-          <DialogDescription className="flex items-start justify-between gap-3 flex-wrap">
-            <span className="break-words min-w-0 flex-1">{metadata.filename}</span>
->>>>>>> cc22d7db0713ae4b6eb3d821794f8357beb628d2
             <div className="flex items-center gap-2 shrink-0">
               {metadata.documentType && (
                 <Badge variant="secondary">{metadata.documentType}</Badge>
@@ -128,16 +122,11 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
                   {/* Purpose */}
                   {metadata.purpose && (
                     <div className="space-y-2">
-<<<<<<< HEAD
                       <label className="text-sm font-medium flex items-center gap-2">
                         <Target className="h-4 w-4" />
                         Purpose
                       </label>
-                      <div className="rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground leading-relaxed">
-=======
-                      <label className="text-sm font-medium">Purpose</label>
                       <div className="rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground leading-relaxed break-words whitespace-pre-wrap">
->>>>>>> cc22d7db0713ae4b6eb3d821794f8357beb628d2
                         {metadata.purpose}
                       </div>
                     </div>
@@ -147,7 +136,7 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
                   {metadata.description && (
                     <div className="space-y-2">
                       <label className="text-sm font-medium">Description</label>
-                      <div className="rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground leading-relaxed">
+                      <div className="rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground leading-relaxed break-words whitespace-pre-wrap">
                         {metadata.description}
                       </div>
                     </div>

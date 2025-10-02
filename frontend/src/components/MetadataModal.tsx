@@ -50,11 +50,11 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[95vw] sm:max-w-4xl h-[85vh] max-h-[800px] grid-rows-[auto_auto_1fr_auto] p-6 gap-4">
+      <DialogContent className="w-[95vw] sm:max-w-4xl h-[85vh] max-h-[800px] grid-rows-[auto_auto_1fr_auto] p-6 gap-4 overflow-hidden">
         <DialogHeader>
           <DialogTitle>Document Metadata</DialogTitle>
-          <DialogDescription className="flex items-center justify-between gap-3">
-            <span className="truncate">{metadata.filename}</span>
+          <DialogDescription className="flex items-start justify-between gap-3 flex-wrap">
+            <span className="break-words min-w-0 flex-1">{metadata.filename}</span>
             <div className="flex items-center gap-2 shrink-0">
               {metadata.documentType && (
                 <Badge variant="secondary">{metadata.documentType}</Badge>
@@ -79,7 +79,7 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
                   {metadata.purpose && (
                     <div className="space-y-2">
                       <label className="text-sm font-medium">Purpose</label>
-                      <div className="rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground leading-relaxed">
+                      <div className="rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground leading-relaxed break-words whitespace-pre-wrap">
                         {metadata.purpose}
                       </div>
                     </div>
@@ -87,14 +87,14 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
 
                   {/* Primary Entities & Data Structure */}
                   {(metadata.extraFields?.primaryEntities || metadata.extraFields?.dataStructure) && (
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       {metadata.extraFields?.primaryEntities && Array.isArray(metadata.extraFields.primaryEntities) && 
                       metadata.extraFields.primaryEntities.length > 0 && (
-                        <div className="space-y-2">
+                        <div className="space-y-2 min-w-0">
                           <label className="text-sm font-medium">Primary Entities</label>
                           <div className="flex flex-wrap gap-2">
                             {metadata.extraFields.primaryEntities.map((entity: string, idx: number) => (
-                              <Badge key={idx} variant="default" className="text-xs">
+                              <Badge key={idx} variant="default" className="text-xs break-words">
                                 {entity}
                               </Badge>
                             ))}
@@ -102,9 +102,9 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
                         </div>
                       )}
                       {metadata.extraFields?.dataStructure && (
-                        <div className="space-y-2">
+                        <div className="space-y-2 min-w-0">
                           <label className="text-sm font-medium">Data Structure</label>
-                          <Badge variant="secondary" className="text-xs">{metadata.extraFields.dataStructure}</Badge>
+                          <Badge variant="secondary" className="text-xs break-words">{metadata.extraFields.dataStructure}</Badge>
                         </div>
                       )}
                     </div>
@@ -116,7 +116,7 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
                       <label className="text-sm font-medium">Key Topics</label>
                       <div className="flex flex-wrap gap-2">
                         {metadata.keyTopics.map((topic, idx) => (
-                          <Badge key={idx} variant="default" className="text-xs">
+                          <Badge key={idx} variant="default" className="text-xs break-words">
                             {topic}
                           </Badge>
                         ))}

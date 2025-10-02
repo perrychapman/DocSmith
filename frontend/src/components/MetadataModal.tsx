@@ -50,7 +50,7 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-4xl max-h-[65vh] overflow-hidden">
+      <DialogContent className="w-[95vw] sm:max-w-4xl h-[85vh] max-h-[800px] grid-rows-[auto_auto_1fr_auto] p-6 gap-4">
         <DialogHeader>
           <DialogTitle>Document Metadata</DialogTitle>
           <DialogDescription className="flex items-center justify-between gap-3">
@@ -63,7 +63,7 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
           </DialogDescription>
         </DialogHeader>
         
-        <Tabs defaultValue="overview" className="w-full">
+        <Tabs defaultValue="overview" className="contents">
           <TabsList className="w-full justify-start">
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="content">Content</TabsTrigger>
@@ -71,8 +71,7 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
             <TabsTrigger value="technical">Technical</TabsTrigger>
           </TabsList>
           
-          <div className="mt-4">
-            <ScrollArea className="h-[48vh]">
+          <ScrollArea className="min-h-0">
               <div className="pr-4">
                 {/* OVERVIEW TAB */}
                 <TabsContent value="overview" className="space-y-4 mt-0 text-left">
@@ -395,7 +394,7 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
                     
                     <div className="space-y-3">{metadata.extraFields.schemas.map((schema: any, schemaIdx: number) => {
                         const schemaKey = `${metadata.filename}-${schemaIdx}`;
-                        const isExpanded = expandedSchemas[schemaKey] ?? (schemaIdx === 0); // First sheet expanded by default
+                        const isExpanded = expandedSchemas[schemaKey] ?? false; // All collapsed by default
                         const columnCount = schema.columns?.length || 0;
                         
                         const toggleExpanded = () => {
@@ -642,7 +641,6 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
                 </TabsContent>
               </div>
             </ScrollArea>
-          </div>
         </Tabs>
         
         <DialogFooter>

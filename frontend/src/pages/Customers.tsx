@@ -688,60 +688,61 @@ export function CustomersPage() {
         </BreadcrumbList>
       </Breadcrumb>
 
-      <div className="flex items-center justify-between">
-        <div className="space-y-1">
-          <div className="flex items-center gap-3">
-            <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
-              <Icon.Users className="h-5 w-5" />
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-4">
+        <div className="space-y-1 flex-1 min-w-0">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <div className="flex h-8 w-8 sm:h-10 sm:w-10 items-center justify-center rounded-lg bg-primary/10 text-primary flex-shrink-0">
+              <Icon.Users className="h-4 w-4 sm:h-5 sm:w-5" />
             </div>
-            <div>
-              <h1 className="text-2xl font-bold tracking-tight">Customers</h1>
-              <p className="text-muted-foreground">Manage your customers and their documents</p>
+            <div className="min-w-0">
+              <h1 className="text-xl sm:text-2xl font-bold tracking-tight truncate">Customers</h1>
+              <p className="text-xs sm:text-sm text-muted-foreground truncate">Manage your customers and their documents</p>
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="secondary" onClick={() => { (async () => { setLoadingCustomers(true); try { const r = await apiFetch(`/api/customers`); const data: Customer[] = await r.json(); setCustomers(data); } catch { } finally { setLoadingCustomers(false); } })(); }}><Icon.Refresh className="h-4 w-4 mr-2" />Refresh</Button>
+        <div className="flex items-center gap-2 w-full sm:w-auto">
+          <Button variant="secondary" size="sm" className="flex-1 sm:flex-initial text-xs sm:text-sm" onClick={() => { (async () => { setLoadingCustomers(true); try { const r = await apiFetch(`/api/customers`); const data: Customer[] = await r.json(); setCustomers(data); } catch { } finally { setLoadingCustomers(false); } })(); }}><Icon.Refresh className="h-3 w-3 sm:h-4 sm:w-4 mr-2" />Refresh</Button>
         </div>
       </div>
 
       {(!loadingCustomers && customers.length === 0) ? (
-        <Card className="p-10 flex flex-col items-center justify-center text-center space-y-3">
-          <Icon.Folder className="h-10 w-10 text-muted-foreground" />
-          <div className="text-lg font-semibold">Add your first customer</div>
-          <div className="text-sm text-muted-foreground">Create a customer to start chatting and uploading documents.</div>
-          <div className="flex items-center gap-2 w-full max-w-md">
-            <Input placeholder="Customer name" value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') add(); }} />
-            <Button onClick={add}><Icon.Plus className="h-4 w-4 mr-2" />Add</Button>
+        <Card className="p-6 sm:p-10 flex flex-col items-center justify-center text-center space-y-3">
+          <Icon.Folder className="h-8 w-8 sm:h-10 sm:w-10 text-muted-foreground" />
+          <div className="text-base sm:text-lg font-semibold">Add your first customer</div>
+          <div className="text-xs sm:text-sm text-muted-foreground">Create a customer to start chatting and uploading documents.</div>
+          <div className="flex flex-col sm:flex-row items-center gap-2 w-full max-w-md">
+            <Input placeholder="Customer name" className="text-sm" value={name} onChange={(e) => setName(e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') add(); }} />
+            <Button onClick={add} size="sm" className="w-full sm:w-auto text-sm"><Icon.Plus className="h-4 w-4 mr-2" />Add</Button>
           </div>
         </Card>
       ) : (
-        <div className="grid grid-cols-12 gap-2 min-h-0">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-3 sm:gap-4 md:gap-2 min-h-0">
           {/* Left: Customers list full-height */}
-          <div className="col-span-12 md:col-span-4">
+          <div className="lg:col-span-4 xl:col-span-3">
             <div className="sticky top-0">
-              <Card className="h-[calc(100vh-220px)] flex flex-col border-0 shadow-lg overflow-hidden">
-                <div className="p-4 border-b border-border/40 bg-muted/20">
+              <Card className="h-[400px] sm:h-[500px] lg:h-[calc(100vh-220px)] flex flex-col border-0 shadow-lg overflow-hidden">
+                <div className="p-3 sm:p-4 border-b border-border/40 bg-muted/20">
                   <div className="flex items-center justify-between">
-                    <span className="text-sm font-medium text-foreground">Customers</span>
-                    <Badge variant="secondary" className="text-xs font-medium px-3 py-1 bg-primary/10 text-primary border-primary/20 shrink-0">
+                    <span className="text-xs sm:text-sm font-medium text-foreground">Customers</span>
+                    <Badge variant="secondary" className="text-xs font-medium px-2 sm:px-3 py-0.5 sm:py-1 bg-primary/10 text-primary border-primary/20 shrink-0">
                       {customers.length}
                     </Badge>
                   </div>
                 </div>
-                <div className="p-4 overflow-y-auto flex-1">
+                <div className="p-3 sm:p-4 overflow-y-auto flex-1">
                   {/* Add form in panel */}
                   {customers.length > 0 && (
-                    <div className="flex items-center gap-2 mb-3">
+                    <div className="flex flex-col sm:flex-row items-center gap-2 mb-3">
                       <Input
                         placeholder="Customer name"
+                        className="text-sm"
                         value={name}
                         onChange={(e) => setName(e.target.value)}
                         onKeyDown={(e) => {
                           if (e.key === "Enter") add();
                         }}
                       />
-                      <Button onClick={add}>
+                      <Button onClick={add} size="sm" className="w-full sm:w-auto text-sm">
                         <Icon.Plus className="h-4 w-4 mr-2" />
                         Add
                       </Button>
@@ -749,16 +750,16 @@ export function CustomersPage() {
                   )}
 
                   {loadingCustomers ? (
-                    <div className="text-muted-foreground text-sm">Loading.</div>
+                    <div className="text-muted-foreground text-xs sm:text-sm">Loading...</div>
                   ) : customers.length ? (
-                    <div className="space-y-2">
+                    <div className="space-y-1.5 sm:space-y-2">
                       {customers.map((c) => (
                         <div
                           key={c.id}
                           role="button"
                           tabIndex={0}
                           className={
-                            "group relative rounded-lg border p-3 transition-all duration-200 cursor-pointer hover:shadow-md " +
+                            "group relative rounded-lg border p-2 sm:p-3 transition-all duration-200 cursor-pointer hover:shadow-md " +
                             (selectedId === c.id 
                               ? "bg-primary/10 border-primary/50 shadow-sm" 
                               : "hover:bg-accent/50 hover:border-accent")
@@ -771,17 +772,17 @@ export function CustomersPage() {
                         >
                           {/* Selection indicator */}
                           {selectedId === c.id && (
-                            <div className="absolute left-0 top-1/2 -translate-y-1/2 w-1 h-8 bg-primary rounded-r" />
+                            <div className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 sm:w-1 h-6 sm:h-8 bg-primary rounded-r" />
                           )}
                           
                           {/* Left: name + counts */}
                           <div className="flex items-center justify-between">
                             <div className="min-w-0 flex-1">
-                              <div className="font-medium truncate">{c.name}</div>
+                              <div className="text-sm sm:text-base font-medium truncate">{c.name}</div>
                               {counts[c.id]?.docs == null && counts[c.id]?.chats == null ? (
-                                <div className="flex items-center gap-2 mt-0.5">
-                                  <div className="h-2 w-16 rounded bg-muted animate-pulse" />
-                                  <div className="h-2 w-16 rounded bg-muted animate-pulse" />
+                                <div className="flex items-center gap-1.5 sm:gap-2 mt-0.5">
+                                  <div className="h-2 w-12 sm:w-16 rounded bg-muted animate-pulse" />
+                                  <div className="h-2 w-12 sm:w-16 rounded bg-muted animate-pulse" />
                                 </div>
                               ) : (
                                 <div className="text-xs text-muted-foreground">
@@ -811,9 +812,9 @@ export function CustomersPage() {
                                     }}
                                     aria-label={`Delete ${c.name}`}
                                     title={`Delete ${c.name}`}
-                                    className="h-9 w-9"
+                                    className="h-7 w-7 sm:h-9 sm:w-9"
                                   >
-                                    {deleting === c.name ? "." : <Icon.Trash className="h-4 w-4" />}
+                                    {deleting === c.name ? "." : <Icon.Trash className="h-3 w-3 sm:h-4 sm:w-4" />}
                                   </Button>
                                 </TooltipTrigger>
                               </Tooltip>
@@ -823,7 +824,7 @@ export function CustomersPage() {
                       ))}
                     </div>
                   ) : (
-                    <div className="text-muted-foreground text-sm">No customers yet.</div>
+                    <div className="text-muted-foreground text-xs sm:text-sm">No customers yet.</div>
                   )}
                 </div>
               </Card>
@@ -835,7 +836,7 @@ export function CustomersPage() {
 
           {/* Right: Chat and Documents with smooth expand/collapse */}
           <div
-            className={`col-span-12 md:col-span-8 ${rowsClass} gap-2 h-[calc(100vh-220px)] min-h-0`}
+            className={`lg:col-span-8 xl:col-span-9 ${rowsClass} gap-2 sm:gap-3 h-[500px] sm:h-[600px] lg:h-[calc(100vh-220px)] min-h-0`}
             style={{
               transition: 'grid-template-rows 300ms ease',
               gridTemplateRows: panelMode === 'split'

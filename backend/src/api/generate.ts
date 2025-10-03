@@ -1,4 +1,3 @@
-// backend/src/api/generate.ts
 import { Router } from "express"
 import fs from "fs"
 import path from "path"
@@ -10,6 +9,7 @@ import { libraryRoot, safeFileName, displayNameFromSlug } from "../services/fs"
 import { anythingllmRequest } from "../services/anythingllm"
 import { createJob, createJobWithId, appendLog as jobLog, markJobDone, markJobError, setJobMeta, listJobs, getJob, stepStart as jobStepStart, stepOk as jobStepOk, cancelJob, isCancelled, initJobs, deleteJob, clearJobs } from "../services/genJobs"
 import { analyzeDocumentIntelligently } from "../services/documentIntelligence"
+import { buildMetadataEnhancedContext } from "../services/metadataMatching"
 import child_process from 'child_process'
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const Handlebars = require('handlebars')
@@ -116,7 +116,43 @@ router.post("/", async (req, res) => {
                 stepStartRec('analyzeTemplate')
                 logAndPush('Analyzing template structure and workspace data...')
                 let documentAnalysis = ''
+                let metadataContext = ''
                 try {
+                  // Build metadata-enhanced context
+                  logAndPush('[METADATA] Analyzing template requirements and available documents')
+                  const enhancedCtx = await buildMetadataEnhancedContext(
+                    String(slug),
+                    row.id,
+                    wsForGen
+                  )
+                  
+                  if (enhancedCtx.templateMetadata) {
+                    const meta = enhancedCtx.templateMetadata
+                    if (meta.purpose) {
+                      logAndPush(`[METADATA] Template purpose: ${meta.purpose.substring(0, 100)}${meta.purpose.length > 100 ? '...' : ''}`)
+                    }
+                    if (meta.requiredDataTypes?.length) {
+                      logAndPush(`[METADATA] Required data types: ${meta.requiredDataTypes.join(', ')}`)
+                    }
+                    if (meta.expectedEntities?.length) {
+                      logAndPush(`[METADATA] Expected entities: ${meta.expectedEntities.join(', ')}`)
+                    }
+                  }
+                  
+                  if (enhancedCtx.relevantDocuments.length > 0) {
+                    logAndPush(`[METADATA] Found ${enhancedCtx.relevantDocuments.length} relevant workspace document(s)`)
+                    const top5 = enhancedCtx.relevantDocuments.slice(0, 5)
+                    top5.forEach((doc, idx) => {
+                      logAndPush(`[METADATA]   ${idx + 1}. ${doc.filename} (relevance: ${doc.relevanceScore}/10)`)
+                    })
+                  } else {
+                    logAndPush('[METADATA] No relevant documents found - using general workspace query')
+                  }
+                  
+                  logAndPush(`[METADATA] Context enhancement complete (${enhancedCtx.promptEnhancement.length + enhancedCtx.documentSummaries.length} chars)`)
+                  metadataContext = enhancedCtx.promptEnhancement + enhancedCtx.documentSummaries
+                  
+                  // Also do structural analysis if template file exists
                   if ((tpl as any).templatePath && fs.existsSync((tpl as any).templatePath)) {
                     documentAnalysis = await analyzeDocumentIntelligently(
                       (tpl as any).templatePath,
@@ -131,19 +167,130 @@ router.post("/", async (req, res) => {
                 }
                 stepOkRec('analyzeTemplate')
                 
+                // NEW: Fetch actual data from workspace before AI enhancement
+                stepStartRec('fetchWorkspaceData')
+                logAndPush('[DATA-FETCH] Querying workspace for actual data...')
+                let workspaceData = ''
+                let dataRowCount = 0
+                try {
+                  // Query workspace for structured data based on template requirements
+                  const dataQuery = ((tpl as any).kind === 'excel')
+                    ? `Return a complete JSON array of ALL data rows from the documents in this workspace. Include every single row - do not limit or sample. For inventory/product data, include fields like: name, quantity, price, category, SKU, location, etc. For other data types, include all available columns. Return ONLY the JSON array, no explanations.`
+                    : `List ALL items/rows from the documents in this workspace as a complete JSON array. Include every entry - do not limit to samples. Return ONLY the JSON array, no explanations.`
+                  
+                  logAndPush(`[DATA-FETCH] Sending data query to workspace...`)
+                  const dataResponse = await anythingllmRequest<any>(
+                    `/workspace/${encodeURIComponent(wsForGen)}/chat`,
+                    'POST',
+                    { message: dataQuery, mode: 'query' }
+                  )
+                  
+                  const dataText = String(dataResponse?.textResponse || dataResponse?.message || '')
+                  logAndPush(`[DATA-FETCH] Response received (${dataText.length} chars)`)
+                  
+                  // Try to extract JSON from response
+                  let jsonData: any[] = []
+                  try {
+                    // Try direct parse first
+                    jsonData = JSON.parse(dataText)
+                  } catch {
+                    // Try to extract JSON from markdown code blocks
+                    const jsonMatch = dataText.match(/```(?:json)?\s*([\s\S]*?)```/)
+                    if (jsonMatch && jsonMatch[1]) {
+                      try {
+                        jsonData = JSON.parse(jsonMatch[1].trim())
+                      } catch {
+                        logAndPush('[DATA-FETCH] Could not parse JSON from code block')
+                      }
+                    }
+                  }
+                  
+                  if (Array.isArray(jsonData) && jsonData.length > 0) {
+                    dataRowCount = jsonData.length
+                    logAndPush(`[DATA-FETCH] Successfully extracted ${dataRowCount} data rows`)
+                    
+                    // Show sample of what we got
+                    const firstRow = jsonData[0]
+                    const fieldNames = Object.keys(firstRow)
+                    logAndPush(`[DATA-FETCH] Fields detected: ${fieldNames.join(', ')}`)
+                    
+                    // Format as structured data for AI
+                    workspaceData = `\n\n=== ACTUAL WORKSPACE DATA (${dataRowCount} rows) ===\n`
+                    workspaceData += `Fields: ${fieldNames.join(', ')}\n\n`
+                    workspaceData += `Complete dataset (hardcode ALL ${dataRowCount} rows in the generator):\n`
+                    workspaceData += JSON.stringify(jsonData, null, 2)
+                    workspaceData += `\n\nIMPORTANT: This is the COMPLETE dataset with all ${dataRowCount} rows. Encode ALL of them in the generator code, not just a sample.\n`
+                  } else {
+                    logAndPush('[DATA-FETCH] No structured data array found in response')
+                    logAndPush(`[DATA-FETCH] Raw response: ${dataText.substring(0, 500)}...`)
+                    workspaceData = `\n\n=== WORKSPACE RESPONSE ===\n${dataText}\n\nNote: Could not parse as structured data. Use this information to query workspace appropriately.\n`
+                  }
+                  
+                  stepOkRec('fetchWorkspaceData')
+                } catch (fetchErr: any) {
+                  logAndPush(`[DATA-FETCH] Error fetching workspace data: ${fetchErr.message}`)
+                  logAndPush('[DATA-FETCH] Will proceed with metadata-only enhancement')
+                  stepOkRec('fetchWorkspaceData')
+                }
+                
                 const userAddendum = instructions && String(instructions).trim().length
                   ? `\n\nUSER ADDITIONAL INSTRUCTIONS (prioritize when choosing workspace data):\n${String(instructions).trim()}\n`
                   : ''
+                  
+                // Build enhanced prompt with actual workspace data
+                const dataGuidance = dataRowCount > 0
+                  ? `\n\nCRITICAL - YOU HAVE ${dataRowCount} ROWS OF ACTUAL DATA BELOW:\n- The complete dataset with ALL ${dataRowCount} rows is provided below in the ACTUAL WORKSPACE DATA section\n- You MUST hardcode ALL ${dataRowCount} rows into the generator code\n- DO NOT reduce to 3-5 samples - include the complete dataset\n- For ${dataRowCount}+ rows, use efficient data structures (ranges for Excel, loops for DOCX)\n`
+                  : `\n\nNOTE: No structured data was pre-fetched. The generator should use toolkit methods or return placeholder data.\n`
+                  
                 const aiPrompt = ((tpl as any).kind === 'excel')
-                  ? `You are a senior TypeScript engineer and spreadsheet specialist. Update the following DocSmith Excel generator function to incorporate customer-specific data inferred from THIS WORKSPACE and the provided user instructions. Keep the EXACT export signature. Compose the final output by returning { sheets } (sheet ops). Do not import external modules or do file I/O.\n\nSTRICT CONSTRAINTS:\n- PRESERVE EXISTING SHEET STRUCTURE AND FORMATTING from the CURRENT GENERATOR CODE: do not alter existing fonts, colors, fills, borders, number formats, alignment, merged ranges, column widths, or sheet order unless absolutely necessary.\n- You MAY append or insert new rows to accommodate variable-length data. Use insertRows with copyStyleFromRow when appropriate to preserve formatting. You MAY add new sheets when clearly necessary, but do not remove or reorder existing sheets.\n- Prefer preserving existing row/column styles; only specify formatting (numFmt, bold/italic/underline/strike, font color via hex, background fill, horizontal alignment, wrap) for new or dynamically added content.\n- If the template has a merged and centered header row, do not break its merge; write data starting below it unless the header text itself must be updated.\n- At runtime, toolkit.json/query/text are DISABLED. Encode workspace-informed content directly into the returned { sheets } or via the provided context parameter.\n- Use minimal LLM calls (within this single update).${documentAnalysis}${userAddendum}\n\nReturn type reminder:\nPromise<{ sheets: Array<{ name: string; insertRows?: Array<{ at: number; count: number; copyStyleFromRow?: number }>; cells?: Array<{ ref: string; v: string|number|boolean; numFmt?: string; bold?: boolean; italic?: boolean; underline?: boolean; strike?: boolean; color?: string; bg?: string; align?: 'left'|'center'|'right'; wrap?: boolean }>; ranges?: Array<{ start: string; values: any[][]; numFmt?: string }> }> }>;\n\nOnly output TypeScript code with the updated generate implementation.\n\nCURRENT GENERATOR CODE:\n\n\`\`\`ts\n${tsCode}\n\`\`\``
-                  : `You are a senior TypeScript engineer. Update the following DocSmith generator function to incorporate customer-specific data from THIS WORKSPACE. Keep the EXACT export signature. Compose the final output as raw WordprocessingML (WML) via return { wml }. Do not import external modules or do file I/O. Maintain formatting with runs (color/size/bold/italic/underline/strike/font) and paragraph props (align/spacing/indents).\n\nSTRICT CONSTRAINTS:\n- PRESERVE ALL EXISTING WML STRUCTURE AND STYLING from the CURRENT GENERATOR CODE: do not alter fonts, colors, sizes, spacing, numbering, table properties, headers/footers, or section settings.\n- ONLY substitute text content (and list/table cell values) with workspace-derived strings.\n- DO NOT add, remove, or reorder sections/paragraphs/tables/runs unless absolutely necessary. If no data is found, keep the section and leave values empty rather than inventing content.\n- No boilerplate or extra headings; do not add content beyond what the template structure implies.\n- IMPORTANT: At runtime, toolkit.json/query/text are DISABLED. Do not rely on them. Encode all workspace-informed content directly in the returned WML or via the provided context parameter.\n- Use minimal LLM calls (within this single update).${documentAnalysis}${userAddendum}\n\nOnly output TypeScript code with the updated generate implementation.\n\nCURRENT GENERATOR CODE:\n\n\`\`\`ts\n${tsCode}\n\`\`\``
+                  ? `You are a senior TypeScript engineer and spreadsheet specialist. Update the following DocSmith Excel generator function to incorporate the ACTUAL WORKSPACE DATA provided below. Keep the EXACT export signature. Compose the final output by returning { sheets } (sheet ops). Do not import external modules or do file I/O.${dataGuidance}\nSTRICT CONSTRAINTS:
+- PRESERVE EXISTING SHEET STRUCTURE AND FORMATTING from the CURRENT GENERATOR CODE: do not alter existing fonts, colors, fills, borders, number formats, alignment, merged ranges, column widths, or sheet order unless absolutely necessary.
+- You MAY append or insert new rows to accommodate variable-length data. Use insertRows with copyStyleFromRow when appropriate to preserve formatting. You MAY add new sheets when clearly necessary, but do not remove or reorder existing sheets.
+- Prefer preserving existing row/column styles; only specify formatting (numFmt, bold/italic/underline/strike, font color via hex, background fill, horizontal alignment, wrap) for new or dynamically added content.
+- If the template has a merged and centered header row, do not break its merge; write data starting below it unless the header text itself must be updated.
+- At runtime, toolkit.json/query/text are DISABLED. Encode all workspace data directly into the returned { sheets }.
+- For ${dataRowCount} rows, use the 'ranges' array for efficiency instead of individual cells.${documentAnalysis}${metadataContext}${workspaceData}${userAddendum}
+
+Return type reminder:
+Promise<{ sheets: Array<{ name: string; insertRows?: Array<{ at: number; count: number; copyStyleFromRow?: number }>; cells?: Array<{ ref: string; v: string|number|boolean; numFmt?: string; bold?: boolean; italic?: boolean; underline?: boolean; strike?: boolean; color?: string; bg?: string; align?: 'left'|'center'|'right'; wrap?: boolean }>; ranges?: Array<{ start: string; values: any[][]; numFmt?: string }> }> }>;
+
+Only output TypeScript code with the updated generate implementation.
+
+CURRENT GENERATOR CODE:
+
+\`\`\`ts
+${tsCode}
+\`\`\``
+                  : `You are a senior TypeScript engineer. Update the following DocSmith generator function to incorporate the ACTUAL WORKSPACE DATA provided below. Keep the EXACT export signature. Compose the final output as raw WordprocessingML (WML) via return { wml }. Do not import external modules or do file I/O. Maintain formatting with runs (color/size/bold/italic/underline/strike/font) and paragraph props (align/spacing/indents).${dataGuidance}
+STRICT CONSTRAINTS:
+- PRESERVE ALL EXISTING WML STRUCTURE AND STYLING from the CURRENT GENERATOR CODE: do not alter fonts, colors, sizes, spacing, numbering, table properties, headers/footers, or section settings.
+- ONLY substitute text content (and list/table cell values) with workspace-derived strings.
+- DO NOT add, remove, or reorder sections/paragraphs/tables/runs unless absolutely necessary. If no data is found, keep the section and leave values empty rather than inventing content.
+- No boilerplate or extra headings; do not add content beyond what the template structure implies.
+- IMPORTANT: At runtime, toolkit.json/query/text are DISABLED. Encode all workspace data directly in the returned WML.
+- For ${dataRowCount} table rows, build them all with proper WML structure.${documentAnalysis}${metadataContext}${workspaceData}${userAddendum}
+
+Only output TypeScript code with the updated generate implementation.
+
+CURRENT GENERATOR CODE:
+
+\`\`\`ts
+${tsCode}
+\`\`\``
                 stepStartRec('aiUpdate')
+                logAndPush(`Sending ${((tpl as any).kind === 'excel') ? 'Excel' : 'DOCX'} generation request to workspace: ${wsForGen}`)
+                logAndPush(`Prompt size: ${aiPrompt.length} chars (${documentAnalysis.length} analysis, ${metadataContext.length} metadata)`)
                 const r = await anythingllmRequest<any>(`/workspace/${encodeURIComponent(wsForGen)}/chat`, 'POST', { message: aiPrompt, mode: 'query' })
                 const t = String(r?.textResponse || r?.message || r || '')
+                logAndPush(`AI response received (${t.length} chars)`)
                 const m = t.match(/```[a-z]*\s*([\s\S]*?)```/i)
                 const codeOut = (m && m[1]) ? m[1] : t
+                if (m && m[1]) {
+                  logAndPush('Extracted code from markdown fence blocks')
+                }
                 if (!codeOut || !/export\s+async\s+function\s+generate\s*\(/.test(codeOut)) throw new Error('AI did not return a valid generate function')
                 tsCode = codeOut.trim()
+                logAndPush(`AI-enhanced generator ready (${tsCode.length} chars)`)
                 logs.push('ai-modified:ok')
                 logAndPush('ai-modified:ok')
                 stepOkRec('aiUpdate')

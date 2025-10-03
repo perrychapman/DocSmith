@@ -9,6 +9,7 @@ import { libraryRoot } from "../services/fs"
 import { readSettings, writeSettings } from "../services/settings"
 import { analyzeDocumentIntelligently } from "../services/documentIntelligence"
 import { analyzeTemplateMetadata, saveTemplateMetadata, loadTemplateMetadata, loadAllTemplateMetadata, deleteTemplateMetadata } from "../services/templateMetadata"
+import { buildMetadataEnhancedContext } from "../services/metadataMatching"
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const Handlebars = require('handlebars')
 // Placeholder-based DOCX engines removed
@@ -610,7 +611,18 @@ router.post("/:slug/compile", async (req, res) => {
       }
     } catch {}
 
-    const prompt = `You are a senior TypeScript engineer and document automation specialist. Recreate this template faithfully while preserving layout, headers/footers, spacing, lists, tables, images, hyperlinks, and emphasis.\n\nOutput: ONLY TypeScript code that returns raw WordprocessingML (WML).\n\nExport exactly:\nexport async function generate(\n  toolkit: { json: (prompt: string) => Promise<any>; text: (prompt: string) => Promise<string>; query?: (prompt: string) => Promise<any>; getSkeleton?: (kind?: 'html'|'text') => Promise<string> },\n  builder: any,\n  context?: Record<string, any>\n): Promise<{ wml: string }>;\n\nHard requirements:\n- Return ONLY { wml } containing the inner <w:body> children (<w:p>, <w:tbl>, ...). Do NOT include <w:sectPr> or any package-level parts.\n- Mirror the TEMPLATE SKELETON (prefer HTML skeleton) for headings/order/grouping.\n- Apply formatting in WML: run properties (color, size, bold/italic/underline/strike, font) and paragraph properties (alignment, spacing, indents), table widths/styles, list/numbering with <w:numPr> matching template numbering.\n- Use STYLES, THEME, and NUMBERING XML excerpts to choose brand colors, fonts, and list styles. Convert theme colors to hex where needed.\n- Do NOT output HTML, Markdown, or a DOCX buffer. No external imports or file I/O.\n- Do NOT add any sections, paragraphs, tables, or content that are not present in the provided skeleton; if unsure, omit rather than invent.\n- Preserve styling exactly; do not change fonts, colors, sizes, spacing, numbering, or table properties beyond what the skeleton and excerpts imply.${documentAnalysis}\n\nTEMPLATE ARTIFACTS (HTML skeleton + XML excerpts):\n${skeleton}`
+    // Build metadata-enhanced context
+    let metadataContext = ''
+    try {
+      // Pass 0 as customerId to signal workspace-only mode
+      const enhancedCtx = await buildMetadataEnhancedContext(slug, 0, wsSlug)
+      metadataContext = enhancedCtx.promptEnhancement + enhancedCtx.documentSummaries
+    } catch (err: any) {
+      // Metadata context is optional, don't fail compilation if unavailable
+      console.log(`[TEMPLATE-COMPILE] Metadata context unavailable: ${err.message}`)
+    }
+
+    const prompt = `You are a senior TypeScript engineer and document automation specialist. Recreate this template faithfully while preserving layout, headers/footers, spacing, lists, tables, images, hyperlinks, and emphasis.\n\nOutput: ONLY TypeScript code that returns raw WordprocessingML (WML).\n\nExport exactly:\nexport async function generate(\n  toolkit: { json: (prompt: string) => Promise<any>; text: (prompt: string) => Promise<string>; query?: (prompt: string) => Promise<any>; getSkeleton?: (kind?: 'html'|'text') => Promise<string> },\n  builder: any,\n  context?: Record<string, any>\n): Promise<{ wml: string }>;\n\nHard requirements:\n- Return ONLY { wml } containing the inner <w:body> children (<w:p>, <w:tbl>, ...). Do NOT include <w:sectPr> or any package-level parts.\n- Mirror the TEMPLATE SKELETON (prefer HTML skeleton) for headings/order/grouping.\n- Apply formatting in WML: run properties (color, size, bold/italic/underline/strike, font) and paragraph properties (alignment, spacing, indents), table widths/styles, list/numbering with <w:numPr> matching template numbering.\n- Use STYLES, THEME, and NUMBERING XML excerpts to choose brand colors, fonts, and list styles. Convert theme colors to hex where needed.\n- Do NOT output HTML, Markdown, or a DOCX buffer. No external imports or file I/O.\n- Do NOT add any sections, paragraphs, tables, or content that are not present in the provided skeleton; if unsure, omit rather than invent.\n- Preserve styling exactly; do not change fonts, colors, sizes, spacing, numbering, or table properties beyond what the skeleton and excerpts imply.${documentAnalysis}\n\n${metadataContext}\n\nTEMPLATE ARTIFACTS (HTML skeleton + XML excerpts):\n${skeleton}`
 
     const chat = await anythingllmRequest<any>(`/workspace/${encodeURIComponent(String(wsSlug))}/chat`, 'POST', { message: prompt, mode: 'query' })
     const text = String(chat?.textResponse || chat?.message || chat || '')
@@ -639,7 +651,7 @@ router.get("/:slug/compile/stream", async (req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' })
     const send = (obj: any) => { try { res.write(`data: ${JSON.stringify(obj)}\n\n`) } catch {} }
     const log = (m: string) => send({ type: 'log', message: m })
-    const steps = ['resolveTemplate','resolveWorkspace','readTemplate','extractSkeleton','buildPrompt','aiRequest','writeGenerator']
+    const steps = ['resolveTemplate','resolveWorkspace','readTemplate','extractSkeleton','buildMetadataContext','buildPrompt','aiRequest','writeGenerator']
     const totalSteps = steps.length
     let completed = 0
     const stepStart = (name: string) => send({ type: 'step', name, status: 'start', progress: Math.round((completed/totalSteps)*100) })
@@ -862,32 +874,88 @@ router.get("/:slug/compile/stream", async (req, res) => {
       }
     } catch { /* ignore; skeleton may be empty */ }
 
+    // Build metadata-enhanced context
+    stepStart('buildMetadataContext')
+    logPush('Building metadata-enhanced context...')
+    let metadataContext = ''
+    try {
+      // Note: Compilation doesn't have a specific customerId (it's template-only operation)
+      // Pass 0 as customerId to signal workspace-only mode in metadata matching
+      logPush('[METADATA] Analyzing template requirements and available documents')
+      const enhancedCtx = await buildMetadataEnhancedContext(slug, 0, wsSlug)
+      metadataContext = enhancedCtx.promptEnhancement + enhancedCtx.documentSummaries
+      
+      if (enhancedCtx.templateMetadata) {
+        const meta = enhancedCtx.templateMetadata
+        if (meta.requiredDataTypes?.length) {
+          logPush(`[METADATA] Template expects data types: ${meta.requiredDataTypes.join(', ')}`)
+        }
+        if (meta.expectedEntities?.length) {
+          logPush(`[METADATA] Expected entities: ${meta.expectedEntities.join(', ')}`)
+        }
+        if (meta.purpose) {
+          logPush(`[METADATA] Template purpose: ${meta.purpose.substring(0, 100)}${meta.purpose.length > 100 ? '...' : ''}`)
+        }
+      }
+      
+      if (enhancedCtx.relevantDocuments?.length) {
+        logPush(`[METADATA] Found ${enhancedCtx.relevantDocuments.length} relevant workspace document(s)`)
+        enhancedCtx.relevantDocuments.slice(0, 5).forEach((doc, idx) => {
+          const score = doc.relevanceScore ?? 0
+          logPush(`[METADATA]   ${idx + 1}. ${doc.filename} (relevance: ${score}/10)`)
+        })
+      } else {
+        logPush('[METADATA] No relevant documents found in workspace')
+      }
+      
+      logPush(`[METADATA] Context enhancement complete (${metadataContext.length} chars)`)
+      stepOk('buildMetadataContext')
+    } catch (err: any) {
+      logPush(`[METADATA] Context unavailable: ${err.message}`)
+      stepOk('buildMetadataContext') // Don't fail compilation if metadata unavailable
+    }
+
     // Build prompt
     stepStart('buildPrompt')
-      const prompt = isExcel
-        ? `You are a senior TypeScript engineer and spreadsheet automation specialist. Recreate this Excel template faithfully while preserving existing colors and formatting (fonts, fills, borders, number formats, alignment), sheet order, headers, merged ranges, column widths, and general layout.\n\nOutput: ONLY TypeScript code.\n\nExport exactly:\nexport async function generate(\n  toolkit: { json: (prompt: string) => Promise<any>; text: (prompt: string) => Promise<string>; query?: (prompt: string) => Promise<any>; getSkeleton?: (kind?: 'text') => Promise<string> },\n  builder: any,\n  context?: Record<string, any>\n): Promise<{ sheets: Array<{ name: string; insertRows?: Array<{ at: number; count: number; copyStyleFromRow?: number }>; cells?: Array<{ ref: string; v: string|number|boolean; numFmt?: string; bold?: boolean; italic?: boolean; underline?: boolean; strike?: boolean; color?: string; bg?: string; align?: 'left'|'center'|'right'; wrap?: boolean }>; ranges?: Array<{ start: string; values: any[][]; numFmt?: string }> }> }>;\n\nHard requirements:\n- Mirror the EXCEL TEMPLATE SKELETON for sheet names/order and structure. You MAY add new sheets when necessary to represent additional, clearly-related data, but do not remove or reorder existing sheets.\n- You MAY append or insert new rows when necessary to accommodate variable-length data. Prefer preserving existing row/column styles; use insertRows with copyStyleFromRow when appropriate.\n- If the template has a merged and centered header row, do not break its merge; write data starting below it unless the header text itself must be updated.\n- Populate values and, only when required, formatting (number formats, bold/italic/underline/strike, font color via hex, background fill, horizontal alignment, wrap).\n- Use A1 references in 'cells' and a 2D array for 'ranges' anchored at 'start'.\n- No imports or file I/O. Encode any workspace/context-derived knowledge directly in the returned structure.\n- Do not invent content unrelated to the skeleton/context; if unknown, leave blank.\n\nEXCEL TEMPLATE ARTIFACTS (includes merges, column widths, and alignment samples):\n${skeleton}`
-        : `You are a senior TypeScript engineer and document automation specialist. Recreate this template faithfully while preserving layout, headers/footers, spacing, lists, tables, images, hyperlinks, and emphasis.\n\nOutput: ONLY TypeScript code that returns raw WordprocessingML (WML).\n\nExport exactly:\nexport async function generate(\n  toolkit: { json: (prompt: string) => Promise<any>; text: (prompt: string) => Promise<string>; query?: (prompt: string) => Promise<any>; getSkeleton?: (kind?: 'html'|'text') => Promise<string> },\n  builder: any,\n  context?: Record<string, any>\n): Promise<{ wml: string }>;\n\nHard requirements:\n- Return ONLY { wml } containing the inner <w:body> children (<w:p>, <w:tbl>, ...). Do NOT include <w:sectPr> or any package-level parts.\n- Mirror the TEMPLATE SKELETON (prefer HTML skeleton) for headings/order/grouping.\n- Apply formatting in WML: run properties (color, size, bold/italic/underline/strike, font) and paragraph properties (alignment, spacing, indents), table widths/styles, list/numbering with <w:numPr> matching template numbering.\n- Use STYLES, THEME, and NUMBERING XML excerpts to choose brand colors, fonts, and list styles. Convert theme colors to hex where needed.\n- Do NOT output HTML, Markdown, or a DOCX buffer. No external imports or file I/O.\n- Do NOT add any sections, paragraphs, tables, or content that are not present in the provided skeleton; if unsure, omit rather than invent.\n- Preserve styling exactly; do not change fonts, colors, sizes, spacing, numbering, or table properties beyond what the skeleton and excerpts imply.\n- Use the DOCUMENT STRUCTURE ANALYSIS below to understand the content organization and make intelligent decisions about placeholder placement.${documentStructure}\n\nTEMPLATE ARTIFACTS (HTML skeleton + XML excerpts):\n${skeleton}`
+    logPush(`Building ${isExcel ? 'Excel' : 'DOCX'} compilation prompt...`)
+    const prompt = isExcel
+        ? `You are a senior TypeScript engineer and spreadsheet automation specialist. Recreate this Excel template faithfully while preserving existing colors and formatting (fonts, fills, borders, number formats, alignment), sheet order, headers, merged ranges, column widths, and general layout.\n\nOutput: ONLY TypeScript code.\n\nExport exactly:\nexport async function generate(\n  toolkit: { json: (prompt: string) => Promise<any>; text: (prompt: string) => Promise<string>; query?: (prompt: string) => Promise<any>; getSkeleton?: (kind?: 'text') => Promise<string> },\n  builder: any,\n  context?: Record<string, any>\n): Promise<{ sheets: Array<{ name: string; insertRows?: Array<{ at: number; count: number; copyStyleFromRow?: number }>; cells?: Array<{ ref: string; v: string|number|boolean; numFmt?: string; bold?: boolean; italic?: boolean; underline?: boolean; strike?: boolean; color?: string; bg?: string; align?: 'left'|'center'|'right'; wrap?: boolean }>; ranges?: Array<{ start: string; values: any[][]; numFmt?: string }> }> }>;\n\nHard requirements:\n- Mirror the EXCEL TEMPLATE SKELETON for sheet names/order and structure. You MAY add new sheets when necessary to represent additional, clearly-related data, but do not remove or reorder existing sheets.\n- You MAY append or insert new rows when necessary to accommodate variable-length data. Prefer preserving existing row/column styles; use insertRows with copyStyleFromRow when appropriate.\n- If the template has a merged and centered header row, do not break its merge; write data starting below it unless the header text itself must be updated.\n- Populate values and, only when required, formatting (number formats, bold/italic/underline/strike, font color via hex, background fill, horizontal alignment, wrap).\n- Use A1 references in 'cells' and a 2D array for 'ranges' anchored at 'start'.\n- No imports or file I/O. Encode any workspace/context-derived knowledge directly in the returned structure.\n- Do not invent content unrelated to the skeleton/context; if unknown, leave blank.\n\n${metadataContext}\n\nEXCEL TEMPLATE ARTIFACTS (includes merges, column widths, and alignment samples):\n${skeleton}`
+        : `You are a senior TypeScript engineer and document automation specialist. Recreate this template faithfully while preserving layout, headers/footers, spacing, lists, tables, images, hyperlinks, and emphasis.\n\nOutput: ONLY TypeScript code that returns raw WordprocessingML (WML).\n\nExport exactly:\nexport async function generate(\n  toolkit: { json: (prompt: string) => Promise<any>; text: (prompt: string) => Promise<string>; query?: (prompt: string) => Promise<any>; getSkeleton?: (kind?: 'html'|'text') => Promise<string> },\n  builder: any,\n  context?: Record<string, any>\n): Promise<{ wml: string }>;\n\nHard requirements:\n- Return ONLY { wml } containing the inner <w:body> children (<w:p>, <w:tbl>, ...). Do NOT include <w:sectPr> or any package-level parts.\n- Mirror the TEMPLATE SKELETON (prefer HTML skeleton) for headings/order/grouping.\n- Apply formatting in WML: run properties (color, size, bold/italic/underline/strike, font) and paragraph properties (alignment, spacing, indents), table widths/styles, list/numbering with <w:numPr> matching template numbering.\n- Use STYLES, THEME, and NUMBERING XML excerpts to choose brand colors, fonts, and list styles. Convert theme colors to hex where needed.\n- Do NOT output HTML, Markdown, or a DOCX buffer. No external imports or file I/O.\n- Do NOT add any sections, paragraphs, tables, or content that are not present in the provided skeleton; if unsure, omit rather than invent.\n- Preserve styling exactly; do not change fonts, colors, sizes, spacing, numbering, or table properties beyond what the skeleton and excerpts imply.\n- Use the DOCUMENT STRUCTURE ANALYSIS below to understand the content organization and make intelligent decisions about placeholder placement.${documentStructure}\n\n${metadataContext}\n\nTEMPLATE ARTIFACTS (HTML skeleton + XML excerpts):\n${skeleton}`
+    logPush(`Prompt built (${prompt.length} chars, ${skeleton.length} chars skeleton, ${metadataContext.length} chars metadata)`)
     stepOk('buildPrompt')
 
     // AI request
     stepStart('aiRequest')
+    logPush(`Sending compilation request to workspace: ${wsSlug}`)
     try {
       if (isCancelled(job.id)) { jobLog(job.id, 'cancelled'); send({ type: 'error', error: 'cancelled' }); return res.end() }
       const chat = await anythingllmRequest<any>(`/workspace/${encodeURIComponent(String(wsSlug))}/chat`, 'POST', { message: prompt, mode: 'query' })
       const text = String(chat?.textResponse || chat?.message || chat || '')
+      logPush(`AI response received (${text.length} chars)`)
       let code = text
       const m = text.match(/```[a-z]*\s*([\s\S]*?)```/i)
-      if (m && m[1]) code = m[1]
+      if (m && m[1]) {
+        code = m[1]
+        logPush('Extracted code from markdown fence blocks')
+      }
       code = code.trim()
+      logPush(`Generator code ready (${code.length} chars)`)
       stepOk('aiRequest')
 
       // Write generator
       stepStart('writeGenerator')
-      if (!code) { send({ type: 'error', error: 'No code returned' }); return res.end() }
-      fs.writeFileSync(path.join(dir,'generator.full.ts'), code, 'utf-8')
+      if (!code) { 
+        logPush('ERROR: No code returned from AI')
+        send({ type: 'error', error: 'No code returned' }); 
+        return res.end() 
+      }
+      const genPath = path.join(dir,'generator.full.ts')
+      fs.writeFileSync(genPath, code, 'utf-8')
+      logPush(`Generator written to: generator.full.ts`)
       stepOk('writeGenerator')
-      markJobDone(job.id, { path: path.join(dir,'generator.full.ts'), name: 'generator.full.ts' }, { usedWorkspace: wsSlug })
-      return send({ type: 'done', file: { path: path.join(dir,'generator.full.ts'), name: 'generator.full.ts' }, usedWorkspace: wsSlug, jobId: job.id })
+      markJobDone(job.id, { path: genPath, name: 'generator.full.ts' }, { usedWorkspace: wsSlug })
+      logPush('Compilation complete')
+      return send({ type: 'done', file: { path: genPath, name: 'generator.full.ts' }, usedWorkspace: wsSlug, jobId: job.id })
     } catch (e:any) {
       const msg = String(e?.message || e)
       jobLog(job.id, `error:${msg}`)

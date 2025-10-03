@@ -42,7 +42,8 @@ router.get("/ping", async (_req, res) => {
  * Proxies: GET http://localhost:3001/api/v1/auth
  * Expects: Authorization: Bearer <API KEY> (added by service helper)
  */
-
+
+
 router.get("/auth", async (_req, res) => {
   try {
     const data = await anythingllmRequest<{ authenticated: boolean }>("/auth", "GET");
@@ -369,6 +370,33 @@ router.post("/workspace/:slug/update-embeddings", async (req, res) => {
 
     if (isForbidden) return res.status(403).json({ message: "Invalid API Key" });
     if (isBadReq) return res.status(400).json({ message: "Bad Request" });
+    res.status(502).json({ message: msg });
+  }
+});
+
+/**
+ * WORKSPACES: Update Document Pin Status
+ * Proxies: POST /api/v1/workspace/:slug/update-pin
+ * Body: { docPath: string; pinStatus: boolean }
+ */
+router.post("/workspace/:slug/update-pin", async (req, res) => {
+  const { slug } = req.params;
+  try {
+    const data = await anythingllmRequest<{ message: string }>(
+      `/workspace/${encodeURIComponent(slug)}/update-pin`,
+      "POST",
+      req.body ?? {}
+    );
+    res.json(data);
+  } catch (err: any) {
+    const msg = String(err?.message || "Workspace pin update failed");
+    const isForbidden = /\b403\b/i.test(msg) || /forbidden/i.test(msg);
+    const isBadReq = /\b400\b/i.test(msg) || /bad\s*request/i.test(msg);
+    const isNotFound = /\b404\b/i.test(msg) || /not\s*found/i.test(msg);
+
+    if (isForbidden) return res.status(403).json({ message: "Invalid API Key" });
+    if (isBadReq) return res.status(400).json({ message: "Bad Request" });
+    if (isNotFound) return res.status(404).json({ message: "Document not found" });
     res.status(502).json({ message: msg });
   }
 });
@@ -802,6 +830,36 @@ router.get("/documents", async (_req, res) => {
 });
 
 /**
+ * DOCUMENTS: Get all documents in a specific folder
+ * Proxies: GET /api/v1/documents/folder/:folderName
+ */
+router.get("/documents/folder/:folderName", async (req, res) => {
+  const { folderName } = req.params;
+  try {
+    const data = await anythingllmRequest<{
+      folder: string;
+      documents: Array<{
+        name: string;
+        type: string;
+        cached: boolean;
+        pinnedWorkspaces: string[];
+        watched: boolean;
+        [key: string]: any;
+      }>;
+    }>(`/documents/folder/${encodeURIComponent(folderName)}`, "GET");
+    res.json(data);
+  } catch (err: any) {
+    const msg = String(err?.message || "Folder documents fetch failed");
+    const isForbidden = /\b403\b/i.test(msg) || /forbidden/i.test(msg);
+    const isNotFound = /\b404\b/i.test(msg) || /not\s*found/i.test(msg);
+
+    if (isForbidden) return res.status(403).json({ message: "Invalid API Key" });
+    if (isNotFound) return res.status(404).json({ message: "Folder not found" });
+    res.status(502).json({ message: msg });
+  }
+});
+
+/**
  * DOCUMENTS: Get single document by AnythingLLM name
  * Proxies: GET /api/v1/document/:docName
  */
@@ -819,6 +877,25 @@ router.get("/document/:docName", async (req, res) => {
     const isNotFound = /\b404\b/i.test(msg) || /not\s*found/i.test(msg);
     if (isForbidden) return res.status(403).json({ message: "Invalid API Key" });
     if (isNotFound) return res.status(404).send("Not Found");
+    res.status(502).json({ message: msg });
+  }
+});
+
+/**
+ * DOCUMENTS: Get metadata schema for raw-text uploads
+ * Proxies: GET /api/v1/document/metadata-schema
+ */
+router.get("/document/metadata-schema", async (_req, res) => {
+  try {
+    const data = await anythingllmRequest<{
+      schema: Record<string, string>;
+    }>("/document/metadata-schema", "GET");
+    res.json(data);
+  } catch (err: any) {
+    const msg = String(err?.message || "Metadata schema fetch failed");
+    const isForbidden = /\b403\b/i.test(msg) || /forbidden/i.test(msg);
+
+    if (isForbidden) return res.status(403).json({ message: "Invalid API Key" });
     res.status(502).json({ message: msg });
   }
 });
@@ -882,6 +959,195 @@ router.post("/document/upload", (req, res) => {
       });
     }
   });
+});
+
+/**
+ * DOCUMENTS: Upload to specific folder and optionally embed into workspaces
+ * Proxies: POST /api/v1/document/upload/:folderName
+ * Path param:
+ *   - folderName: Target folder path (folder will be created if it doesn't exist)
+ * multipart/form-data fields:
+ *   - file: binary
+ *   - addToWorkspaces: comma-separated slugs
+ */
+router.post("/document/upload/:folderName", (req, res) => {
+  const { folderName } = req.params;
+  const upload = multer({ storage: multer.memoryStorage() });
+  upload.single("file")(req, res, async (err: any) => {
+    if (err) return res.status(400).json({ message: String(err?.message || err) });
+    try {
+      const f = (req as any).file as undefined | { originalname: string; buffer: Buffer; mimetype?: string };
+      const addToWorkspaces = String((req.body?.addToWorkspaces ?? "")).trim();
+      if (!f || !f.buffer) return res.status(400).json({ message: "Missing file" });
+
+      // Build FormData for upstream
+      const fd = new FormData();
+      const type = f.mimetype || "application/octet-stream";
+      const uint = new Uint8Array(f.buffer);
+      // @ts-ignore File is available in Node 18+
+      const fileObj = new File([uint], f.originalname, { type });
+      fd.append("file", fileObj);
+      if (addToWorkspaces) fd.append("addToWorkspaces", addToWorkspaces);
+
+      const data = await anythingllmRequest<any>(
+        `/document/upload/${encodeURIComponent(folderName)}`,
+        "POST",
+        fd
+      );
+      return res.json(data);
+    } catch (e: any) {
+      const msg = String(e?.message || e);
+      const isForbidden = /\b403\b/i.test(msg) || /forbidden/i.test(msg);
+      return res.status(isForbidden ? 403 : 502).json({
+        message: isForbidden ? "Invalid API Key" : msg,
+      });
+    }
+  });
+});
+
+/**
+ * DOCUMENTS: Upload link to be scraped and optionally embed into workspaces
+ * Proxies: POST /api/v1/document/upload-link
+ * Body: { link: string; addToWorkspaces?: string; scraperHeaders?: Record<string, string> }
+ */
+router.post("/document/upload-link", async (req, res) => {
+  try {
+    const data = await anythingllmRequest<{
+      success: boolean;
+      error: string | null;
+      documents?: Array<{
+        id: string;
+        url: string;
+        title: string;
+        docAuthor: string;
+        description: string;
+        docSource: string;
+        chunkSource: string;
+        published: string;
+        wordCount: number;
+        pageContent: string;
+        token_count_estimate: number;
+        location: string;
+      }>;
+    }>("/document/upload-link", "POST", req.body ?? {});
+    res.json(data);
+  } catch (err: any) {
+    const msg = String(err?.message || "Link upload failed");
+    const isForbidden = /\b403\b/i.test(msg) || /forbidden/i.test(msg);
+    const isBadReq = /\b400\b/i.test(msg) || /bad\s*request/i.test(msg);
+
+    if (isForbidden) return res.status(403).json({ message: "Invalid API Key" });
+    if (isBadReq) return res.status(400).json({ message: "Bad Request" });
+    res.status(502).json({ message: msg });
+  }
+});
+
+/**
+ * DOCUMENTS: Upload raw text content as a document
+ * Proxies: POST /api/v1/document/raw-text
+ * Body: { textContent: string; addToWorkspaces?: string; metadata: { title: string; [key: string]: any } }
+ */
+router.post("/document/raw-text", async (req, res) => {
+  try {
+    const data = await anythingllmRequest<{
+      success: boolean;
+      error: string | null;
+      documents?: Array<{
+        id: string;
+        url: string;
+        title: string;
+        docAuthor: string;
+        description: string;
+        docSource: string;
+        chunkSource: string;
+        published: string;
+        wordCount: number;
+        pageContent: string;
+        token_count_estimate: number;
+        location: string;
+      }>;
+    }>("/document/raw-text", "POST", req.body ?? {});
+    res.json(data);
+  } catch (err: any) {
+    const msg = String(err?.message || "Raw text upload failed");
+    const isForbidden = /\b403\b/i.test(msg) || /forbidden/i.test(msg);
+    const isBadReq = /\b400\b/i.test(msg) || /bad\s*request/i.test(msg);
+    const isUnprocessable = /\b422\b/i.test(msg) || /unprocessable/i.test(msg);
+
+    if (isForbidden) return res.status(403).json({ message: "Invalid API Key" });
+    if (isBadReq) return res.status(400).json({ message: "Bad Request" });
+    if (isUnprocessable) return res.status(422).json({ message: "Unprocessable Entity" });
+    res.status(502).json({ message: msg });
+  }
+});
+
+/**
+ * DOCUMENTS: Create a new folder in documents storage
+ * Proxies: POST /api/v1/document/create-folder
+ * Body: { name: string }
+ */
+router.post("/document/create-folder", async (req, res) => {
+  try {
+    const data = await anythingllmRequest<{
+      success: boolean;
+      message: string | null;
+    }>("/document/create-folder", "POST", req.body ?? {});
+    res.json(data);
+  } catch (err: any) {
+    const msg = String(err?.message || "Folder creation failed");
+    const isForbidden = /\b403\b/i.test(msg) || /forbidden/i.test(msg);
+    const isBadReq = /\b400\b/i.test(msg) || /bad\s*request/i.test(msg);
+
+    if (isForbidden) return res.status(403).json({ message: "Invalid API Key" });
+    if (isBadReq) return res.status(400).json({ message: "Bad Request" });
+    res.status(502).json({ message: msg });
+  }
+});
+
+/**
+ * DOCUMENTS: Remove a folder and all its contents from documents storage
+ * Proxies: DELETE /api/v1/document/remove-folder
+ * Body: { name: string }
+ */
+router.delete("/document/remove-folder", async (req, res) => {
+  try {
+    const data = await anythingllmRequest<{
+      success: boolean;
+      message: string;
+    }>("/document/remove-folder", "DELETE", req.body ?? {});
+    res.json(data);
+  } catch (err: any) {
+    const msg = String(err?.message || "Folder removal failed");
+    const isForbidden = /\b403\b/i.test(msg) || /forbidden/i.test(msg);
+    const isBadReq = /\b400\b/i.test(msg) || /bad\s*request/i.test(msg);
+
+    if (isForbidden) return res.status(403).json({ message: "Invalid API Key" });
+    if (isBadReq) return res.status(400).json({ message: "Bad Request" });
+    res.status(502).json({ message: msg });
+  }
+});
+
+/**
+ * DOCUMENTS: Move files within documents storage
+ * Proxies: POST /api/v1/document/move-files
+ * Body: { files: Array<{ from: string; to: string }> }
+ */
+router.post("/document/move-files", async (req, res) => {
+  try {
+    const data = await anythingllmRequest<{
+      success: boolean;
+      message: string | null;
+    }>("/document/move-files", "POST", req.body ?? {});
+    res.json(data);
+  } catch (err: any) {
+    const msg = String(err?.message || "File move failed");
+    const isForbidden = /\b403\b/i.test(msg) || /forbidden/i.test(msg);
+    const isBadReq = /\b400\b/i.test(msg) || /bad\s*request/i.test(msg);
+
+    if (isForbidden) return res.status(403).json({ message: "Invalid API Key" });
+    if (isBadReq) return res.status(400).json({ message: "Bad Request" });
+    res.status(502).json({ message: msg });
+  }
 });
 
 

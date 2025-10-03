@@ -16,7 +16,8 @@ import {
   Calendar,
   BarChart3,
   Layers,
-  Database
+  Database,
+  FileCheck
 } from "lucide-react";
 
 export type DocumentMetadata = {
@@ -111,7 +112,11 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
           <TabsList className="w-full justify-start">
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="content">Content</TabsTrigger>
-            <TabsTrigger value="context">Context</TabsTrigger>
+            {metadata.extraFields?.templateRelevance && metadata.extraFields.templateRelevance.length > 0 && (
+              <TabsTrigger value="templates">
+                Templates ({metadata.extraFields.templateRelevance.length})
+              </TabsTrigger>
+            )}
             <TabsTrigger value="technical">Technical</TabsTrigger>
           </TabsList>
           
@@ -288,87 +293,7 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
                       </div>
                     </div>
                   )}
-                </TabsContent>
 
-                {/* CONTENT TAB */}
-                <TabsContent value="content" className="space-y-4 mt-0 text-left">
-                  {/* Metrics */}
-                  {metadata.metrics && metadata.metrics.length > 0 && (
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium flex items-center gap-2">
-                        <BarChart3 className="h-4 w-4" />
-                        Available Metrics
-                      </label>
-                      <div className="flex flex-wrap gap-2">
-                        {metadata.metrics.map((metric: string, idx: number) => (
-                          <Badge key={idx} variant="default" className="text-xs">
-                            {metric}
-                          </Badge>
-                        ))}
-                      </div>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Quantitative measures and KPIs found in this document
-                      </p>
-                    </div>
-                  )}
-
-                  {/* Calculated Fields (spreadsheets) */}
-                  {metadata.extraFields?.calculatedFields && Array.isArray(metadata.extraFields.calculatedFields) && 
-                  metadata.extraFields.calculatedFields.length > 0 && (
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium flex items-center gap-2">
-                        <Database className="h-4 w-4" />
-                        Calculated Fields
-                      </label>
-                      <div className="flex flex-wrap gap-2">
-                        {metadata.extraFields.calculatedFields.map((field: string, idx: number) => (
-                          <Badge key={idx} variant="secondary" className="text-xs">
-                            {field}
-                          </Badge>
-                        ))}
-                      </div>
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Formulas and derived values in this document
-                      </p>
-                    </div>
-                  )}
-
-                  {/* Data Relationships (spreadsheets) */}
-                  {metadata.extraFields?.dataRelationships && (
-                    <div className="bg-muted/30 p-4 rounded-lg border">
-                      <h4 className="text-sm font-semibold mb-2">Data Relationships</h4>
-                      <p className="text-sm text-muted-foreground">{metadata.extraFields.dataRelationships}</p>
-                    </div>
-                  )}
-
-                  {/* Timeframe & Geography */}
-                  {(metadata.extraFields?.timeframe || metadata.extraFields?.geography || 
-                    metadata.extraFields?.aggregationLevel) && (
-                    <div className="grid grid-cols-3 gap-3">
-                      {metadata.extraFields?.timeframe && (
-                        <div>
-                          <div className="text-xs text-muted-foreground mb-1">Timeframe</div>
-                          <Badge variant="outline">{metadata.extraFields.timeframe}</Badge>
-                        </div>
-                      )}
-                      {metadata.extraFields?.geography && (
-                        <div>
-                          <div className="text-xs text-muted-foreground mb-1">Geography</div>
-                          <Badge variant="outline">{metadata.extraFields.geography}</Badge>
-                        </div>
-                      )}
-                      {metadata.extraFields?.aggregationLevel && (
-                        <div>
-                          <div className="text-xs text-muted-foreground mb-1">Aggregation</div>
-                          <Badge variant="outline">{metadata.extraFields.aggregationLevel}</Badge>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </TabsContent>
-
-                {/* CONTEXT TAB */}
-                <TabsContent value="context" className="space-y-4 mt-0 text-left">
                   {/* Data Categories */}
                   {metadata.dataCategories && metadata.dataCategories.length > 0 && (
                     <div className="space-y-2">
@@ -473,6 +398,196 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
                     </div>
                   )}
                 </TabsContent>
+
+                {/* CONTENT TAB */}
+                <TabsContent value="content" className="space-y-4 mt-0 text-left">
+                  {/* Metrics */}
+                  {metadata.metrics && metadata.metrics.length > 0 && (
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium flex items-center gap-2">
+                        <BarChart3 className="h-4 w-4" />
+                        Available Metrics
+                      </label>
+                      <div className="flex flex-wrap gap-2">
+                        {metadata.metrics.map((metric: string, idx: number) => (
+                          <Badge key={idx} variant="default" className="text-xs">
+                            {metric}
+                          </Badge>
+                        ))}
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Quantitative measures and KPIs found in this document
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Calculated Fields (spreadsheets) */}
+                  {metadata.extraFields?.calculatedFields && Array.isArray(metadata.extraFields.calculatedFields) && 
+                  metadata.extraFields.calculatedFields.length > 0 && (
+                    <div className="space-y-2">
+                      <label className="text-sm font-medium flex items-center gap-2">
+                        <Database className="h-4 w-4" />
+                        Calculated Fields
+                      </label>
+                      <div className="flex flex-wrap gap-2">
+                        {metadata.extraFields.calculatedFields.map((field: string, idx: number) => (
+                          <Badge key={idx} variant="secondary" className="text-xs">
+                            {field}
+                          </Badge>
+                        ))}
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Formulas and derived values in this document
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Data Relationships (spreadsheets) */}
+                  {metadata.extraFields?.dataRelationships && (
+                    <div className="bg-muted/30 p-4 rounded-lg border">
+                      <h4 className="text-sm font-semibold mb-2">Data Relationships</h4>
+                      <p className="text-sm text-muted-foreground">{metadata.extraFields.dataRelationships}</p>
+                    </div>
+                  )}
+
+                  {/* Timeframe & Geography */}
+                  {(metadata.extraFields?.timeframe || metadata.extraFields?.geography || 
+                    metadata.extraFields?.aggregationLevel) && (
+                    <div className="grid grid-cols-3 gap-3">
+                      {metadata.extraFields?.timeframe && (
+                        <div>
+                          <div className="text-xs text-muted-foreground mb-1">Timeframe</div>
+                          <Badge variant="outline">{metadata.extraFields.timeframe}</Badge>
+                        </div>
+                      )}
+                      {metadata.extraFields?.geography && (
+                        <div>
+                          <div className="text-xs text-muted-foreground mb-1">Geography</div>
+                          <Badge variant="outline">{metadata.extraFields.geography}</Badge>
+                        </div>
+                      )}
+                      {metadata.extraFields?.aggregationLevel && (
+                        <div>
+                          <div className="text-xs text-muted-foreground mb-1">Aggregation</div>
+                          <Badge variant="outline">{metadata.extraFields.aggregationLevel}</Badge>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </TabsContent>
+
+                {/* TEMPLATES TAB - Template Relevance */}
+                {metadata.extraFields?.templateRelevance && metadata.extraFields.templateRelevance.length > 0 && (
+                  <TabsContent value="templates" className="space-y-3 mt-0 text-left">
+                    <div className="space-y-1">
+                      <label className="text-sm font-medium flex items-center gap-2">
+                        <FileCheck className="h-4 w-4" />
+                        Recommended Templates for This Document
+                      </label>
+                      <p className="text-xs text-muted-foreground">
+                        Templates ranked by relevance based on document content, structure, and data types.
+                        Higher scores indicate better compatibility for document generation.
+                      </p>
+                    </div>
+
+                    <div className="space-y-3">
+                      {metadata.extraFields.templateRelevance
+                        .slice(0, 10) // Show top 10
+                        .map((template: any, idx: number) => {
+                          const score = template.score || 0;
+                          const percentage = Math.min(100, Math.max(0, score * 10)); // Convert 0-10 score to 0-100%
+                          
+                          // Color coding based on score
+                          let scoreColor = 'text-muted-foreground';
+                          let barColor = 'bg-muted';
+                          if (score >= 7) {
+                            scoreColor = 'text-green-600 dark:text-green-400';
+                            barColor = 'bg-green-500';
+                          } else if (score >= 5) {
+                            scoreColor = 'text-blue-600 dark:text-blue-400';
+                            barColor = 'bg-blue-500';
+                          } else if (score >= 3) {
+                            scoreColor = 'text-orange-600 dark:text-orange-400';
+                            barColor = 'bg-orange-500';
+                          }
+
+                          return (
+                            <div key={idx} className="border rounded-lg p-3 space-y-2">
+                              {/* Template Header */}
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-semibold">{template.name}</span>
+                                    {idx === 0 && score >= 7 && (
+                                      <Badge variant="default" className="text-xs py-0">Best Match</Badge>
+                                    )}
+                                  </div>
+                                  <div className="text-xs text-muted-foreground">
+                                    {template.slug}
+                                  </div>
+                                </div>
+                                <div className="flex flex-col items-end shrink-0">
+                                  <span className={`text-xl font-bold ${scoreColor}`}>
+                                    {score.toFixed(1)}
+                                  </span>
+                                  <span className="text-xs text-muted-foreground leading-none">/ 10</span>
+                                </div>
+                              </div>
+
+                              {/* Score Bar */}
+                              <div className="space-y-0.5">
+                                <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                                  <div 
+                                    className={`h-full ${barColor} transition-all duration-300`}
+                                    style={{ width: `${percentage}%` }}
+                                  />
+                                </div>
+                                <div className="flex justify-between text-xs text-muted-foreground">
+                                  <span>
+                                    {score < 3 && 'Low compatibility'}
+                                    {score >= 3 && score < 5 && 'Moderate compatibility'}
+                                    {score >= 5 && score < 7 && 'Good compatibility'}
+                                    {score >= 7 && 'Excellent compatibility'}
+                                  </span>
+                                  <span>{percentage.toFixed(0)}%</span>
+                                </div>
+                              </div>
+
+                              {/* Reasoning */}
+                              {template.reasoning && (
+                                <div className="bg-muted/30 rounded-md p-2.5">
+                                  <div className="text-xs font-medium text-muted-foreground mb-1.5">
+                                    Why this template matches:
+                                  </div>
+                                  <div className="text-xs leading-relaxed">
+                                    {template.reasoning}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                    </div>
+
+                    {/* Explanation Footer */}
+                    <div className="border-t pt-3 mt-3">
+                      <div className="text-xs text-muted-foreground space-y-1.5">
+                        <p className="font-medium">Scoring Criteria:</p>
+                        <ul className="list-disc list-inside space-y-0.5 ml-2">
+                          <li><strong>Data Types</strong> - Matching data categories and structures</li>
+                          <li><strong>Document Type</strong> - Compatible document formats and purposes</li>
+                          <li><strong>Content Structure</strong> - Tables, formulas, sections alignment</li>
+                          <li><strong>Topic Overlap</strong> - Keywords and entities similarity</li>
+                        </ul>
+                        <p className="mt-3">
+                          <strong>Tip:</strong> Templates with scores ≥ 7 are highly recommended for this document.
+                          They will have priority access to this document's content during generation.
+                        </p>
+                      </div>
+                    </div>
+                  </TabsContent>
+                )}
+
 
                 {/* TECHNICAL TAB */}
                 <TabsContent value="technical" className="space-y-4 mt-0 text-left">

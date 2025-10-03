@@ -5,7 +5,7 @@ import fs from "fs"
 import { spawn } from "child_process"
 import type { Request } from "express"
 import { getDB } from "../services/storage"
-import { ensureUploadsDir, resolveCustomerPaths } from "../services/customerLibrary"
+import { ensureUploadsDir, resolveCustomerPaths, folderNameForCustomer } from "../services/customerLibrary"
 import { anythingllmRequest } from "../services/anythingllm"
 import { findDocsByFilename, documentExists, qualifiedNamesForShort } from "../services/anythingllmDocs"
 import { secureFileValidation } from "../services/fileSecurityValidator"
@@ -93,7 +93,7 @@ async function extractMetadataInBackground(
     })
     
     metadata.customerId = customerId
-    await saveDocumentMetadata(customerId, metadata)
+    await saveDocumentMetadata(customerId, metadata, workspaceSlug)
     
     console.log(`[METADATA] Metadata saved to database for ${filename}`)
     
@@ -565,35 +565,121 @@ router.post("/:customerId", (req, res, next) => {
             const slug = row.workspaceSlug
             if (slug) {
               try {
+                // Step 1: Ensure the customer folder exists in AnythingLLM
+                const folderName = folderNameForCustomer(row.id, row.name, new Date(row.createdAt))
+                console.log(`[UPLOAD] Ensuring folder exists: "${folderName}"`)
+                
+                try {
+                  await anythingllmRequest<{ success: boolean; message: string | null }>(
+                    "/document/create-folder",
+                    "POST",
+                    { name: folderName }
+                  )
+                  console.log(`[UPLOAD] Folder created or already exists`)
+                } catch (folderErr) {
+                  // Folder might already exist, which is fine
+                  console.log(`[UPLOAD] Folder creation response:`, folderErr)
+                }
+                
+                // Step 2: Upload to AnythingLLM (root location first)
                 const fd = new FormData()
                 const buf = fs.readFileSync(file.path)
                 const uint = new Uint8Array(buf)
                 // @ts-ignore File is available in Node 18+
                 const theFile = new File([uint], file.filename)
                 fd.append("file", theFile)
-                fd.append("addToWorkspaces", slug)
-                const resp = await anythingllmRequest<any>("/document/upload", "POST", fd)
-
-                // Attempt to capture the precise document mapping (name + id)
-                let docName: string | undefined
+                
+                console.log(`[UPLOAD] Uploading file "${file.filename}" to AnythingLLM...`)
+                const resp = await anythingllmRequest<any>(
+                  `/document/upload`,
+                  "POST",
+                  fd
+                )
+                
+                console.log(`[UPLOAD] Upload response:`, JSON.stringify(resp, null, 2))
+                
+                // Extract uploaded document name from response
+                let uploadedDocName: string | undefined
                 try {
                   const docs = Array.isArray(resp?.documents) ? resp.documents : []
                   const first = docs[0]
-                  if (first?.name) docName = String(first.name)
-                  console.log(`[UPLOAD] Document name from AnythingLLM: "${docName || 'not captured'}"`)
-                  
-                  // If we got a docName, try to resolve its id via GET /document/:name
-                  let docId: string | undefined
-                  if (docName) {
-                    try {
-                      const one = await anythingllmRequest<any>(`/document/${encodeURIComponent(docName)}`, "GET")
-                      const items = Array.isArray(one?.localFiles?.items) ? one.localFiles.items : []
-                      const match = items.find((x: any) => (String(x?.name || "") === docName))
-                      if (match?.id) docId = String(match.id)
-                    } catch {}
-                    writeSidecar(uploadsDir, file.filename, { docName, docId, workspaceSlug: slug, uploadedAt: new Date().toISOString() })
+                  if (first?.location) {
+                    const fullPath = String(first.location)
+                    // Extract relative path from full filesystem path
+                    // e.g., "C:\...\storage\documents\custom-documents\file.csv-hash.json" 
+                    // becomes "custom-documents/file.csv-hash.json"
+                    const match = fullPath.match(/documents[/\\](.+)$/i)
+                    if (match && match[1]) {
+                      uploadedDocName = match[1].replace(/\\/g, '/') // Normalize to forward slashes
+                    } else {
+                      uploadedDocName = fullPath
+                    }
+                  } else if (first?.name) {
+                    uploadedDocName = String(first.name)
                   }
+                  console.log(`[UPLOAD] Uploaded document name: "${uploadedDocName}"`)
+                } catch (e) {
+                  console.error(`[UPLOAD] Error parsing upload response:`, e)
+                }
+                
+                if (!uploadedDocName) {
+                  throw new Error(`Failed to get document name from upload response`)
+                }
+
+                // Step 3: Move the file to the customer folder
+                // Keep the same filename with hash, just change the folder
+                // e.g., "custom-documents/file.csv-hash.json" -> "Taylor-C_Oct_2025/file.csv-hash.json"
+                const sourceFilename = uploadedDocName.split('/').pop() || uploadedDocName
+                const targetPath = `${folderName}/${sourceFilename}`
+                console.log(`[UPLOAD] Moving document from "${uploadedDocName}" to "${targetPath}"`)
+                
+                try {
+                  await anythingllmRequest<{ success: boolean; message: string | null }>(
+                    "/document/move-files",
+                    "POST",
+                    { files: [{ from: uploadedDocName, to: targetPath }] }
+                  )
+                  console.log(`[UPLOAD] File moved successfully to customer folder`)
+                } catch (moveErr) {
+                  console.error(`[UPLOAD] Failed to move file to folder:`, moveErr)
+                  // Continue anyway - file is uploaded, just not in the right folder
+                }
+
+                // After moving, the document path is now targetPath
+                const docName = targetPath
+                console.log(`[UPLOAD] Document is now at: "${docName}"`)
+
+                // Step 4: Wait briefly for AnythingLLM to process the move
+                console.log(`[UPLOAD] Waiting 1s for document processing...`)
+                await new Promise(resolve => setTimeout(resolve, 1000))
+                
+                // Save sidecar mapping
+                try {
+                  let docId: string | undefined
+                  try {
+                    const one = await anythingllmRequest<any>(`/document/${encodeURIComponent(docName)}`, "GET")
+                    const items = Array.isArray(one?.localFiles?.items) ? one.localFiles.items : []
+                    const match = items.find((x: any) => (String(x?.name || "") === docName))
+                    if (match?.id) docId = String(match.id)
+                  } catch {}
+                  writeSidecar(uploadsDir, file.filename, { docName, docId, workspaceSlug: slug, uploadedAt: new Date().toISOString() })
                 } catch {}
+                
+                // Step 5: Embed the uploaded document into the workspace
+                console.log(`[UPLOAD] Embedding document "${docName}" into workspace "${slug}"`)
+                try {
+                  const embedResp = await anythingllmRequest(
+                    `/workspace/${encodeURIComponent(slug)}/update-embeddings`,
+                    "POST",
+                    { adds: [docName] }
+                  )
+                  console.log(`[UPLOAD] Successfully embedded document into workspace. Response:`, embedResp)
+                } catch (embedErr) {
+                  console.error(`[UPLOAD] Failed to embed document into workspace:`, embedErr)
+                  console.error(`[UPLOAD] Attempted to embed document path: "${docName}"`)
+                  console.error(`[UPLOAD] Workspace slug: "${slug}"`)
+                  // Non-fatal - document is uploaded, just not embedded yet
+                }
 
                 // Kick off metadata extraction in background (non-blocking)
                 // Don't await - let it run asynchronously after upload completes

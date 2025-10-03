@@ -2,24 +2,8 @@
 import { loadTemplateMetadata, type TemplateMetadata } from './templateMetadata'
 import { loadAllDocumentMetadata, type DocumentMetadata } from './documentMetadata'
 import { anythingllmRequest } from './anythingllm'
+import { getDB } from './storage'
 import { logInfo, logError } from '../utils/logger'
-import { createHash } from 'crypto'
-
-// Cache for relevance scores (in-memory, 15-minute TTL)
-const relevanceCache = new Map<string, { 
-  rankings: DocumentMatch[], 
-  timestamp: number 
-}>()
-const CACHE_TTL_MS = 15 * 60 * 1000 // 15 minutes
-const AI_RANKING_TIMEOUT_MS = 10000 // 10 seconds
-const MAX_AI_RANKING_CANDIDATES = 20 // Limit AI ranking to top 20 from rule-based
-
-function getCacheKey(templateSlug: string, documentIds: number[]): string {
-  const sortedIds = [...documentIds].sort((a, b) => a - b)
-  return createHash('md5')
-    .update(`${templateSlug}:${sortedIds.join(',')}`)
-    .digest('hex')
-}
 
 /**
  * Match result containing relevance score and reasoning
@@ -43,7 +27,7 @@ export interface MetadataEnhancedContext {
 
 /**
  * Calculate relevance score between template requirements and document content
- * Uses simple keyword matching and boolean flags
+ * Returns score (0-10) with detailed reasoning
  */
 function calculateBasicRelevance(
   templateMeta: TemplateMetadata,
@@ -52,171 +36,123 @@ function calculateBasicRelevance(
   let score = 0
   const reasons: string[] = []
 
-  // Match required data types
-  if (templateMeta.requiredDataTypes && docMeta.dataCategories) {
-    const overlap = templateMeta.requiredDataTypes.filter(type =>
-      docMeta.dataCategories?.some(cat =>
-        cat.toLowerCase().includes(type.toLowerCase()) ||
-        type.toLowerCase().includes(cat.toLowerCase())
+  // 1. Data Type Match (0-4 points) - MOST IMPORTANT
+  if (templateMeta.requiredDataTypes && templateMeta.requiredDataTypes.length > 0) {
+    if (docMeta.dataCategories && docMeta.dataCategories.length > 0) {
+      const overlap = templateMeta.requiredDataTypes.filter(type =>
+        docMeta.dataCategories?.some(cat =>
+          cat.toLowerCase().includes(type.toLowerCase()) ||
+          type.toLowerCase().includes(cat.toLowerCase())
+        )
       )
-    )
-    if (overlap.length > 0) {
-      score += overlap.length * 3
-      reasons.push(`Matches ${overlap.length} required data types: ${overlap.join(', ')}`)
+      
+      if (overlap.length > 0) {
+        const matchRatio = overlap.length / templateMeta.requiredDataTypes.length
+        const points = matchRatio * 4
+        score += points
+        
+        if (matchRatio >= 1) {
+          reasons.push(`Matches ALL ${overlap.length} required data types: ${overlap.join(', ')}`)
+        } else {
+          reasons.push(`Matches ${overlap.length}/${templateMeta.requiredDataTypes.length} data types: ${overlap.join(', ')}`)
+        }
+      }
     }
+  } else {
+    // No specific data type requirements - give base score
+    score += 2
   }
 
-  // Match expected entities
-  if (templateMeta.expectedEntities && docMeta.keyTopics) {
-    const overlap = templateMeta.expectedEntities.filter(entity =>
-      docMeta.keyTopics?.some(topic =>
-        topic.toLowerCase().includes(entity.toLowerCase()) ||
-        entity.toLowerCase().includes(topic.toLowerCase())
+  // 2. Document Type Compatibility (0-2 points)
+  if (templateMeta.compatibleDocumentTypes && templateMeta.compatibleDocumentTypes.length > 0) {
+    if (docMeta.documentType) {
+      const isCompatible = templateMeta.compatibleDocumentTypes.some(type =>
+        docMeta.documentType?.toLowerCase().includes(type.toLowerCase()) ||
+        type.toLowerCase().includes(docMeta.documentType?.toLowerCase() || '')
       )
-    )
-    if (overlap.length > 0) {
-      score += overlap.length * 2
-      reasons.push(`Contains ${overlap.length} expected entities: ${overlap.join(', ')}`)
+      if (isCompatible) {
+        score += 2
+        reasons.push(`Document type '${docMeta.documentType}' is compatible`)
+      }
     }
-  }
-
-  // Match compatible document types
-  if (templateMeta.compatibleDocumentTypes && docMeta.documentType) {
-    const isCompatible = templateMeta.compatibleDocumentTypes.some(type =>
-      (docMeta.documentType?.toLowerCase().includes(type.toLowerCase()) ?? false) ||
-      (docMeta.documentType && type.toLowerCase().includes(docMeta.documentType.toLowerCase()))
-    )
-    if (isCompatible) {
-      score += 5
-      reasons.push(`Document type '${docMeta.documentType}' is compatible`)
-    }
-  }
-
-  // Check for aggregation capabilities
-  if (templateMeta.requiresAggregation && docMeta.extraFields?.hasAggregations) {
-    score += 2
-    reasons.push('Document contains aggregations (matches template requirement)')
-  }
-
-  // Check for time-series data
-  if (templateMeta.requiresTimeSeries && (docMeta.dateRange || docMeta.extraFields?.timeframe)) {
-    score += 2
-    reasons.push('Document has time-series data (matches template requirement)')
-  }
-
-  // Check for tables (structural match)
-  if (templateMeta.hasTables && docMeta.hasTables) {
+  } else {
+    // No document type restrictions - give base score
     score += 1
+  }
+
+  // 3. Entity/Topic Match (0-2 points)
+  if (templateMeta.expectedEntities && templateMeta.expectedEntities.length > 0) {
+    if (docMeta.keyTopics && docMeta.keyTopics.length > 0) {
+      const overlap = templateMeta.expectedEntities.filter(entity =>
+        docMeta.keyTopics?.some(topic =>
+          topic.toLowerCase().includes(entity.toLowerCase()) ||
+          entity.toLowerCase().includes(topic.toLowerCase())
+        )
+      )
+      
+      if (overlap.length > 0) {
+        const matchRatio = overlap.length / templateMeta.expectedEntities.length
+        const points = matchRatio * 2
+        score += points
+        reasons.push(`Contains ${overlap.length}/${templateMeta.expectedEntities.length} expected entities: ${overlap.join(', ')}`)
+      }
+    }
+  } else {
+    // No specific entity requirements - give base score
+    score += 1
+  }
+
+  // 4. Structural Bonuses (0-2 points total)
+  let structuralPoints = 0
+  
+  // Tables bonus
+  if (templateMeta.hasTables && docMeta.hasTables) {
+    structuralPoints += 0.5
     reasons.push('Both have tabular data')
   }
+  
+  // Aggregation bonus
+  if (templateMeta.requiresAggregation) {
+    const metrics = docMeta.extraFields?.metrics as string[] | undefined
+    const hasAggregations = docMeta.extraFields?.hasAggregations
+    
+    if (hasAggregations || (metrics && Array.isArray(metrics) && metrics.length > 0)) {
+      structuralPoints += 0.75
+      if (metrics && Array.isArray(metrics) && metrics.length > 0) {
+        reasons.push(`Has ${metrics.length} metrics for aggregation`)
+      } else {
+        reasons.push('Has aggregations')
+      }
+    }
+  }
+  
+  // Time-series bonus
+  if (templateMeta.requiresTimeSeries) {
+    if (docMeta.dateRange || docMeta.extraFields?.timeframe || docMeta.meetingDate) {
+      structuralPoints += 0.75
+      reasons.push('Has time-series/temporal data')
+    }
+  }
+  
+  score += structuralPoints
 
-  // Bonus for metrics if template needs aggregation
-  const metrics = docMeta.extraFields?.metrics as string[] | undefined
-  if (templateMeta.requiresAggregation && metrics && Array.isArray(metrics) && metrics.length > 0) {
-    score += 2
-    reasons.push(`Document has ${metrics.length} metrics`)
+  // Ensure score is in 0-10 range
+  score = Math.min(10, Math.max(0, score))
+  
+  // Add context reasoning if no specific matches
+  if (reasons.length === 0) {
+    reasons.push('General compatibility based on available metadata')
   }
 
-  return { score, reasons }
-}
-
-/**
- * Use AI to intelligently rank document relevance based on template requirements
- */
-async function aiRankDocuments(
-  templateMeta: TemplateMetadata,
-  documents: DocumentMetadata[],
-  workspaceSlug: string
-): Promise<DocumentMatch[]> {
-  try {
-    logInfo(`[METADATA-MATCHING] Using AI to rank ${documents.length} documents for template ${templateMeta.templateSlug}`)
-
-    const rankingPrompt = `You are a document analysis expert. Given a template's requirements and a list of available documents, rank each document by relevance (0-10 scale) and explain why.
-
-TEMPLATE REQUIREMENTS:
-- Purpose: ${templateMeta.purpose || 'Not specified'}
-- Required Data Types: ${templateMeta.requiredDataTypes?.join(', ') || 'Not specified'}
-- Expected Entities: ${templateMeta.expectedEntities?.join(', ') || 'Not specified'}
-- Data Structure Needs: ${templateMeta.dataStructureNeeds?.join(', ') || 'Not specified'}
-- Requires Aggregation: ${templateMeta.requiresAggregation ? 'Yes' : 'No'}
-- Requires Time-Series: ${templateMeta.requiresTimeSeries ? 'Yes' : 'No'}
-- Requires Comparisons: ${templateMeta.requiresComparisons ? 'Yes' : 'No'}
-
-AVAILABLE DOCUMENTS:
-${documents.map((doc, idx) => `
-${idx + 1}. ${doc.filename}
-   - Type: ${doc.documentType || 'Unknown'}
-   - Purpose: ${doc.purpose || 'Not specified'}
-   - Data Categories: ${doc.dataCategories?.join(', ') || 'None'}
-   - Key Topics: ${doc.keyTopics?.join(', ') || 'None'}
-   - Has Tables: ${doc.hasTables ? 'Yes' : 'No'}
-   - Metrics: ${(doc.extraFields?.metrics as string[] | undefined)?.join(', ') || 'None'}
-   - Date Range: ${doc.dateRange || doc.meetingDate || 'None'}
-`).join('\n')}
-
-Return ONLY a JSON array with this structure:
-[
-  {
-    "filename": "document1.xlsx",
-    "relevanceScore": 8,
-    "reasoning": "Contains inventory data with product quantities and costs, exactly what the template needs"
-  },
-  ...
-]
-
-Rank ALL documents, even if some have low relevance (score 0-2). Be specific in reasoning.`
-
-    const result = await anythingllmRequest<any>(
-      `/workspace/${encodeURIComponent(workspaceSlug)}/chat`,
-      'POST',
-      {
-        message: rankingPrompt,
-        mode: 'query'
-      }
-    )
-
-    const responseText = String(result?.textResponse || result?.message || '')
-    
-    // Extract JSON from response
-    const jsonMatch = responseText.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) {
-      logError('[METADATA-MATCHING] AI response did not contain valid JSON array')
-      return []
-    }
-
-    const rankings = JSON.parse(jsonMatch[0]) as Array<{
-      filename: string
-      relevanceScore: number
-      reasoning: string
-    }>
-
-    // Match rankings with document metadata
-    const matches: DocumentMatch[] = rankings
-      .map(ranking => {
-        const doc = documents.find(d => d.filename === ranking.filename)
-        if (!doc) return null
-        return {
-          filename: ranking.filename,
-          metadata: doc,
-          relevanceScore: ranking.relevanceScore,
-          reasoning: ranking.reasoning
-        }
-      })
-      .filter((match): match is DocumentMatch => match !== null)
-      .sort((a, b) => b.relevanceScore - a.relevanceScore)
-
-    logInfo(`[METADATA-MATCHING] AI ranked ${matches.length} documents, top score: ${matches[0]?.relevanceScore || 0}`)
-    return matches
-
-  } catch (err) {
-    logError('[METADATA-MATCHING] AI ranking failed:', err)
-    return []
+  return { 
+    score: Math.round(score * 10) / 10, // Round to 1 decimal
+    reasons 
   }
 }
 
 /**
  * Find relevant documents for a template using metadata matching
- * Combines rule-based and AI-based ranking
+ * Uses stored template relevance from document metadata when available
  */
 export async function findRelevantDocuments(
   templateSlug: string,
@@ -241,33 +177,39 @@ export async function findRelevantDocuments(
 
     logInfo(`[METADATA-MATCHING] Matching ${documents.length} documents against template ${templateSlug}`)
 
-    // Use AI ranking if enabled and available
-    if (useAI && workspaceSlug) {
-      try {
-        const aiMatches = await aiRankDocuments(templateMeta, documents, workspaceSlug)
-        if (aiMatches.length > 0) {
-          return aiMatches
-        }
-      } catch (err) {
-        logError('[METADATA-MATCHING] AI ranking failed, falling back to basic matching:', err)
-      }
-    }
-
-    // Fallback: Calculate basic relevance scores
+    // Build matches using stored template relevance when available
     const matches: DocumentMatch[] = documents.map((doc: DocumentMetadata) => {
-      const { score, reasons } = calculateBasicRelevance(templateMeta, doc)
-      return {
-        filename: doc.filename,
-        metadata: doc,
-        relevanceScore: score,
-        reasoning: reasons.join('; ') || 'No specific matches found'
+      // Check if this document has pre-calculated template relevance
+      const storedRelevance = doc.extraFields?.templateRelevance as Array<{
+        slug: string; name: string; score: number; reasoning: string
+      }> | undefined
+      
+      const matchForThisTemplate = storedRelevance?.find(t => t.slug === templateSlug)
+      
+      if (matchForThisTemplate) {
+        // Use stored score from document metadata
+        return {
+          filename: doc.filename,
+          metadata: doc,
+          relevanceScore: matchForThisTemplate.score,
+          reasoning: matchForThisTemplate.reasoning
+        }
+      } else {
+        // Calculate on the fly if not stored (fallback)
+        const { score, reasons } = calculateBasicRelevance(templateMeta, doc)
+        return {
+          filename: doc.filename,
+          metadata: doc,
+          relevanceScore: score,
+          reasoning: reasons.join('; ') || 'No specific matches found'
+        }
       }
     })
 
     // Sort by relevance
     matches.sort((a, b) => b.relevanceScore - a.relevanceScore)
 
-    logInfo(`[METADATA-MATCHING] Basic matching complete, top score: ${matches[0]?.relevanceScore || 0}`)
+    logInfo(`[METADATA-MATCHING] Matching complete, top score: ${matches[0]?.relevanceScore || 0}/10`)
     return matches
 
   } catch (err) {
@@ -278,7 +220,7 @@ export async function findRelevantDocuments(
 
 /**
  * Build enhanced context for document generation with metadata-aware prompting
- * Optimized with caching, timeouts, and selective AI ranking
+ * Uses stored template relevance from document metadata when available
  */
 export async function buildMetadataEnhancedContext(
   templateSlug: string,
@@ -308,81 +250,38 @@ export async function buildMetadataEnhancedContext(
     }
   }
 
-  // OPTIMIZATION 1: Check cache first
-  const docIds = documents.map(d => d.id).filter((id): id is number => id !== undefined)
-  const cacheKey = getCacheKey(templateSlug, docIds)
-  const cached = relevanceCache.get(cacheKey)
-  
-  if (cached && (Date.now() - cached.timestamp) < CACHE_TTL_MS) {
-    logInfo(`[METADATA-MATCHING] Using cached rankings (${cached.rankings.length} docs, age: ${Math.round((Date.now() - cached.timestamp) / 1000)}s)`)
-    return {
-      templateMetadata,
-      relevantDocuments: cached.rankings,
-      promptEnhancement: buildPromptEnhancement(templateMetadata, cached.rankings),
-      documentSummaries: buildDocumentSummaries(cached.rankings)
-    }
-  }
+  logInfo(`[METADATA-MATCHING] Building context for ${documents.length} documents against template ${templateSlug}`)
 
-  // OPTIMIZATION 2: Run rule-based matching first (fast, always succeeds)
-  logInfo(`[METADATA-MATCHING] Rule-based matching for ${documents.length} documents`)
-  const ruleBasedMatches: DocumentMatch[] = documents.map((doc: DocumentMetadata) => {
-    const { score, reasons } = calculateBasicRelevance(templateMetadata, doc)
-    return {
-      filename: doc.filename,
-      metadata: doc,
-      relevanceScore: score,
-      reasoning: reasons.join('; ') || 'No specific matches found'
+  // Use stored template relevance from document metadata if available
+  const relevantDocuments: DocumentMatch[] = documents.map((doc: DocumentMetadata) => {
+    // Check if this document has pre-calculated template relevance
+    const storedRelevance = doc.extraFields?.templateRelevance as Array<{
+      slug: string; name: string; score: number; reasoning: string
+    }> | undefined
+    
+    const matchForThisTemplate = storedRelevance?.find(t => t.slug === templateSlug)
+    
+    if (matchForThisTemplate) {
+      // Use stored score from document metadata
+      return {
+        filename: doc.filename,
+        metadata: doc,
+        relevanceScore: matchForThisTemplate.score,
+        reasoning: matchForThisTemplate.reasoning
+      }
+    } else {
+      // Calculate on the fly if not stored (fallback)
+      const { score, reasons } = calculateBasicRelevance(templateMetadata, doc)
+      return {
+        filename: doc.filename,
+        metadata: doc,
+        relevanceScore: score,
+        reasoning: reasons.join('; ') || 'No specific matches found'
+      }
     }
   }).sort((a, b) => b.relevanceScore - a.relevanceScore)
 
-  // OPTIMIZATION 3: Limit AI ranking to top candidates (not all documents)
-  const topCandidates = ruleBasedMatches.slice(0, MAX_AI_RANKING_CANDIDATES)
-  
-  logInfo(`[METADATA-MATCHING] AI ranking top ${topCandidates.length} of ${documents.length} docs (timeout: ${AI_RANKING_TIMEOUT_MS}ms)`)
-  
-  let relevantDocuments = ruleBasedMatches // Default fallback
-  
-  // OPTIMIZATION 4: Add timeout to AI ranking
-  if (workspaceSlug && topCandidates.length > 0) {
-    try {
-      const aiRankingPromise = aiRankDocuments(templateMetadata, topCandidates.map(m => m.metadata), workspaceSlug)
-      const timeoutPromise = new Promise<DocumentMatch[]>((_, reject) => 
-        setTimeout(() => reject(new Error('AI ranking timeout')), AI_RANKING_TIMEOUT_MS)
-      )
-      
-      const aiRankings = await Promise.race([aiRankingPromise, timeoutPromise])
-      
-      if (aiRankings.length > 0) {
-        // Merge AI rankings with remaining rule-based matches
-        const aiRankedIds = new Set(aiRankings.map(d => d.metadata.id).filter((id): id is number => id !== undefined))
-        const remaining = ruleBasedMatches.filter(d => d.metadata.id && !aiRankedIds.has(d.metadata.id))
-        relevantDocuments = [...aiRankings, ...remaining]
-        
-        logInfo(`[METADATA-MATCHING] AI ranking complete (${aiRankings.length} ranked by AI, top score: ${aiRankings[0]?.relevanceScore || 0})`)
-      } else {
-        logInfo('[METADATA-MATCHING] AI returned no rankings, using rule-based')
-      }
-    } catch (err) {
-      logError(`[METADATA-MATCHING] AI ranking failed/timeout, using rule-based: ${(err as Error).message}`)
-      // relevantDocuments already set to ruleBasedMatches above
-    }
-  } else {
-    logInfo('[METADATA-MATCHING] Skipping AI ranking (no workspace or no candidates)')
-  }
-
-  // OPTIMIZATION 5: Cache the results
-  relevanceCache.set(cacheKey, {
-    rankings: relevantDocuments,
-    timestamp: Date.now()
-  })
-  
-  // Clean old cache entries (keep last 100)
-  if (relevanceCache.size > 100) {
-    const sorted = Array.from(relevanceCache.entries())
-      .sort((a, b) => b[1].timestamp - a[1].timestamp)
-    relevanceCache.clear()
-    sorted.slice(0, 100).forEach(([k, v]) => relevanceCache.set(k, v))
-  }
+  logInfo(`[METADATA-MATCHING] Context built, top score: ${relevantDocuments[0]?.relevanceScore || 0}/10`)
 
   // Build prompt enhancement based on metadata
   let promptEnhancement = ''
@@ -531,4 +430,225 @@ function buildDocumentSummaries(relevantDocuments: DocumentMatch[]): string {
   }
 
   return documentSummaries
+}
+
+/**
+ * Calculate template relevance scores for a given document using AI
+ * Returns templates ranked by relevance to the document
+ */
+export async function calculateDocumentTemplateRelevance(
+  docMetadata: DocumentMetadata,
+  workspaceSlug?: string
+): Promise<Array<{ templateSlug: string, templateName: string, score: number, reasoning: string }>> {
+  logInfo(`[METADATA-MATCHING] Calculating template relevance for document: ${docMetadata.filename}`)
+  
+  try {
+    // Get all templates
+    const db = getDB()
+    const templates: TemplateMetadata[] = await new Promise((resolve, reject) => {
+      db.all(
+        `SELECT * FROM template_metadata`,
+        [],
+        async (err, rows: any[]) => {
+          if (err) return reject(err)
+          
+          const promises = rows.map(row => loadTemplateMetadata(row.templateSlug))
+          const results = await Promise.all(promises)
+          resolve(results.filter(t => t !== null) as TemplateMetadata[])
+        }
+      )
+    })
+    
+    if (templates.length === 0) {
+      logInfo(`[METADATA-MATCHING] No templates found with metadata`)
+      return []
+    }
+
+    // Try AI-powered similarity scoring if workspace is available
+    if (workspaceSlug) {
+      try {
+        const aiScores = await aiCalculateTemplateSimilarity(docMetadata, templates, workspaceSlug)
+        if (aiScores.length > 0) {
+          logInfo(`[METADATA-MATCHING] AI calculated relevance for ${aiScores.length} templates`)
+          if (aiScores.length > 0) {
+            logInfo(`[METADATA-MATCHING] Top match: ${aiScores[0].templateName} (${aiScores[0].score}/10)`)
+          }
+          return aiScores
+        }
+      } catch (err) {
+        logError(`[METADATA-MATCHING] AI similarity scoring failed, falling back to rule-based:`, err)
+      }
+    }
+    
+    // Fallback: Rule-based calculation
+    logInfo(`[METADATA-MATCHING] Using rule-based similarity scoring`)
+    const relevanceScores = templates.map(template => {
+      const result = calculateBasicRelevance(template, docMetadata)
+      const reasoning = result.reasons.join('; ') || (result.score > 5 ? 'General compatibility' : 'Low compatibility')
+      
+      return {
+        templateSlug: template.templateSlug,
+        templateName: template.templateName,
+        score: result.score,
+        reasoning
+      }
+    })
+    
+    // Sort by score descending
+    const sorted = relevanceScores.sort((a, b) => b.score - a.score)
+    
+    logInfo(`[METADATA-MATCHING] Calculated relevance for ${sorted.length} templates`)
+    if (sorted.length > 0) {
+      logInfo(`[METADATA-MATCHING] Top match: ${sorted[0].templateName} (${sorted[0].score}/10)`)
+    }
+    
+    return sorted
+  } catch (err) {
+    logError(`[METADATA-MATCHING] Error calculating template relevance:`, err)
+    return []
+  }
+}
+
+/**
+ * Use AI to calculate similarity scores between document and templates
+ */
+async function aiCalculateTemplateSimilarity(
+  docMetadata: DocumentMetadata,
+  templates: TemplateMetadata[],
+  workspaceSlug: string
+): Promise<Array<{ templateSlug: string, templateName: string, score: number, reasoning: string }>> {
+  
+  const prompt = `You are a document-template matching expert. Analyze this document's metadata and score how well it matches each template (0-10 scale).
+
+DOCUMENT METADATA:
+Filename: ${docMetadata.filename}
+Type: ${docMetadata.documentType || 'Unknown'}
+Purpose: ${docMetadata.purpose || 'Not specified'}
+Data Categories: ${docMetadata.dataCategories?.join(', ') || 'None'}
+Key Topics: ${docMetadata.keyTopics?.join(', ') || 'None'}
+Has Tables: ${docMetadata.hasTables ? 'Yes' : 'No'}
+Has Metrics: ${(docMetadata.extraFields?.metrics as string[] | undefined)?.length || 0}
+Date Range: ${docMetadata.dateRange || docMetadata.meetingDate || 'None'}
+Structure: ${docMetadata.extraFields?.dataStructure || 'Not specified'}
+
+TEMPLATES TO MATCH AGAINST:
+${templates.map((t, idx) => `
+${idx + 1}. ${t.templateName} (${t.templateSlug})
+   Purpose: ${t.purpose || 'Not specified'}
+   Required Data Types: ${t.requiredDataTypes?.join(', ') || 'None'}
+   Expected Entities: ${t.expectedEntities?.join(', ') || 'None'}
+   Compatible Doc Types: ${t.compatibleDocumentTypes?.join(', ') || 'Any'}
+   Needs Aggregation: ${t.requiresAggregation ? 'Yes' : 'No'}
+   Needs Time-Series: ${t.requiresTimeSeries ? 'Yes' : 'No'}
+   Has Tables: ${t.hasTables ? 'Yes' : 'No'}
+`).join('\n')}
+
+Score each template 0-10 based on:
+- Data type match (most important)
+- Document type compatibility
+- Entity/topic overlap
+- Structural alignment (tables, metrics, dates)
+
+Return ONLY a JSON array:
+[
+  {
+    "templateSlug": "slug-here",
+    "score": 8.5,
+    "reasoning": "Perfect match - document has all required inventory data types and metrics"
+  },
+  ...
+]
+
+Be specific in reasoning. Score strictly - only give 7+ if document truly has what template needs.`
+
+  const result = await anythingllmRequest<any>(
+    `/workspace/${encodeURIComponent(workspaceSlug)}/chat`,
+    'POST',
+    {
+      message: prompt,
+      mode: 'query'
+    }
+  )
+
+  const responseText = String(result?.textResponse || result?.message || '')
+  
+  // Extract JSON from response
+  const jsonMatch = responseText.match(/\[[\s\S]*\]/);
+  if (!jsonMatch) {
+    logError('[METADATA-MATCHING] AI response did not contain valid JSON array')
+    return []
+  }
+
+  const aiScores = JSON.parse(jsonMatch[0]) as Array<{
+    templateSlug: string
+    score: number
+    reasoning: string
+  }>
+
+  // Match scores with template names and sort
+  const matches = aiScores
+    .map(aiScore => {
+      const template = templates.find(t => t.templateSlug === aiScore.templateSlug)
+      if (!template) return null
+      
+      return {
+        templateSlug: aiScore.templateSlug,
+        templateName: template.templateName,
+        score: Math.min(10, Math.max(0, aiScore.score)), // Clamp to 0-10
+        reasoning: aiScore.reasoning
+      }
+    })
+    .filter((match): match is { templateSlug: string, templateName: string, score: number, reasoning: string } => match !== null)
+    .sort((a, b) => b.score - a.score)
+
+  return matches
+}
+
+/**
+ * Generate reasoning text for why a template matches a document
+ * (Deprecated - now using reasons from calculateBasicRelevance)
+ */
+function generateReasoningForTemplate(
+  template: TemplateMetadata,
+  doc: DocumentMetadata,
+  score: number
+): string {
+  const reasons: string[] = []
+  
+  // Data type matches
+  if (template.requiredDataTypes && doc.dataCategories) {
+    const matches = template.requiredDataTypes.filter(req =>
+      doc.dataCategories?.some(cat =>
+        cat.toLowerCase().includes(req.toLowerCase()) ||
+        req.toLowerCase().includes(cat.toLowerCase())
+      )
+    )
+    if (matches.length > 0) {
+      reasons.push(`Matches data types: ${matches.join(', ')}`)
+    }
+  }
+  
+  // Structure matches
+  if (template.hasTables && doc.hasTables) {
+    reasons.push('Both contain tables')
+  }
+  
+  // Topic/entity overlap
+  if (template.expectedEntities && doc.keyTopics) {
+    const overlaps = template.expectedEntities.filter(entity =>
+      doc.keyTopics?.some(topic =>
+        topic.toLowerCase().includes(entity.toLowerCase()) ||
+        entity.toLowerCase().includes(topic.toLowerCase())
+      )
+    )
+    if (overlaps.length > 0) {
+      reasons.push(`Topic overlap: ${overlaps.join(', ')}`)
+    }
+  }
+  
+  if (reasons.length === 0) {
+    return score > 5 ? 'General compatibility' : 'Low compatibility'
+  }
+  
+  return reasons.join('; ')
 }

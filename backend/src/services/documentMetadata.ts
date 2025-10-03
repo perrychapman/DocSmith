@@ -5,6 +5,7 @@ import { anythingllmRequest } from './anythingllm'
 import { getDB } from './storage'
 import { logInfo, logError } from '../utils/logger'
 import { analyzeSpreadsheet, analyzeCSV, type SpreadsheetAnalysis } from './fileAnalyzer'
+import { calculateDocumentTemplateRelevance, type DocumentMatch } from './metadataMatching'
 
 /**
  * Document metadata structure for enhanced RAG and intelligent analysis
@@ -518,11 +519,35 @@ Return ONLY a valid JSON object with the exact structure specified above. No mar
 
 /**
  * Saves metadata to database
+ * Also calculates and stores template relevance scores using AI
  */
-export function saveDocumentMetadata(
+export async function saveDocumentMetadata(
   customerId: number,
-  metadata: DocumentMetadata
+  metadata: DocumentMetadata,
+  workspaceSlug?: string
 ): Promise<void> {
+  // Calculate template relevance scores using AI if workspace available
+  try {
+    const templateRelevance = await calculateDocumentTemplateRelevance(metadata, workspaceSlug)
+    
+    // Store top 10 template matches in extraFields
+    const topMatches = templateRelevance.slice(0, 10).map(t => ({
+      slug: t.templateSlug,
+      name: t.templateName,
+      score: t.score,
+      reasoning: t.reasoning
+    }))
+    
+    if (topMatches.length > 0) {
+      metadata.extraFields = metadata.extraFields || {}
+      metadata.extraFields.templateRelevance = topMatches
+      logInfo(`[METADATA] Calculated template relevance: Top match is ${topMatches[0].name} (${topMatches[0].score}/10)`)
+    }
+  } catch (err) {
+    logError('[METADATA] Failed to calculate template relevance:', err)
+    // Continue saving metadata even if template relevance calculation fails
+  }
+  
   return new Promise((resolve, reject) => {
     const db = getDB()
     

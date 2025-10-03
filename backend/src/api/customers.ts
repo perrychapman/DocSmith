@@ -96,6 +96,7 @@ router.post("/", (req, res) => {
       // Create LIBRARY_ROOT/customers/{CustomerName}_{Mon_Year}/(inputs|prompts|documents)
       let folderWarning: string | undefined
       let workspaceWarning: string | undefined
+      let anythingLLMFolderWarning: string | undefined
       let workspace: { name?: string; slug?: string } | undefined
       try {
         ensureCustomerLibrary(this.lastID, name!, new Date(createdAt))
@@ -104,10 +105,21 @@ router.post("/", (req, res) => {
       }
 
       const { customerDir } = resolveCustomerPaths(this.lastID, name!, new Date(createdAt))
+      const folderName = folderNameForCustomer(this.lastID, name!, new Date(createdAt))
+
+      // Create AnythingLLM document folder for this customer
+      try {
+        await anythingllmRequest<{ success: boolean; message: string | null }>(
+          "/document/create-folder",
+          "POST",
+          { name: folderName }
+        )
+      } catch (e) {
+        anythingLLMFolderWarning = `Customer created, but failed to create AnythingLLM folder: ${(e as Error).message}`
+      }
 
       // Also create AnythingLLM workspace titled the same as the folder name
       try {
-        const folderName = folderNameForCustomer(this.lastID, name!, new Date(createdAt))
         const resp = await anythingllmRequest<{ workspace: { id: number; name: string; slug: string }; message: string }>(
           "/workspace/new",
           "POST",
@@ -138,7 +150,8 @@ router.post("/", (req, res) => {
         folder: customerDir,
         ...(folderWarning ? { warning: folderWarning } : {}),
         ...(workspace ? { workspace } : {}),
-        ...(workspaceWarning ? { workspaceWarning } : {})
+        ...(workspaceWarning ? { workspaceWarning } : {}),
+        ...(anythingLLMFolderWarning ? { anythingLLMFolderWarning } : {})
       })
     }
   )
@@ -186,11 +199,17 @@ router.delete("/:id", (req, res) => {
                 return
               }
 
-              db.run("DELETE FROM customers WHERE id = ?", [id], (d3Err) => {
+              db.run("DELETE FROM document_metadata WHERE customerId = ?", [id], (d3Err) => {
                 if (d3Err) {
                   db.run("ROLLBACK", () => res.status(500).json({ error: d3Err.message }))
                   return
                 }
+
+                db.run("DELETE FROM customers WHERE id = ?", [id], (d4Err) => {
+                  if (d4Err) {
+                    db.run("ROLLBACK", () => res.status(500).json({ error: d4Err.message }))
+                    return
+                  }
 
                 db.run("COMMIT", async (commitErr) => {
                   if (commitErr) return res.status(500).json({ error: commitErr.message })
@@ -206,6 +225,7 @@ router.delete("/:id", (req, res) => {
                   // 4) Remove documents from the workspace, then permanently remove them; optionally delete the workspace
                   let workspaceWarning: string | undefined
                   let documentsWarning: string | undefined
+                  let anythingLLMFolderWarning: string | undefined
                   let wsSlugToClean: string | undefined
                   try {
                     const slug = (row as any)?.workspaceSlug
@@ -248,6 +268,17 @@ router.delete("/:id", (req, res) => {
                     } else if (shouldDeleteWorkspace) {
                       workspaceWarning = `No AnythingLLM workspace named '${folderName}' found`
                     }
+
+                    // Remove AnythingLLM document folder for this customer
+                    try {
+                      await anythingllmRequest<{ success: boolean; message: string }>(
+                        "/document/remove-folder",
+                        "DELETE",
+                        { name: folderName }
+                      )
+                    } catch (e) {
+                      anythingLLMFolderWarning = `Failed to remove AnythingLLM folder: ${(e as Error).message}`
+                    }
                   } catch (e) {
                     workspaceWarning = `Failed to contact AnythingLLM: ${(e as Error).message}`
                   }
@@ -261,7 +292,14 @@ router.delete("/:id", (req, res) => {
                     }
                   } catch {}
 
-                  return res.json({ ok: true, id, ...(warning ? { warning } : {}), ...(documentsWarning ? { documentsWarning } : {}), ...(workspaceWarning ? { workspaceWarning } : {}) })
+                  return res.json({ 
+                    ok: true, 
+                    id, 
+                    ...(warning ? { warning } : {}), 
+                    ...(documentsWarning ? { documentsWarning } : {}), 
+                    ...(workspaceWarning ? { workspaceWarning } : {}),
+                    ...(anythingLLMFolderWarning ? { anythingLLMFolderWarning } : {})
+                  })
                 })
               })
             })
@@ -270,6 +308,7 @@ router.delete("/:id", (req, res) => {
       })
     }
   )
+})
 })
 
 // GET /api/customers/:id/workspace - resolve AnythingLLM workspace for this customer by folder-based name

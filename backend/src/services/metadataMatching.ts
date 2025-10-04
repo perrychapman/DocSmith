@@ -554,12 +554,13 @@ Return ONLY a JSON array:
   {
     "templateSlug": "slug-here",
     "score": 8.5,
-    "reasoning": "Perfect match - document has all required inventory data types and metrics"
+    "reasoning": "Matches inventory data types and metrics"
   },
   ...
 ]
 
-Be specific in reasoning. Score strictly - only give 7+ if document truly has what template needs.`
+CRITICAL: Keep reasoning to less than 40 words. Be concise and specific.
+Score strictly - only give 7+ if document truly has what template needs.`
 
   const result = await anythingllmRequest<any>(
     `/workspace/${encodeURIComponent(workspaceSlug)}/chat`,

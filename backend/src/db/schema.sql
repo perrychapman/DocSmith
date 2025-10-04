@@ -53,6 +53,7 @@ CREATE TABLE IF NOT EXISTS document_metadata (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   customerId INTEGER NOT NULL,
   filename TEXT NOT NULL,
+  anythingllmPath TEXT, -- Full path in AnythingLLM (e.g., "Customer_Oct_2025/file-hash.json")
   uploadedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   fileSize INTEGER,
   documentType TEXT,

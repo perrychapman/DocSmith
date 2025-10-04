@@ -39,6 +39,7 @@ export function getDB(): sqlite3.Database {
     // Lightweight migrations for existing DBs
     try { ensureCustomersWorkspaceSlugColumn(db) } catch {}
     try { ensureDocumentMetadataExtraFieldsColumn(db) } catch {}
+    try { ensureDocumentMetadataAnythingllmPathColumn(db) } catch {}
   }
   return db
 }
@@ -88,6 +89,21 @@ export function ensureDocumentMetadataExtraFieldsColumn(handle: sqlite3.Database
       handle.run("ALTER TABLE document_metadata ADD COLUMN extraFields TEXT", (err) => {
         if (err) console.error('[MIGRATION] Failed to add extraFields column:', err)
         else console.log('[MIGRATION] Successfully added extraFields column')
+      })
+    })
+  })
+}
+
+export function ensureDocumentMetadataAnythingllmPathColumn(handle: sqlite3.Database) {
+  handle.serialize(() => {
+    handle.all("PRAGMA table_info(document_metadata)", (err, rows: any[]) => {
+      if (err) return
+      const has = Array.isArray(rows) && rows.some((r) => String(r?.name) === "anythingllmPath")
+      if (has) return
+      console.log('[MIGRATION] Adding anythingllmPath column to document_metadata table')
+      handle.run("ALTER TABLE document_metadata ADD COLUMN anythingllmPath TEXT", (err) => {
+        if (err) console.error('[MIGRATION] Failed to add anythingllmPath column:', err)
+        else console.log('[MIGRATION] Successfully added anythingllmPath column')
       })
     })
   })

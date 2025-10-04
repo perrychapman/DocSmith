@@ -10,6 +10,7 @@ import { anythingllmRequest } from "../services/anythingllm"
 import { createJob, createJobWithId, appendLog as jobLog, markJobDone, markJobError, setJobMeta, listJobs, getJob, stepStart as jobStepStart, stepOk as jobStepOk, cancelJob, isCancelled, initJobs, deleteJob, clearJobs } from "../services/genJobs"
 import { analyzeDocumentIntelligently } from "../services/documentIntelligence"
 import { buildMetadataEnhancedContext } from "../services/metadataMatching"
+
 import child_process from 'child_process'
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const Handlebars = require('handlebars')
@@ -73,8 +74,12 @@ router.post("/", async (req, res) => {
           const fullGenPath = path.join(tpl.dir, 'generator.full.ts')
           // Require full generator for all outputs
           if (fs.existsSync(fullGenPath)) {
+            // Declare these outside try block so they're accessible in catch for cleanup
+            let wsForGen: string | undefined
+
+            
             try {
-              const wsForGen = row.workspaceSlug || wsSlug
+              wsForGen = row.workspaceSlug || wsSlug
               if (!wsForGen) {
                 return res.status(400).json({ error: 'Customer workspace is required to generate. Please attach a workspace to this customer.' })
               }
@@ -245,11 +250,13 @@ router.post("/", async (req, res) => {
                 const aiPrompt = ((tpl as any).kind === 'excel')
                   ? `You are a senior TypeScript engineer and spreadsheet specialist. Update the following DocSmith Excel generator function to incorporate the ACTUAL WORKSPACE DATA provided below. Keep the EXACT export signature. Compose the final output by returning { sheets } (sheet ops). Do not import external modules or do file I/O.${dataGuidance}\nSTRICT CONSTRAINTS:
 - PRESERVE EXISTING SHEET STRUCTURE AND FORMATTING from the CURRENT GENERATOR CODE: do not alter existing fonts, colors, fills, borders, number formats, alignment, merged ranges, column widths, or sheet order unless absolutely necessary.
+- DYNAMIC EXPANSION REQUIRED: You MUST expand tables/rows to include ALL available data from the pinned documents. If the template shows 3 sample rows but workspace has 50 items, generate ALL 50 rows. Do not limit to template sample size.
 - You MAY append or insert new rows to accommodate variable-length data. Use insertRows with copyStyleFromRow when appropriate to preserve formatting. You MAY add new sheets when clearly necessary, but do not remove or reorder existing sheets.
 - Prefer preserving existing row/column styles; only specify formatting (numFmt, bold/italic/underline/strike, font color via hex, background fill, horizontal alignment, wrap) for new or dynamically added content.
 - If the template has a merged and centered header row, do not break its merge; write data starting below it unless the header text itself must be updated.
 - At runtime, toolkit.json/query/text are DISABLED. Encode all workspace data directly into the returned { sheets }.
-- For ${dataRowCount} rows, use the 'ranges' array for efficiency instead of individual cells.${documentAnalysis}${metadataContext}${workspaceData}${userAddendum}
+- For ${dataRowCount} rows, use the 'ranges' array for efficiency instead of individual cells.
+- EXPAND LISTS AND SECTIONS: If workspace data contains more items than the template shows, expand the output to include everything. The template is a STARTING POINT, not a limit.${documentAnalysis}${metadataContext}${workspaceData}${userAddendum}
 
 Return type reminder:
 Promise<{ sheets: Array<{ name: string; insertRows?: Array<{ at: number; count: number; copyStyleFromRow?: number }>; cells?: Array<{ ref: string; v: string|number|boolean; numFmt?: string; bold?: boolean; italic?: boolean; underline?: boolean; strike?: boolean; color?: string; bg?: string; align?: 'left'|'center'|'right'; wrap?: boolean }>; ranges?: Array<{ start: string; values: any[][]; numFmt?: string }> }> }>;
@@ -264,11 +271,16 @@ ${tsCode}
                   : `You are a senior TypeScript engineer. Update the following DocSmith generator function to incorporate the ACTUAL WORKSPACE DATA provided below. Keep the EXACT export signature. Compose the final output as raw WordprocessingML (WML) via return { wml }. Do not import external modules or do file I/O. Maintain formatting with runs (color/size/bold/italic/underline/strike/font) and paragraph props (align/spacing/indents).${dataGuidance}
 STRICT CONSTRAINTS:
 - PRESERVE ALL EXISTING WML STRUCTURE AND STYLING from the CURRENT GENERATOR CODE: do not alter fonts, colors, sizes, spacing, numbering, table properties, headers/footers, or section settings.
+- DYNAMIC EXPANSION REQUIRED: You MUST expand tables, lists, and sections to include ALL available data from the pinned documents. If the template shows 3 sample items but workspace has 50 items, generate ALL 50 items. Do not limit to template sample size.
+- For TABLES: Add as many <w:tr> (table rows) as needed to include all data. Preserve row formatting from template.
+- For LISTS: Add as many <w:p> (paragraphs) with list numbering as needed. Preserve list styling from template.
+- For SECTIONS: Replicate section structure for each item if data is grouped/categorized.
 - ONLY substitute text content (and list/table cell values) with workspace-derived strings.
-- DO NOT add, remove, or reorder sections/paragraphs/tables/runs unless absolutely necessary. If no data is found, keep the section and leave values empty rather than inventing content.
-- No boilerplate or extra headings; do not add content beyond what the template structure implies.
+- DO NOT add, remove, or reorder sections/paragraphs/tables/runs unless necessary for data expansion. If no data is found, keep the section and leave values empty rather than inventing content.
+- No boilerplate or extra headings; do not add content beyond what the template structure implies and data expansion requires.
 - IMPORTANT: At runtime, toolkit.json/query/text are DISABLED. Encode all workspace data directly in the returned WML.
-- For ${dataRowCount} table rows, build them all with proper WML structure.${documentAnalysis}${metadataContext}${workspaceData}${userAddendum}
+- For ${dataRowCount} table rows, build them all with proper WML structure.
+- EXPAND DYNAMICALLY: The template is a STARTING POINT and STYLE GUIDE, not a limit on output size. Include all relevant data from pinned documents.${documentAnalysis}${metadataContext}${workspaceData}${userAddendum}
 
 Only output TypeScript code with the updated generate implementation.
 
@@ -546,6 +558,7 @@ ${tsCode}
                   const outPathLocal = path.join(docsDir, fnameLocal + '.docx')
                   try { jobLog(job.id, `outfile:${path.basename(outPathLocal)}`) } catch {}
                   fs.writeFileSync(outPathLocal, merged)
+                  
                   markJobDone(job.id, { path: outPathLocal, name: path.basename(outPathLocal) }, { usedWorkspace })
                   return res.status(201).json({ ok: true, file: { path: outPathLocal, name: path.basename(outPathLocal) }, ...(usedWorkspace ? { usedWorkspace } : {}), logs: [...logs, 'fullgen:ok'], jobId: job.id })
                 } else if ((tpl as any).kind === 'excel') {
@@ -566,6 +579,7 @@ ${tsCode}
                   const outPathLocal = path.join(docsDir, fnameLocal + '.xlsx')
                   try { jobLog(job.id, `outfile:${path.basename(outPathLocal)}`) } catch {}
                   fs.writeFileSync(outPathLocal, mergedBuf)
+                  
                   markJobDone(job.id, { path: outPathLocal, name: path.basename(outPathLocal) }, { usedWorkspace })
                   return res.status(201).json({ ok: true, file: { path: outPathLocal, name: path.basename(outPathLocal) }, ...(usedWorkspace ? { usedWorkspace } : {}), logs: [...logs, 'fullgen:ok'], jobId: job.id })
                 } else {
@@ -574,6 +588,7 @@ ${tsCode}
                 }
               }
             } catch (e:any) {
+              
               const em = `Full generator failed: ${e?.message || e}`
               logs.push(`fullgen:error ${(e?.message||e)}`)
               try { const j = (jobId ? getJob(String(jobId)) : undefined); if (j) { jobLog(j.id, `error:${em}`); markJobError(j.id, em) } } catch {}

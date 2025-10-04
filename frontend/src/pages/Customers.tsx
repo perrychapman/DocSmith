@@ -6,7 +6,7 @@ import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbP
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, DialogDescription, DialogClose } from "../components/ui/dialog";
 import { Icon } from "../components/icons";
-import { Maximize2, Minimize2, Search, ExternalLink, Download, FileText, FileSpreadsheet, FileCode, FileQuestion, FileType, Info, Loader2 } from "lucide-react";
+import { Maximize2, Minimize2, Search, ExternalLink, Download, FileText, FileSpreadsheet, FileCode, FileQuestion, FileType, Info, Loader2, Pin, PinOff } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "../components/ui/tooltip";
 import { A, apiFetch, apiEventSource } from "../lib/api";
 import WorkspaceChat from "../components/WorkspaceChat";
@@ -48,6 +48,8 @@ export function CustomersPage() {
   const [uploadOpen, setUploadOpen] = React.useState(false);
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
   const [counts, setCounts] = React.useState<Record<number, { docs?: number; chats?: number }>>({});
+  const [pinningTest, setPinningTest] = React.useState<string | null>(null);
+  const [pinnedDocs, setPinnedDocs] = React.useState<Set<string>>(new Set());
   const [countsLoading, setCountsLoading] = React.useState(false);
   const [generateOpen, setGenerateOpen] = React.useState(false);
   const [templates, setTemplates] = React.useState<Array<{ slug: string; name: string }>>([]);
@@ -61,6 +63,9 @@ export function CustomersPage() {
   const [genProgress, setGenProgress] = React.useState<number | null>(null);
   const [genJobId, setGenJobId] = React.useState<string | null>(null);
   const [genError, setGenError] = React.useState<string | null>(null);
+  const [genDocuments, setGenDocuments] = React.useState<Array<{ name: string; relevance: number; reasoning: string; anythingllmPath?: string }>>([]);
+  const [genPinnedDocs, setGenPinnedDocs] = React.useState<Set<string>>(new Set());
+  const [loadingGenDocs, setLoadingGenDocs] = React.useState(false);
   // External chat cards to display generation metadata in chat
   const [chatCards, setChatCards] = React.useState<Array<{ id: string; template?: string; jobId?: string; jobStatus?: 'running' | 'done' | 'error' | 'cancelled'; filename?: string; aiContext?: string; timestamp?: number; side?: 'user' | 'assistant' }>>([]);
 
@@ -321,16 +326,138 @@ export function CustomersPage() {
     return () => { ignore = true };
   }, [generateOpen]);
 
+  // Load documents with relevance scores when template is selected
+  React.useEffect(() => {
+    if (!generateOpen || !selectedTemplate || !selectedId) {
+      setGenDocuments([]);
+      setGenPinnedDocs(new Set());
+      return;
+    }
+    
+    let ignore = false;
+    (async () => {
+      setLoadingGenDocs(true);
+      try {
+        // Get all uploads with metadata
+        const uploadsRes = await apiFetch(`/api/uploads/${selectedId}`);
+        if (!uploadsRes.ok) throw new Error('Failed to load uploads');
+        const allUploads: UploadItem[] = await uploadsRes.json();
+        
+        // Load metadata for each upload to get relevance scores
+        const docsWithRelevance = await Promise.all(
+          allUploads.map(async (upload) => {
+            try {
+              const metaRes = await apiFetch(`/api/uploads/${selectedId}/metadata?name=${encodeURIComponent(upload.name)}`);
+              if (!metaRes.ok) return null;
+              const metaData = await metaRes.json();
+              const metadata = metaData.metadata;
+              
+              if (!metadata?.extraFields?.templateRelevance) return null;
+              
+              const relevance = metadata.extraFields.templateRelevance.find(
+                (r: any) => r.slug === selectedTemplate
+              );
+              
+              if (!relevance) return null;
+              
+              return {
+                name: upload.name,
+                relevance: relevance.score,
+                reasoning: relevance.reasoning,
+                anythingllmPath: metadata.anythingllmPath
+              };
+            } catch {
+              return null;
+            }
+          })
+        );
+        
+        const validDocs = docsWithRelevance
+          .filter((d): d is NonNullable<typeof d> => d !== null)
+          .sort((a, b) => b.relevance - a.relevance);
+        
+        if (!ignore) {
+          setGenDocuments(validDocs);
+          // Auto-pin documents with score >= 7
+          const autoPinned = new Set(
+            validDocs
+              .filter(d => d.relevance >= 7)
+              .map(d => d.name)
+          );
+          setGenPinnedDocs(autoPinned);
+        }
+      } catch (err) {
+        console.error('Failed to load document relevance:', err);
+      } finally {
+        if (!ignore) setLoadingGenDocs(false);
+      }
+    })();
+    
+    return () => { ignore = true };
+  }, [generateOpen, selectedTemplate, selectedId]);
+
   async function generateDocument() {
     if (!selectedId) { toast.error("Select a customer first"); return; }
     if (!selectedTemplate) { toast.error("Choose a template"); return; }
+    if (!wsSlug) { toast.error("Customer workspace not found"); return; }
+    
     try {
       setGenerating(true);
+      
+      // Step 1: Get ALL documents in workspace and unpin them
+      toast.info('Preparing workspace documents...');
+      try {
+        const wsRes = await apiFetch(`/api/anythingllm/workspace/${encodeURIComponent(wsSlug)}`);
+        if (wsRes.ok) {
+          const wsData = await wsRes.json();
+          const allDocs = wsData?.workspace?.documents || [];
+          
+          // Unpin ALL documents first
+          for (const doc of allDocs) {
+            try {
+              await apiFetch(`/api/anythingllm/workspace/${encodeURIComponent(wsSlug)}/update-pin`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ docPath: doc.docpath, pinStatus: false })
+              });
+            } catch (err) {
+              console.error(`Failed to unpin ${doc.docpath}:`, err);
+            }
+          }
+        }
+      } catch (err) {
+        console.error('Failed to fetch workspace documents:', err);
+      }
+      
+      // Step 2: Pin ONLY selected documents
+      const docsToPinList = genDocuments.filter(d => genPinnedDocs.has(d.name) && d.anythingllmPath);
+      if (docsToPinList.length > 0) {
+        toast.info(`Pinning ${docsToPinList.length} selected document(s)...`);
+        for (const doc of docsToPinList) {
+          try {
+            await apiFetch(`/api/anythingllm/workspace/${encodeURIComponent(wsSlug)}/update-pin`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ docPath: doc.anythingllmPath, pinStatus: true })
+            });
+            // Update UI state for document cards
+            setPinnedDocs(prev => {
+              const next = new Set(prev);
+              next.add(doc.name);
+              return next;
+            });
+          } catch (err) {
+            console.error(`Failed to pin ${doc.name}:`, err);
+          }
+        }
+      }
+      
+      // Step 2: Start generation
       setGenSteps({}); setGenProgress(0); setGenError(null);
-      const extra = genInstructions && genInstructions.trim().length ? `&instructions=${encodeURIComponent(genInstructions)}` : ''
-      const url = `/api/generate/stream?customerId=${encodeURIComponent(String(selectedId))}&template=${encodeURIComponent(String(selectedTemplate))}${extra}`
-      const es = apiEventSource(url)
-      genEventRef.current = es
+      const extra = genInstructions && genInstructions.trim().length ? `&instructions=${encodeURIComponent(genInstructions)}` : '';
+      const url = `/api/generate/stream?customerId=${encodeURIComponent(String(selectedId))}&template=${encodeURIComponent(String(selectedTemplate))}${extra}`;
+      const es = apiEventSource(url);
+      genEventRef.current = es;
       let fileName: string | null = null
       es.onmessage = (ev) => {
         try {
@@ -436,6 +563,27 @@ export function CustomersPage() {
               setGenerating(false);
               setGenJobId(null);
             }
+            // Unpin documents after successful generation
+            (async () => {
+              const docsToPinList = genDocuments.filter(d => genPinnedDocs.has(d.name) && d.anythingllmPath);
+              for (const doc of docsToPinList) {
+                try {
+                  await apiFetch(`/api/anythingllm/workspace/${encodeURIComponent(wsSlug!)}/update-pin`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ docPath: doc.anythingllmPath, pinStatus: false })
+                  });
+                  // Update UI state for document cards
+                  setPinnedDocs(prev => {
+                    const next = new Set(prev);
+                    next.delete(doc.name);
+                    return next;
+                  });
+                } catch (err) {
+                  console.error(`Failed to unpin ${doc.name}:`, err);
+                }
+              }
+            })();
               // Refresh uploads
               (async () => { try { const r2 = await apiFetch(`/api/uploads/${selectedId}`); const d2: UploadItem[] = await r2.json(); setUploads(Array.isArray(d2) ? d2 : []) } catch { } })()
             toast.success('Document generated')
@@ -451,6 +599,27 @@ export function CustomersPage() {
           setChatCards((prev) => prev.map((c) => c.id === jid ? { ...c, jobStatus: 'error', timestamp: now } : c))
           if (wsSlug) { A.upsertGenCard({ id: jid, workspaceSlug: wsSlug, side: 'user', template: selectedTemplate || undefined, jobId: jid, jobStatus: 'error', aiContext: genInstructions || undefined, timestamp: now }).catch(() => { }) }
         }
+        // Unpin documents on error
+        (async () => {
+          const docsToPinList = genDocuments.filter(d => genPinnedDocs.has(d.name) && d.anythingllmPath);
+          for (const doc of docsToPinList) {
+            try {
+              await apiFetch(`/api/anythingllm/workspace/${encodeURIComponent(wsSlug!)}/update-pin`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ docPath: doc.anythingllmPath, pinStatus: false })
+              });
+              // Update UI state for document cards
+              setPinnedDocs(prev => {
+                const next = new Set(prev);
+                next.delete(doc.name);
+                return next;
+              });
+            } catch (err) {
+              console.error(`Failed to unpin ${doc.name}:`, err);
+            }
+          }
+        })();
         es.close(); genEventRef.current = null; setGenerating(false); setGenJobId(null)
         toast.error('Stream disconnected')
       }
@@ -579,6 +748,53 @@ export function CustomersPage() {
       toast.error("Failed to delete");
     } finally {
       setDeleting(null);
+    }
+  }
+
+  async function togglePinDocument(name: string) {
+    if (!selectedId || !wsSlug) return;
+    const isPinned = pinnedDocs.has(name);
+    
+    try {
+      setPinningTest(name);
+      
+      // Get metadata to find anythingllmPath
+      const metaRes = await apiFetch(`/api/uploads/${selectedId}/metadata?name=${encodeURIComponent(name)}`);
+      if (!metaRes.ok) throw new Error('Failed to load metadata');
+      const metaData = await metaRes.json();
+      const anythingllmPath = metaData.metadata?.anythingllmPath;
+      
+      if (!anythingllmPath) {
+        toast.error('Document missing AnythingLLM path - re-upload to fix');
+        return;
+      }
+      
+      // Pin or unpin the document
+      const res = await apiFetch(`/api/anythingllm/workspace/${encodeURIComponent(wsSlug)}/update-pin`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ docPath: anythingllmPath, pinStatus: !isPinned })
+      });
+      
+      if (!res.ok) throw new Error(`${isPinned ? 'Unpin' : 'Pin'} failed`);
+      
+      // Update state
+      setPinnedDocs(prev => {
+        const next = new Set(prev);
+        if (isPinned) {
+          next.delete(name);
+        } else {
+          next.add(name);
+        }
+        return next;
+      });
+      
+      toast.success(`${isPinned ? 'Unpinned' : 'Pinned'}: ${anythingllmPath}`);
+    } catch (err: any) {
+      toast.error(`${isPinned ? 'Unpin' : 'Pin'} failed: ${err.message}`);
+      console.error('Pin toggle error:', err);
+    } finally {
+      setPinningTest(null);
     }
   }
 
@@ -1131,6 +1347,25 @@ export function CustomersPage() {
                                     </Tooltip>
                                     <Tooltip>
                                       <TooltipTrigger>
+                                        <Button 
+                                          size="icon" 
+                                          variant={pinnedDocs.has(u.name) ? "default" : "outline"}
+                                          className="h-9 w-9" 
+                                          disabled={pinningTest === u.name || !wsSlug}
+                                          onClick={() => togglePinDocument(u.name)} 
+                                          aria-label={`${pinnedDocs.has(u.name) ? 'Unpin' : 'Pin'} ${u.name}`}
+                                        >
+                                          {pinningTest === u.name ? (
+                                            <Loader2 className="h-4 w-4 animate-spin" />
+                                          ) : (
+                                            <Pin className={`h-4 w-4 ${pinnedDocs.has(u.name) ? 'fill-current' : ''}`} />
+                                          )}
+                                        </Button>
+                                      </TooltipTrigger>
+                                      <TooltipContent>{pinnedDocs.has(u.name) ? 'Unpin' : 'Pin'} Document</TooltipContent>
+                                    </Tooltip>
+                                    <Tooltip>
+                                      <TooltipTrigger>
                                         <Button size="icon" variant="destructive" className="h-9 w-9" disabled={uploading || deleting === u.name} onClick={() => deleteUpload(u.name)} aria-label={`Delete ${u.name}`}>
                                           {deleting === u.name ? '.' : <Icon.Trash className="h-4 w-4" />}
                                         </Button>
@@ -1241,17 +1476,17 @@ export function CustomersPage() {
 
       {/* Generate Document Dialog */}
       <Dialog open={generateOpen} onOpenChange={setGenerateOpen}>
-        <DialogContent>
+        <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>Generate Document</DialogTitle>
             <DialogDescription>
-              Generate documents using this customer's workspace and selected template.
+              Select template and documents to include in generation.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-3">
+          <div className="space-y-4">
             <div>
-              <label className="text-sm">Template</label>
-              <select className="mt-1 w-full border rounded-md h-9 px-2 bg-background" value={selectedTemplate} onChange={(e) => setSelectedTemplate(e.target.value)} disabled={loadingTemplates}>
+              <label className="text-sm font-medium">Template</label>
+              <select className="mt-1 w-full border rounded-md h-9 px-2 bg-background" value={selectedTemplate} onChange={(e) => setSelectedTemplate(e.target.value)} disabled={loadingTemplates || generating}>
                 {loadingTemplates ? <option>Loading templates...</option> : (
                   templates.length ? templates.map((t) => (
                     <option key={t.slug} value={t.slug}>{t.name || t.slug}</option>
@@ -1259,14 +1494,77 @@ export function CustomersPage() {
                 )}
               </select>
             </div>
+            
+            {/* Document selection with relevance scores */}
+            {selectedTemplate && (
+              <div>
+                <label className="text-sm font-medium">
+                  Documents to Include ({genPinnedDocs.size} selected)
+                </label>
+                <div className="mt-2 border rounded-md max-h-[280px] overflow-y-auto">
+                  {loadingGenDocs ? (
+                    <div className="p-4 text-sm text-muted-foreground text-center">
+                      Loading document relevance scores...
+                    </div>
+                  ) : genDocuments.length === 0 ? (
+                    <div className="p-4 text-sm text-muted-foreground text-center">
+                      No documents with metadata found for this template
+                    </div>
+                  ) : (
+                    <div className="divide-y">
+                      {genDocuments.map((doc) => {
+                        const isPinned = genPinnedDocs.has(doc.name);
+                        const scoreColor = doc.relevance >= 8 ? 'text-green-600' : doc.relevance >= 6 ? 'text-yellow-600' : 'text-gray-500';
+                        
+                        return (
+                          <div key={doc.name} className="p-3 hover:bg-muted/50 transition">
+                            <div className="flex items-start gap-3">
+                              <Button
+                                size="icon"
+                                variant={isPinned ? "default" : "outline"}
+                                className="h-8 w-8 shrink-0 mt-0.5"
+                                onClick={() => {
+                                  setGenPinnedDocs(prev => {
+                                    const next = new Set(prev);
+                                    if (isPinned) next.delete(doc.name);
+                                    else next.add(doc.name);
+                                    return next;
+                                  });
+                                }}
+                                disabled={generating}
+                              >
+                                <Pin className={`h-3.5 w-3.5 ${isPinned ? 'fill-current' : ''}`} />
+                              </Button>
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm font-medium truncate">{doc.name}</span>
+                                  <Badge variant="outline" className={`text-xs shrink-0 ${scoreColor}`}>
+                                    {doc.relevance.toFixed(1)}/10
+                                  </Badge>
+                                </div>
+                                <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
+                                  {doc.reasoning}
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+            
             <div>
-              <label className="text-sm">Additional AI context (optional)</label>
+              <label className="text-sm font-medium">Additional Instructions (optional)</label>
               <Textarea
                 className="mt-1 w-full"
-                rows={4}
-                placeholder="e.g., only include specific sources, reference meeting notes from last week, keep answers concise, etc."
+                rows={3}
+                placeholder="e.g., focus on Q3 data, keep it concise, etc."
                 value={genInstructions}
                 onChange={(e) => setGenInstructions(e.target.value)}
+                disabled={generating}
               />
             </div>
             {generating ? (
@@ -1275,7 +1573,7 @@ export function CustomersPage() {
           </div>
           <DialogFooter>
             <Button variant="secondary" onClick={() => setGenerateOpen(false)} disabled={generating}>Cancel</Button>
-            <Button onClick={generateDocument} disabled={!selectedId || !selectedTemplate || generating} aria-label="Confirm generate">
+            <Button onClick={generateDocument} disabled={!selectedId || !selectedTemplate || generating || genPinnedDocs.size === 0} aria-label="Confirm generate">
               {generating ? 'Generating...' : 'Generate'}
             </Button>
           </DialogFooter>

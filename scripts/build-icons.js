@@ -53,7 +53,7 @@ function updatePackageJsonIcons(platform = 'win32') {
   // Write back to package.json
   fs.writeFileSync(packageJsonPath, JSON.stringify(packageJson, null, 4));
   
-  console.log(`✓ Updated icons for ${platform}:`);
+  console.log(`Updated icons for ${platform}:`);
   console.log(`  App icon: ${packageJson.build.icon}`);
   if (platform === 'win32') {
     console.log(`  Installer icon: ${packageJson.build.nsis.installerIcon}`);

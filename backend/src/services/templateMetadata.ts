@@ -208,14 +208,14 @@ IGNORE placeholder/sample data values in the template. Focus on the TEMPLATE STR
   }
 
   if (isExcel) {
-    analysisPrompt += `This is a SPREADSHEET TEMPLATE. Analyze it thoroughly.
+    analysisPrompt += `This is a SPREADSHEET TEMPLATE. Analyze what DATA this template NEEDS to generate its output.
 
 ANALYZE THESE ASPECTS:
 1. **Template Type**: What kind of report/dashboard is this? (Financial Report, Inventory Tracker, Sales Dashboard, Project Status, KPI Dashboard, Budget Planner, etc.)
 2. **Purpose**: What business problem does this solve? What information does it communicate?
 3. **Data Requirements**: 
-   - What TYPES of data does it need? (Financial numbers, Inventory quantities, Customer info, Dates/timelines, Product details, etc.)
-   - What ENTITIES are central? (Products, Customers, Orders, Projects, Employees, Transactions, Assets, etc.)
+   - What TYPES of data does it need? Use STANDARDIZED taxonomy: Financial, Inventory, Sales, Customer, Timeline, Operational, Personnel, Project, Product, Order, Asset, Technical, Marketing, HR, Compliance, Quality, Manufacturing, Supply Chain
+   - What ENTITIES are central? BE SPECIFIC: Products, Customers, Orders, Transactions, Employees, Projects, Assets, Vendors, Invoices, Inventory Items, Sales Leads, Contracts, Services, etc.
    - What STRUCTURE is needed? (Raw transaction lists, Pre-aggregated summaries, Time-series data, Hierarchical data, etc.)
 4. **Operations Needed**:
    - Aggregation? (Does it need SUMs, AVERAGEs, COUNTs, totals?)
@@ -226,9 +226,9 @@ ANALYZE THESE ASPECTS:
 6. **Audience & Use Cases**: Who uses this? When? For what decisions?
 
 EXAMPLES:
-- A template with product columns, quantity, cost, and SUM formulas → requiredDataTypes: ["Inventory", "Financial"], expectedEntities: ["Products"], requiresAggregation: true
+- A template with product columns, quantity, cost, and SUM formulas → requiredDataTypes: ["Inventory", "Financial", "Product"], expectedEntities: ["Products", "Inventory Items"], requiresAggregation: true
 - A template with monthly columns and line charts → requiredDataTypes: ["Timeline", "Financial"], requiresTimeSeries: true
-- A template comparing Q1 vs Q2 → requiresComparisons: true
+- A template comparing Q1 vs Q2 → requiredDataTypes: ["Financial", "Timeline"], requiresComparisons: true
 
 Return ONLY this JSON structure:
 
@@ -236,8 +236,8 @@ Return ONLY this JSON structure:
   "templateType": "string (Report, Dashboard, Invoice, Analysis, Form, Tracker, Budget, Forecast)",
   "purpose": "string (1-2 sentences: what this template generates and its business purpose)",
   "outputFormat": "xlsx",
-  "requiredDataTypes": ["Financial", "Inventory", "Sales", "Customer", "Timeline", "Operational", "Personnel", "Project"],
-  "expectedEntities": ["Products", "Orders", "Customers", "Employees", "Transactions", "Projects", "Assets", "Departments"],
+  "requiredDataTypes": ["string - USE ONLY THESE: Financial, Inventory, Sales, Customer, Timeline, Operational, Personnel, Project, Product, Order, Asset, Technical, Marketing, HR, Compliance, Quality, Manufacturing, Supply Chain"],
+  "expectedEntities": ["string - BE SPECIFIC: Products, Orders, Customers, Transactions, Employees, Projects, Assets, Vendors, Invoices, Inventory Items, Sales Leads, Contracts, Services"],
   "dataStructureNeeds": ["Tabular data", "Time series", "Aggregated summaries", "Hierarchical", "Key-value pairs", "Transaction list"],
   "hasSections": ["Sheet1 Name", "Sheet2 Name", "Summary", "Details"],
   "hasCharts": true/false,
@@ -260,14 +260,14 @@ Return ONLY this JSON structure:
   "recommendedWorkspaceSize": "Small (<10 docs)" or "Medium (10-50)" or "Large (>50)"
 }`
   } else if (isDocx) {
-    analysisPrompt += `This is a WORD DOCUMENT TEMPLATE (DOCX). Analyze it thoroughly.
+    analysisPrompt += `This is a WORD DOCUMENT TEMPLATE (DOCX). Analyze what DATA this template NEEDS to generate its output.
 
 ANALYZE THESE ASPECTS:
 1. **Template Type**: What kind of document is this? (Business Report, Proposal, Invoice, Letter, Contract, Meeting Minutes, Technical Spec, Summary, etc.)
 2. **Purpose**: What is this document used for? What information does it convey?
 3. **Data Requirements**:
-   - What TYPES of information does it need? (Customer details, Financial figures, Timeline/dates, Product info, Project status, etc.)
-   - What ENTITIES are mentioned/needed? (Customers, Products, Orders, Projects, Employees, Systems, Vendors, etc.)
+   - What TYPES of information does it need? Use STANDARDIZED taxonomy: Financial, Inventory, Sales, Customer, Timeline, Operational, Personnel, Project, Product, Order, Asset, Technical, Marketing, HR, Compliance, Quality, Manufacturing, Supply Chain
+   - What ENTITIES are mentioned/needed? BE SPECIFIC: Customers, Products, Orders, Transactions, Projects, Employees, Systems, Vendors, Invoices, Inventory Items, Sales Leads, Contracts, Services, APIs, etc.
    - What STRUCTURE is expected? (Narrative paragraphs, Bullet/numbered lists, Tables of data, Key-value pairs, etc.)
 4. **Operations Needed**:
    - Aggregation? (Does it need summaries, totals, counts?)
@@ -279,9 +279,9 @@ ANALYZE THESE ASPECTS:
 7. **Audience & Use Cases**: Who reads this? Internal/external? Decision-making or informational?
 
 EXAMPLES:
-- A template with "Customer Name", "Order #", product table → requiredDataTypes: ["Customer", "Sales"], expectedEntities: ["Customers", "Orders", "Products"]
-- A template with monthly progress sections → requiredDataTypes: ["Timeline", "Project"], requiresTimeSeries: true
-- A template comparing two proposals → requiresComparisons: true
+- A template with "Customer Name", "Order #", product table → requiredDataTypes: ["Customer", "Sales", "Order", "Product"], expectedEntities: ["Customers", "Orders", "Products"]
+- A template with monthly progress sections → requiredDataTypes: ["Timeline", "Project"], expectedEntities: ["Projects"], requiresTimeSeries: true
+- A template comparing two proposals → requiredDataTypes: ["Project"], requiresComparisons: true
 
 Return ONLY this JSON structure:
 
@@ -289,8 +289,8 @@ Return ONLY this JSON structure:
   "templateType": "string (Report, Letter, Invoice, Proposal, Contract, Form, Summary, Meeting Minutes, Spec)",
   "purpose": "string (1-2 sentences: what this template generates and its business purpose)",
   "outputFormat": "docx",
-  "requiredDataTypes": ["Financial", "Customer", "Timeline", "Inventory", "Operational", "Technical", "Project", "Personnel"],
-  "expectedEntities": ["Customers", "Products", "Orders", "Projects", "Employees", "Systems", "Vendors", "Assets", "Contracts"],
+  "requiredDataTypes": ["string - USE ONLY THESE: Financial, Inventory, Sales, Customer, Timeline, Operational, Personnel, Project, Product, Order, Asset, Technical, Marketing, HR, Compliance, Quality, Manufacturing, Supply Chain"],
+  "expectedEntities": ["string - BE SPECIFIC: Customers, Products, Orders, Transactions, Employees, Projects, Assets, Vendors, Invoices, Inventory Items, Sales Leads, Contracts, Services, Systems, APIs"],
   "dataStructureNeeds": ["Narrative text", "Tabular data", "Bullet lists", "Numbered lists", "Key-value pairs", "Hierarchical sections"],
   "hasSections": ["Executive Summary", "Introduction", "Data Analysis", "Recommendations", "Appendix"],
   "hasCharts": true/false,

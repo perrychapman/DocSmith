@@ -68,3 +68,4 @@ tmp*.txt
 ############################################
 coverage/
 .nyc_output/
+DOCUMENT-PINNING-FLOW.md

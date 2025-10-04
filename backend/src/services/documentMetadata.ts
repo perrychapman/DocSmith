@@ -15,6 +15,7 @@ export interface DocumentMetadata {
   id?: number
   customerId: number
   filename: string
+  anythingllmPath?: string  // Full path in AnythingLLM (e.g., "Customer_Oct_2025/file-hash.json")
   uploadedAt: string
   fileSize?: number
   
@@ -62,6 +63,7 @@ interface DocumentMetadataRow {
   id: number
   customerId: number
   filename: string
+  anythingllmPath: string | null
   uploadedAt: string
   fileSize: number | null
   documentType: string | null
@@ -94,6 +96,7 @@ function rowToMetadata(row: DocumentMetadataRow): DocumentMetadata {
     id: row.id,
     customerId: row.customerId,
     filename: row.filename,
+    anythingllmPath: row.anythingllmPath ?? undefined,
     uploadedAt: row.uploadedAt,
     fileSize: row.fileSize ?? undefined,
     documentType: row.documentType ?? undefined,
@@ -130,7 +133,8 @@ export async function analyzeDocumentMetadata(
   filePath: string,
   filename: string,
   workspaceSlug: string,
-  documentName?: string
+  documentName?: string,
+  anythingllmPath?: string
 ): Promise<DocumentMetadata> {
   const fileSize = fs.existsSync(filePath) ? fs.statSync(filePath).size : 0
   const fileExt = path.extname(filename).toLowerCase()
@@ -179,8 +183,9 @@ export async function analyzeDocumentMetadata(
 
 CRITICAL INSTRUCTIONS:
 - DO NOT count rows/columns - values above are accurate
-- Focus on WHAT the data represents based on column/sheet names
-- Identify main ENTITIES (Customers, Products, Orders, etc.)
+- Focus on WHAT DATA this spreadsheet CONTAINS
+- Use STANDARDIZED data type taxonomy: Financial, Inventory, Sales, Customer, Timeline, Operational, Personnel, Project, Product, Order, Asset, Technical, Marketing, HR, Compliance, Quality, Manufacturing, Supply Chain
+- Identify main ENTITIES (Customers, Products, Orders, Employees, Projects, Transactions, Assets, etc.)
 - KEEP ALL TAGS SHORT (2-4 words max)
 
 Return ONLY a JSON object:
@@ -189,16 +194,16 @@ Return ONLY a JSON object:
   "documentType": "Spreadsheet",
   "purpose": "string (what this spreadsheet tracks and its business context)",
   "keyTopics": ["string (2-4 words: Sales Data, Inventory, Financial Report)"],
-  "dataCategories": ["string (Financial, Sales, Inventory, Customer, Personnel, Operational)"],
-  "primaryEntities": ["string (Customers, Products, Transactions, Employees, Projects, Assets)"],
+  "dataCategories": ["string - USE ONLY THESE: Financial, Inventory, Sales, Customer, Timeline, Operational, Personnel, Project, Product, Order, Asset, Technical, Marketing, HR, Compliance, Quality, Manufacturing, Supply Chain"],
+  "primaryEntities": ["string - BE SPECIFIC: Customers, Products, Orders, Transactions, Employees, Projects, Assets, Vendors, Invoices, Inventory Items, Sales Leads, Contracts, Services"],
   "dataType": "string (Transactional, Analytical, Master Data, Reference, Operational, Summary)",
   "aggregationLevel": "string (Detail-level, Daily Aggregates, Monthly Summaries, Annual Totals)",
-  "metrics": ["string (Revenue, Quantity, Cost, Duration, Count, Percentage)"],
-  "calculatedFields": ["string (Total Revenue, Growth %, Year-over-Year)"],
+  "metrics": ["string (Revenue, Quantity, Cost, Duration, Count, Percentage, Profit, Growth Rate)"],
+  "calculatedFields": ["string (Total Revenue, Growth %, Year-over-Year, Profit Margin)"],
   "dataRelationships": "string (foreign keys, lookup tables, if present)",
   "stakeholders": ["string (2-3 words: teams/people who use this)"],
-  "departments": ["string (Sales, Finance, Operations, HR)"],
-  "mentionedSystems": ["string (1-3 words: source systems)"],
+  "departments": ["string (Sales, Finance, Operations, HR, Marketing, IT, Engineering)"],
+  "mentionedSystems": ["string (1-3 words: source systems like Salesforce, SAP, QuickBooks)"],
   "dateRange": "string (YYYY-MM-DD to YYYY-MM-DD or Q3 2024)",
   "timeframe": "string (Monthly, Quarterly, Annual, Weekly, Daily, YTD)",
   "geography": "string (regions/locations data covers)",
@@ -328,10 +333,11 @@ Return ONLY a JSON object:
     analysisPrompt += `This is a DOCUMENT file. Analyze the ACTUAL content thoroughly.
 
 CRITICAL INSTRUCTIONS:
-- Focus on DATA STRUCTURE and CONTEXT for template generation
+- Focus on WHAT DATA this document CONTAINS
+- Use STANDARDIZED data type taxonomy: Financial, Inventory, Sales, Customer, Timeline, Operational, Personnel, Project, Product, Order, Asset, Technical, Marketing, HR, Compliance, Quality, Manufacturing, Supply Chain
 - For stakeholders: identify PEOPLE, DEPARTMENTS, TEAMS mentioned
 - For systems: identify SOFTWARE, APPLICATIONS, PLATFORMS discussed
-- For entities: identify main SUBJECTS (Customers, Products, Orders, etc.)
+- For entities: BE SPECIFIC about main SUBJECTS (Customers, Products, Orders, Projects, Employees, etc.)
 - KEEP ALL TAGS SHORT (2-4 words max)
 
 Return ONLY a JSON object with this structure:
@@ -340,13 +346,13 @@ Return ONLY a JSON object with this structure:
   "documentType": "string (Business Report, Meeting Notes, Proposal, Contract, Tech Spec, Requirements, Discovery)",
   "purpose": "string (1-2 sentences: what data/information this document contains and its use)",
   "keyTopics": ["string (2-4 words: Q3 Results, API Design, Budget Planning)"],
-  "dataCategories": ["string (Financial, Operational, Technical, Customer, Timeline, Personnel)"],
-  "primaryEntities": ["string (main subjects: Customers, Products, Orders, Employees, Projects, Systems)"],
+  "dataCategories": ["string - USE ONLY THESE: Financial, Inventory, Sales, Customer, Timeline, Operational, Personnel, Project, Product, Order, Asset, Technical, Marketing, HR, Compliance, Quality, Manufacturing, Supply Chain"],
+  "primaryEntities": ["string - BE SPECIFIC: Customers, Products, Orders, Transactions, Employees, Projects, Assets, Vendors, Invoices, Inventory Items, Sales Leads, Contracts, Services, Systems, APIs"],
   "dataStructure": "string (Narrative document, Tabular data, Mixed format, Forms/Templates, Technical)",
-  "mentionedSystems": ["string (1-3 words: Salesforce, Azure, Teams, SAP)"],
+  "mentionedSystems": ["string (1-3 words: Salesforce, Azure, Teams, SAP, QuickBooks, Jira)"],
   "stakeholders": ["string (2-3 words: Sales Team, John S., Engineering)"],
-  "departments": ["string (Sales, Engineering, Finance, HR, Operations)"],
-  "metrics": ["string (Revenue, Units Sold, Response Time, Count)"],
+  "departments": ["string (Sales, Engineering, Finance, HR, Operations, Marketing, IT)"],
+  "metrics": ["string (Revenue, Units Sold, Response Time, Count, Conversion Rate, Profit)"],
   "dateRange": "string (YYYY-MM-DD to YYYY-MM-DD or Q3 2024)",
   "meetingDate": "string (if meeting notes: YYYY-MM-DD)",
   "timeframe": "string (Monthly, Quarterly, Annual, YTD, Historical)",
@@ -453,6 +459,7 @@ Return ONLY a valid JSON object with the exact structure specified above. No mar
         const commonFields = {
           customerId: 0, // Will be set by caller
           filename,
+          anythingllmPath,
           uploadedAt: new Date().toISOString(),
           fileSize,
           documentType: parsed.documentType,
@@ -510,6 +517,7 @@ Return ONLY a valid JSON object with the exact structure specified above. No mar
   return {
     customerId: 0, // Will be set by caller
     filename,
+    anythingllmPath,
     uploadedAt: new Date().toISOString(),
     fileSize,
     lastAnalyzed: new Date().toISOString(),
@@ -553,7 +561,7 @@ export async function saveDocumentMetadata(
     
     const sql = `
       INSERT OR REPLACE INTO document_metadata (
-        customerId, filename, uploadedAt, fileSize,
+        customerId, filename, anythingllmPath, uploadedAt, fileSize,
         documentType, purpose,
         keyTopics, dataCategories, mentionedSystems, stakeholders,
         estimatedPageCount, estimatedWordCount,
@@ -562,12 +570,13 @@ export async function saveDocumentMetadata(
         relatedDocuments, supersedes, tags, description,
         extraFields,
         lastAnalyzed, analysisVersion
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `
     
     const params = [
       customerId,
       metadata.filename,
+      metadata.anythingllmPath ?? null,
       metadata.uploadedAt || new Date().toISOString(),
       metadata.fileSize ?? null,
       metadata.documentType ?? null,

@@ -84,7 +84,7 @@ async function extractMetadataInBackground(
     await new Promise(resolve => setTimeout(resolve, 3000))
     
     console.log(`[METADATA] Sending AI analysis request for "${targetDoc}"`)
-    const metadata = await analyzeDocumentMetadata(filePath, filename, workspaceSlug, documentName)
+    const metadata = await analyzeDocumentMetadata(filePath, filename, workspaceSlug, documentName, documentName)
     
     console.log(`[METADATA] Analysis complete for ${filename}:`, {
       type: metadata.documentType,

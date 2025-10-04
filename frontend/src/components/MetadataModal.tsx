@@ -59,6 +59,7 @@ interface MetadataModalProps {
 
 export function MetadataModal({ metadata, open, onOpenChange, onRetry }: MetadataModalProps) {
   const [expandedSchemas, setExpandedSchemas] = React.useState<Record<string, boolean>>({});
+  const [expandedReasonings, setExpandedReasonings] = React.useState<Record<number, boolean>>({});
 
   if (!metadata) return null;
 
@@ -677,7 +678,7 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
                                 )}
                                 {schema.headerRowIndex !== undefined && schema.headerRowIndex > 0 && (
                                   <div className="text-xs text-orange-600 dark:text-orange-400 mt-0.5">
-                                    ⚠ Data table starts at row {schema.headerRowIndex + 1}
+                                    Warning: Data table starts at row {schema.headerRowIndex + 1}
                                   </div>
                                 )}
                               </div>

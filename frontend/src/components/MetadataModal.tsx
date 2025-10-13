@@ -99,14 +99,14 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
             {getDocumentIcon(metadata.documentType)}
             Document Metadata
           </DialogTitle>
-          <DialogDescription className="flex items-center justify-between gap-3">
+          <div className="flex items-center justify-between gap-3 text-sm text-muted-foreground">
             <span className="truncate">{metadata.filename}</span>
             <div className="flex items-center gap-2 shrink-0">
               {metadata.documentType && (
                 <Badge variant="secondary">{metadata.documentType}</Badge>
               )}
             </div>
-          </DialogDescription>
+          </div>
         </DialogHeader>
         
         <Tabs defaultValue="overview" className="contents">

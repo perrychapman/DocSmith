@@ -47,11 +47,20 @@ router.get("/ping", async (_req, res) => {
 
 router.get("/auth", async (_req, res) => {
   try {
+    // Debug: Check what settings we have
+    const s = require('../services/settings').readSettings();
+    console.log('[AUTH-CHECK] Settings loaded:', { 
+      hasUrl: !!s.anythingLLMUrl, 
+      hasKey: !!s.anythingLLMKey,
+      keyLength: s.anythingLLMKey?.length || 0 
+    });
+    
     // Try the /auth endpoint first
     const data = await anythingllmRequest<{ authenticated: boolean }>("/auth", "GET");
     res.json(data);
   } catch (err: any) {
     const msg = String(err?.message || "Auth check failed");
+    console.log('[AUTH-CHECK] Error:', msg);
     const isForbidden = /403/.test(msg);
     const isNotConfigured = /NotConfigured/i.test(msg) || /ANYTHINGLLM_API_KEY.*missing/i.test(msg);
     const isNotFound = /404/.test(msg) || /Cannot GET/i.test(msg);

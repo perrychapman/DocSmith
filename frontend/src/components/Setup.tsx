@@ -55,7 +55,7 @@ export default function Setup({ onComplete }: SetupProps) {
     
     try {
       // Save settings first
-      await apiFetch(`/api/settings`, { 
+      const saveResponse = await apiFetch(`/api/settings`, { 
         method: 'POST', 
         headers: { 'Content-Type': 'application/json' }, 
         body: JSON.stringify({ 
@@ -63,6 +63,14 @@ export default function Setup({ onComplete }: SetupProps) {
           anythingLLMKey: (apiKey||'').trim() || undefined 
         }) 
       });
+      
+      // Verify settings were saved
+      if (!saveResponse.ok) {
+        throw new Error('Failed to save settings');
+      }
+      
+      // Small delay to ensure file write completes (production builds)
+      await new Promise(resolve => setTimeout(resolve, 100));
 
       // Test ping
       const pingResponse = await apiFetch(`/api/anythingllm/ping`);
@@ -446,31 +454,31 @@ export default function Setup({ onComplete }: SetupProps) {
           {currentStep === 'testing' && (
             <div className="space-y-6">
               <div className="text-center space-y-2">
-                <h3 className="text-xl font-semibold">Testing Connection</h3>
-                <p className="text-gray-600">Verifying your AnythingLLM configuration...</p>
+                <h3 className="text-xl font-semibold text-gray-900 dark:text-gray-100">Testing Connection</h3>
+                <p className="text-gray-600 dark:text-gray-400">Verifying your AnythingLLM configuration...</p>
               </div>
 
               <div className="space-y-4">
                 <div className="space-y-3">
-                  <div className="flex items-center justify-between p-3 bg-gray-50 rounded">
-                    <span className="text-sm font-medium">Service Ping</span>
+                  <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded">
+                    <span className="text-sm font-medium text-gray-900 dark:text-gray-100">Service Ping</span>
                     <div className="flex items-center space-x-2">
                       {ping === "unknown" && <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin"></div>}
                       {ping === "ok" && <Icon.Check className="w-4 h-4 text-green-500" />}
                       {ping !== "unknown" && ping !== "ok" && <Icon.X className="w-4 h-4 text-red-500" />}
-                      <span className="text-sm text-gray-600">
+                      <span className="text-sm text-gray-700 dark:text-gray-300">
                         {ping === "unknown" ? "Testing..." : ping === "ok" ? "Success" : `Failed (${ping})`}
                       </span>
                     </div>
                   </div>
 
-                  <div className="flex items-center justify-between p-3 bg-gray-50 rounded">
-                    <span className="text-sm font-medium">Authentication</span>
+                  <div className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-800 rounded">
+                    <span className="text-sm font-medium text-gray-900 dark:text-gray-100">Authentication</span>
                     <div className="flex items-center space-x-2">
                       {auth === "unknown" && <div className="w-4 h-4 border-2 border-gray-400 border-t-transparent rounded-full animate-spin"></div>}
                       {auth === "ok" && <Icon.Check className="w-4 h-4 text-green-500" />}
                       {auth !== "unknown" && auth !== "ok" && <Icon.X className="w-4 h-4 text-red-500" />}
-                      <span className="text-sm text-gray-600">
+                      <span className="text-sm text-gray-700 dark:text-gray-300">
                         {auth === "unknown" ? "Testing..." : auth === "ok" ? "Success" : `Failed (${auth})`}
                       </span>
                     </div>
@@ -478,12 +486,12 @@ export default function Setup({ onComplete }: SetupProps) {
                 </div>
 
                 {connectionError && (
-                  <div className="p-4 bg-red-50 border border-red-200 rounded">
+                  <div className="p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded">
                     <div className="flex gap-3">
                       <Icon.AlertTriangle className="w-5 h-5 text-red-500 mt-0.5 flex-shrink-0" />
                       <div>
-                        <p className="text-red-800 font-medium text-sm mb-1">Connection Failed</p>
-                        <p className="text-red-700 text-sm">{connectionError}</p>
+                        <p className="text-red-800 dark:text-red-200 font-medium text-sm mb-1">Connection Failed</p>
+                        <p className="text-red-700 dark:text-red-300 text-sm">{connectionError}</p>
                       </div>
                     </div>
                   </div>

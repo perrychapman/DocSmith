@@ -468,41 +468,82 @@ ipcMain.handle('reveal-logs', () => {
         return { success: false, error: `Failed to reveal log file: ${error instanceof Error ? error.message : String(error)}` };
     }
 });
+// Helper function to calculate directory size recursively
+function getDirectorySize(dirPath) {
+    let totalSize = 0;
+    try {
+        const files = fs.readdirSync(dirPath);
+        for (const file of files) {
+            const filePath = path.join(dirPath, file);
+            try {
+                const stats = fs.statSync(filePath);
+                if (stats.isDirectory()) {
+                    totalSize += getDirectorySize(filePath);
+                }
+                else {
+                    totalSize += stats.size;
+                }
+            }
+            catch {
+                // Ignore individual file errors
+            }
+        }
+    }
+    catch {
+        // Ignore directory read errors
+    }
+    return totalSize;
+}
 ipcMain.handle('cleanup-temp-files', () => {
     try {
         logToFile('Manual temp file cleanup requested');
         const tempDir = os.tmpdir();
         const files = fs.readdirSync(tempDir);
-        const threeDaysAgo = Date.now() - (3 * 24 * 60 * 60 * 1000);
-        const sevenDaysAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
+        const now = Date.now();
+        const fiveMinutesAgo = now - (5 * 60 * 1000);
+        const oneDayAgo = now - (24 * 60 * 60 * 1000);
+        const threeDaysAgo = now - (3 * 24 * 60 * 60 * 1000);
         let deletedCount = 0;
         let deletedSize = 0;
+        let scannedCount = 0;
+        let skippedCount = 0;
         const deletedItems = [];
         files.forEach(file => {
             const filePath = path.join(tempDir, file);
             try {
                 const stats = fs.statSync(filePath);
+                scannedCount++;
                 let shouldDelete = false;
                 let reason = '';
-                // Clean up Pandoc temp directories older than 1 hour (more aggressive for manual cleanup)
+                // Clean up ANY Pandoc temp directories older than 5 minutes
                 if (file.startsWith('docsmith-pandoc-') && stats.isDirectory()) {
-                    const oneHourAgo = Date.now() - (60 * 60 * 1000);
-                    if (stats.mtime.getTime() < oneHourAgo) {
+                    if (stats.mtime.getTime() < fiveMinutesAgo) {
                         shouldDelete = true;
-                        reason = 'Old Pandoc temp directory';
+                        reason = 'Pandoc temp directory';
                     }
                 }
-                // Clean up ts-node cache directories older than 3 days
-                else if (file.startsWith('.ts-node') && stats.isDirectory() && stats.mtime.getTime() < threeDaysAgo) {
+                // Clean up ts-node cache directories older than 1 day
+                else if (file.startsWith('.ts-node') && stats.isDirectory() && stats.mtime.getTime() < oneDayAgo) {
                     shouldDelete = true;
-                    reason = 'Old ts-node cache';
+                    reason = 'ts-node cache';
                 }
-                // Clean up old DocSmith logs
-                else if (file.startsWith('docsmith-electron') && file.endsWith('.log') && stats.mtime.getTime() < sevenDaysAgo) {
+                // Clean up old DocSmith logs (keep last 3 days)
+                else if (file.startsWith('docsmith-electron') && file.endsWith('.log') && stats.mtime.getTime() < threeDaysAgo) {
                     shouldDelete = true;
                     reason = 'Old DocSmith log';
                 }
+                // Clean up other DocSmith temp files/folders older than 5 minutes
+                else if (file.toLowerCase().includes('docsmith') && stats.mtime.getTime() < fiveMinutesAgo) {
+                    shouldDelete = true;
+                    reason = 'DocSmith temp file';
+                }
+                // Clean up html-to-docx temp files older than 5 minutes
+                else if (file.startsWith('tmp-') && file.includes('html-to-docx') && stats.mtime.getTime() < fiveMinutesAgo) {
+                    shouldDelete = true;
+                    reason = 'html-to-docx temp';
+                }
                 if (shouldDelete) {
+                    const itemSize = stats.isDirectory() ? getDirectorySize(filePath) : stats.size;
                     if (stats.isDirectory()) {
                         fs.rmSync(filePath, { recursive: true, force: true });
                     }
@@ -510,24 +551,32 @@ ipcMain.handle('cleanup-temp-files', () => {
                         fs.unlinkSync(filePath);
                     }
                     deletedCount++;
-                    deletedSize += stats.size || 0;
+                    deletedSize += itemSize;
                     deletedItems.push(`${file} (${reason})`);
+                }
+                else {
+                    skippedCount++;
                 }
             }
             catch (err) {
-                // Ignore errors for individual files
+                // Ignore errors for individual files (permissions, locked files, etc.)
+                skippedCount++;
             }
         });
         const sizeFreedMB = (deletedSize / (1024 * 1024)).toFixed(2);
-        const resultMsg = `Manual cleanup completed: ${deletedCount} items deleted, ${sizeFreedMB}MB freed`;
+        const resultMsg = `Cleanup completed: ${deletedCount} items deleted, ${sizeFreedMB}MB freed (scanned ${scannedCount} items, skipped ${skippedCount})`;
         logToFile(resultMsg);
         if (deletedItems.length > 0) {
-            logToFile(`Deleted items: ${deletedItems.join(', ')}`);
+            logToFile(`Deleted items: ${deletedItems.slice(0, 20).join(', ')}${deletedItems.length > 20 ? ` ...and ${deletedItems.length - 20} more` : ''}`);
+        }
+        else {
+            logToFile('No matching temp files found to delete');
         }
         return {
             success: true,
             deletedCount,
             sizeFreedMB: parseFloat(sizeFreedMB),
+            scannedCount,
             message: resultMsg
         };
     }

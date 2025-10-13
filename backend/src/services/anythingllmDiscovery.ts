@@ -1,58 +1,45 @@
 // backend/src/services/anythingllmDiscovery.ts
-import { exec } from 'child_process';
-import { promisify } from 'util';
 import { readSettings, writeSettings } from './settings';
 import { logInfo, logError } from '../utils/logger';
-
-const execAsync = promisify(exec);
 
 /**
  * Discover AnythingLLM Desktop API port by scanning common ports
  * Desktop uses dynamic ephemeral ports (typically 50000-70000 range)
+ * 
+ * Production-safe: Uses direct port testing instead of netstat
  */
 export async function discoverAnythingLLMPort(): Promise<number | null> {
   logInfo('[DISCOVERY] Searching for AnythingLLM Desktop API...');
   
   try {
-    // Get listening ports from netstat (cross-platform approach)
-    const { stdout } = await execAsync(
-      process.platform === 'win32'
-        ? 'netstat -ano | findstr "LISTENING"'
-        : 'netstat -an | grep LISTEN'
-    );
+    // Common ports to try first (faster)
+    const commonPorts = [3001, 3002, 64685, 3000];
+    logInfo(`[DISCOVERY] Testing common ports: ${commonPorts.join(', ')}`);
     
-    // Extract port numbers in typical AnythingLLM range
-    const portMatches = stdout.matchAll(/:(\d+)\s/g);
-    const candidatePorts: number[] = [];
-    
-    for (const match of portMatches) {
-      const port = parseInt(match[1]);
-      // AnythingLLM Desktop typically uses ports 50000-70000
-      if (port >= 50000 && port < 70000) {
-        candidatePorts.push(port);
+    for (const port of commonPorts) {
+      const isValid = await testAnythingLLMPort(port);
+      if (isValid) {
+        logInfo(`[DISCOVERY] Found AnythingLLM API on common port ${port}`);
+        return port;
       }
     }
     
-    logInfo(`[DISCOVERY] Found ${candidatePorts.length} candidate ports in range 50000-70000`);
+    // Scan typical Desktop range (sample every 100 ports for speed)
+    // Full scan would take too long (20,000 ports * 2s timeout = hours)
+    const samplePorts: number[] = [];
+    for (let port = 50000; port < 70000; port += 100) {
+      samplePorts.push(port);
+    }
     
-    // Test each candidate port for AnythingLLM API
-    for (const port of candidatePorts) {
+    logInfo(`[DISCOVERY] Sampling Desktop port range (${samplePorts.length} ports)`);
+    
+    for (const port of samplePorts) {
       const isValid = await testAnythingLLMPort(port);
       if (isValid) {
         logInfo(`[DISCOVERY] Found AnythingLLM API on port ${port}`);
-        return port;
-      }
-    }
-    
-    // Fallback: Try common/default ports
-    const fallbackPorts = [3001, 3002, 64685];
-    logInfo(`[DISCOVERY] Trying fallback ports: ${fallbackPorts.join(', ')}`);
-    
-    for (const port of fallbackPorts) {
-      const isValid = await testAnythingLLMPort(port);
-      if (isValid) {
-        logInfo(`[DISCOVERY] Found AnythingLLM API on fallback port ${port}`);
-        return port;
+        // Once we find a valid port in a range, scan nearby ports
+        const nearbyPort = await scanNearbyPorts(port, 100);
+        return nearbyPort || port;
       }
     }
     
@@ -65,6 +52,24 @@ export async function discoverAnythingLLMPort(): Promise<number | null> {
 }
 
 /**
+ * Scan ports near a discovered port (more thorough)
+ */
+async function scanNearbyPorts(centerPort: number, range: number): Promise<number | null> {
+  const startPort = Math.max(50000, centerPort - range);
+  const endPort = Math.min(70000, centerPort + range);
+  
+  for (let port = startPort; port <= endPort; port++) {
+    if (port === centerPort) continue; // Already tested
+    const isValid = await testAnythingLLMPort(port);
+    if (isValid) {
+      return port;
+    }
+  }
+  
+  return null;
+}
+
+/**
  * Test if a port hosts the AnythingLLM API
  */
 async function testAnythingLLMPort(port: number): Promise<boolean> {
@@ -73,12 +78,12 @@ async function testAnythingLLMPort(port: number): Promise<boolean> {
     const apiKey = settings.anythingLLMKey;
     
     if (!apiKey) {
-      logError('[DISCOVERY] No API key configured, cannot test ports');
+      // Silent fail - no key means we can't test
       return false;
     }
     
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 2000); // 2s timeout
+    const timeout = setTimeout(() => controller.abort(), 500); // 500ms timeout for faster scanning
     
     const response = await fetch(`http://localhost:${port}/api/v1/auth`, {
       method: 'GET',
@@ -98,7 +103,7 @@ async function testAnythingLLMPort(port: number): Promise<boolean> {
     
     return false;
   } catch (error) {
-    // Port not responding or wrong service
+    // Port not responding or wrong service - silent fail
     return false;
   }
 }

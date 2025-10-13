@@ -144,6 +144,9 @@ export default function SettingsPage() {
           loading: 'Cleaning up temporary files...',
           success: (result: any) => {
             if (result.success) {
+              if (result.deletedCount === 0) {
+                return `No temp files found to clean (scanned ${result.scannedCount} items)`;
+              }
               return `Cleanup completed: ${result.deletedCount} items deleted, ${result.sizeFreedMB}MB freed`;
             } else {
               throw new Error(result.error || 'Cleanup failed');
@@ -214,7 +217,7 @@ export default function SettingsPage() {
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="space-y-1">
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between h-6">
               <div className="text-sm">API URL</div>
               <Button
                 type="button"
@@ -247,7 +250,9 @@ export default function SettingsPage() {
             {!urlValid && urlTouched ? <div className="text-xs text-red-600">Enter a valid http(s) URL</div> : null}
           </div>
           <div className="space-y-1">
-            <div className="text-sm">API Key</div>
+            <div className="flex items-center h-6">
+              <div className="text-sm">API Key</div>
+            </div>
             <Input value={apiKey} onChange={(e) => setApiKey(e.target.value)} onBlur={() => setKeyTouched(true)} aria-invalid={!keyValid && keyTouched} placeholder="XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX" />
             <div className="text-xs text-muted-foreground">Stored server-side; used for AnythingLLM auth</div>
             {!keyValid && keyTouched ? <div className="text-xs text-red-600">Format: XXXXXXX-XXXXXXX-XXXXXXX-XXXXXXX</div> : null}

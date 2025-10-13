@@ -6,9 +6,33 @@ import { randomUUID } from "crypto"
 // ---------- Library Root ----------
 // Absolute path to the library root (default: ./data at project root)
 export function libraryRoot(): string {
-  const envRoot = process.env.LIBRARY_ROOT || "./data"
+  const envRoot = process.env.LIBRARY_ROOT
+  
+  if (envRoot) {
+    // Environment variable takes precedence
+    return path.resolve(envRoot)
+  }
+  
+  // Detect if we're in a packaged Electron app
+  // Check multiple indicators to ensure we catch production builds
+  const isPackaged = process.env.PORTABLE_EXECUTABLE_DIR || 
+                     __dirname.includes('app.asar') ||
+                     __dirname.includes('Program Files')
+  
+  if (isPackaged) {
+    // Use user's AppData in production
+    const userDataPath = process.env.APPDATA || 
+                         path.join(process.env.USERPROFILE || process.env.HOME || '', 'AppData', 'Roaming')
+    const dataPath = path.join(userDataPath, 'DocSmith', 'data')
+    console.log('[FS] Production mode detected, using AppData:', dataPath)
+    return dataPath
+  }
+  
+  // Development mode: use ./data relative to project root
   // __dirname is .../backend/src/services → go up two to project root
-  return path.resolve(__dirname, "../../..", envRoot)
+  const devPath = path.resolve(__dirname, "../../..", "./data")
+  console.log('[FS] Development mode, using project data:', devPath)
+  return devPath
 }
 
 // ---------- Name Helpers ----------

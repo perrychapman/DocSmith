@@ -69,3 +69,6 @@ tmp*.txt
 coverage/
 .nyc_output/
 DOCUMENT-PINNING-FLOW.md
+ANYTHINGLLM-API-REFERENCE.md
+ANYTHINGLLM-FEATURES.md
+anythingllm-swagger.html

@@ -96,7 +96,7 @@ export default function HelpPage() {
                   <h3 className="text-lg font-semibold">Customer Management</h3>
                 </div>
                 <p className="text-muted-foreground mb-4">
-                  Organize your projects by customer. Each customer gets their own dedicated AI workspace for contextual conversations and document storage.
+                  Organize your projects by customer. Each customer gets their own dedicated AI workspace with document pinning, metadata extraction, and intelligent chat capabilities.
                 </p>
                 <div className="space-y-2 text-sm">
                   <div className="flex items-start gap-2">
@@ -105,11 +105,19 @@ export default function HelpPage() {
                   </div>
                   <div className="flex items-start gap-2">
                     <Icon.Check className="h-4 w-4 text-green-600 mt-0.5" />
-                    <span>Upload and organize reference documents</span>
+                    <span>Upload documents with automatic metadata extraction</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <Icon.Check className="h-4 w-4 text-green-600 mt-0.5" />
+                    <span>Pin important documents for priority AI context</span>
                   </div>
                   <div className="flex items-start gap-2">
                     <Icon.Check className="h-4 w-4 text-green-600 mt-0.5" />
                     <span>Track generated documents and chat history</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <Icon.Check className="h-4 w-4 text-green-600 mt-0.5" />
+                    <span>Integrated Jobs panel for generation monitoring</span>
                   </div>
                 </div>
               </Card>
@@ -146,20 +154,28 @@ export default function HelpPage() {
                   <h3 className="text-lg font-semibold">Smart Templates</h3>
                 </div>
                 <p className="text-muted-foreground mb-4">
-                  Upload Word or Excel documents that automatically compile into intelligent TypeScript generators for dynamic content creation.
+                  Upload Word or Excel templates and let AI transform them into dynamic generators. Templates analyze structure, extract metadata, and intelligently incorporate workspace data.
                 </p>
                 <div className="space-y-2 text-sm">
                   <div className="flex items-start gap-2">
                     <Icon.Check className="h-4 w-4 text-green-600 mt-0.5" />
-                    <span>Automatic TypeScript generator creation</span>
+                    <span>Supports DOCX and XLSX templates</span>
                   </div>
                   <div className="flex items-start gap-2">
                     <Icon.Check className="h-4 w-4 text-green-600 mt-0.5" />
-                    <span>Support for DOCX, XLSX, and text formats</span>
+                    <span>AI compiles templates to TypeScript generators</span>
                   </div>
                   <div className="flex items-start gap-2">
                     <Icon.Check className="h-4 w-4 text-green-600 mt-0.5" />
-                    <span>Version control and template management</span>
+                    <span>Automatic structure analysis and metadata extraction</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <Icon.Check className="h-4 w-4 text-green-600 mt-0.5" />
+                    <span>Preserves formatting, styles, and structure</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <Icon.Check className="h-4 w-4 text-green-600 mt-0.5" />
+                    <span>15-minute cache for fast regeneration</span>
                   </div>
                 </div>
               </Card>
@@ -171,20 +187,28 @@ export default function HelpPage() {
                   <h3 className="text-lg font-semibold">Document Generation</h3>
                 </div>
                 <p className="text-muted-foreground mb-4">
-                  Combine AI context with your templates to generate customized documents. Monitor progress with real-time job tracking.
+                  Combine AI context with smart templates to generate customized documents. AI enhances templates with workspace data while preserving all formatting.
                 </p>
                 <div className="space-y-2 text-sm">
                   <div className="flex items-start gap-2">
                     <Icon.Check className="h-4 w-4 text-green-600 mt-0.5" />
-                    <span>AI-powered content generation</span>
+                    <span>AI-powered content generation from workspace</span>
                   </div>
                   <div className="flex items-start gap-2">
                     <Icon.Check className="h-4 w-4 text-green-600 mt-0.5" />
-                    <span>Real-time progress monitoring</span>
+                    <span>Real-time progress monitoring with job tracking</span>
                   </div>
                   <div className="flex items-start gap-2">
                     <Icon.Check className="h-4 w-4 text-green-600 mt-0.5" />
-                    <span>Automatic organization and storage</span>
+                    <span>15-minute AI enhancement cache per workspace</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <Icon.Check className="h-4 w-4 text-green-600 mt-0.5" />
+                    <span>Pandoc-powered DOCX assembly (fallback to html-to-docx)</span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <Icon.Check className="h-4 w-4 text-green-600 mt-0.5" />
+                    <span>Automatic organization and customer-specific storage</span>
                   </div>
                 </div>
               </Card>
@@ -209,11 +233,15 @@ export default function HelpPage() {
                     <div className="space-y-2 text-sm text-muted-foreground">
                       <div className="flex items-center gap-2">
                         <Icon.Check className="h-4 w-4 text-green-600" />
-                        <span>AnythingLLM server running and accessible</span>
+                        <span>AnythingLLM Desktop or Server running</span>
                       </div>
                       <div className="flex items-center gap-2">
                         <Icon.Check className="h-4 w-4 text-green-600" />
-                        <span>API endpoint URL and authentication</span>
+                        <span>Auto-detection finds Desktop instances automatically</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Icon.Check className="h-4 w-4 text-green-600" />
+                        <span>API key generated in AnythingLLM settings</span>
                       </div>
                       <div className="flex items-center gap-2">
                         <Icon.Check className="h-4 w-4 text-green-600" />
@@ -269,9 +297,9 @@ export default function HelpPage() {
                   <div className="flex items-start gap-2">
                     <Icon.AlertTriangle className="h-5 w-5 text-blue-600 mt-0.5" />
                     <div>
-                      <h4 className="font-medium text-blue-900 dark:text-blue-100">Configuration Tip</h4>
+                      <h4 className="font-medium text-blue-900 dark:text-blue-100">Auto-Detection Feature</h4>
                       <p className="text-sm text-blue-700 dark:text-blue-200 mt-1">
-                        Configure your AnythingLLM connection in the Settings page. DocSmith will automatically create workspaces and manage documents through the API.
+                        DocSmith automatically detects AnythingLLM Desktop instances on startup. Use the "Auto-detect" button in Settings or Setup to find your AnythingLLM instance. The app scans common ports and automatically configures the connection for you.
                       </p>
                     </div>
                   </div>
@@ -288,7 +316,7 @@ export default function HelpPage() {
                   <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground text-sm font-medium mt-1">1</div>
                   <div>
                     <h3 className="font-medium mb-1">Prepare Templates</h3>
-                    <p className="text-sm text-muted-foreground">Create and upload document templates (Word/Excel files). The system will compile these to generate TypeScript code that defines how content should be dynamically inserted.</p>
+                    <p className="text-sm text-muted-foreground">Create and upload document templates (Word/Excel files). The system analyzes structure, extracts metadata, and compiles them into TypeScript generators that dynamically incorporate workspace data.</p>
                   </div>
                 </div>
                 
@@ -296,7 +324,7 @@ export default function HelpPage() {
                   <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground text-sm font-medium mt-1">2</div>
                   <div>
                     <h3 className="font-medium mb-1">Add Customer & Context</h3>
-                    <p className="text-sm text-muted-foreground">Create a customer profile and upload relevant documents to build their AI workspace context.</p>
+                    <p className="text-sm text-muted-foreground">Create a customer profile with linked AnythingLLM workspace. Upload relevant documents to build their AI knowledge base - metadata is automatically extracted and documents can be pinned for priority context.</p>
                   </div>
                 </div>
                 
@@ -304,7 +332,7 @@ export default function HelpPage() {
                   <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground text-sm font-medium mt-1">3</div>
                   <div>
                     <h3 className="font-medium mb-1">Gather Requirements</h3>
-                    <p className="text-sm text-muted-foreground">Use the AI workspace to discuss project details and gather all necessary information for document generation.</p>
+                    <p className="text-sm text-muted-foreground">Use the AI workspace chat to discuss project details and gather necessary information. The AI has full context from uploaded documents and can query specific data points.</p>
                   </div>
                 </div>
                 
@@ -312,7 +340,7 @@ export default function HelpPage() {
                   <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary text-primary-foreground text-sm font-medium mt-1">4</div>
                   <div>
                     <h3 className="font-medium mb-1">Generate Documents</h3>
-                    <p className="text-sm text-muted-foreground">Select appropriate templates and generate customized documents using the gathered context and AI assistance.</p>
+                    <p className="text-sm text-muted-foreground">Select appropriate templates and generate customized documents. AI enhances templates with workspace-specific data while preserving all formatting. Monitor progress in real-time via the Jobs panel.</p>
                   </div>
                 </div>
                 
@@ -343,7 +371,15 @@ export default function HelpPage() {
                   <div className="space-y-3 text-sm">
                     <div className="flex items-start gap-2">
                       <div className="w-2 h-2 rounded-full bg-green-500 mt-2 shrink-0"></div>
-                      <span>Upload comprehensive customer documents for better AI context</span>
+                      <span>Pin critical documents for priority AI context during generation</span>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <div className="w-2 h-2 rounded-full bg-green-500 mt-2 shrink-0"></div>
+                      <span>Use Auto-detect to find AnythingLLM Desktop instances automatically</span>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <div className="w-2 h-2 rounded-full bg-green-500 mt-2 shrink-0"></div>
+                      <span>Review template metadata extraction results before first use</span>
                     </div>
                     <div className="flex items-start gap-2">
                       <div className="w-2 h-2 rounded-full bg-green-500 mt-2 shrink-0"></div>
@@ -351,15 +387,11 @@ export default function HelpPage() {
                     </div>
                     <div className="flex items-start gap-2">
                       <div className="w-2 h-2 rounded-full bg-green-500 mt-2 shrink-0"></div>
-                      <span>Review template compilation results before first use</span>
-                    </div>
-                    <div className="flex items-start gap-2">
-                      <div className="w-2 h-2 rounded-full bg-green-500 mt-2 shrink-0"></div>
-                      <span>Keep workspace conversations focused on specific topics</span>
-                    </div>
-                    <div className="flex items-start gap-2">
-                      <div className="w-2 h-2 rounded-full bg-green-500 mt-2 shrink-0"></div>
                       <span>Monitor job progress for long-running document generations</span>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <div className="w-2 h-2 rounded-full bg-green-500 mt-2 shrink-0"></div>
+                      <span>Clean temp files periodically to free disk space</span>
                     </div>
                   </div>
                 </Card>
@@ -373,15 +405,15 @@ export default function HelpPage() {
                   <div className="space-y-3 text-sm">
                     <div className="flex items-start gap-2">
                       <div className="w-2 h-2 rounded-full bg-red-500 mt-2 shrink-0"></div>
-                      <span>Uploading document templates without reviewing compilation results</span>
+                      <span>Generating without uploading workspace context documents</span>
                     </div>
                     <div className="flex items-start gap-2">
                       <div className="w-2 h-2 rounded-full bg-red-500 mt-2 shrink-0"></div>
-                      <span>Creating customers without uploading context documents</span>
+                      <span>Ignoring template metadata extraction results</span>
                     </div>
                     <div className="flex items-start gap-2">
                       <div className="w-2 h-2 rounded-full bg-red-500 mt-2 shrink-0"></div>
-                      <span>Ignoring compilation errors in templates</span>
+                      <span>Not linking customer to workspace before generation</span>
                     </div>
                     <div className="flex items-start gap-2">
                       <div className="w-2 h-2 rounded-full bg-red-500 mt-2 shrink-0"></div>
@@ -390,6 +422,10 @@ export default function HelpPage() {
                     <div className="flex items-start gap-2">
                       <div className="w-2 h-2 rounded-full bg-red-500 mt-2 shrink-0"></div>
                       <span>Deleting customers with important historical data</span>
+                    </div>
+                    <div className="flex items-start gap-2">
+                      <div className="w-2 h-2 rounded-full bg-red-500 mt-2 shrink-0"></div>
+                      <span>Letting temp files accumulate (use Clean Temp Files)</span>
                     </div>
                   </div>
                 </Card>
@@ -410,7 +446,9 @@ export default function HelpPage() {
                     <div className="ml-4">├── template.docx <span className="text-muted-foreground"># Uploaded Word document</span></div>
                     <div className="ml-4">├── template.xlsx <span className="text-muted-foreground"># Uploaded Excel document (optional)</span></div>
                     <div className="ml-4">├── generator.full.ts <span className="text-muted-foreground"># Generated TypeScript code</span></div>
-                    <div className="ml-4">└── template.json <span className="text-muted-foreground"># Auto-generated metadata</span></div>
+                    <div className="ml-4">├── template.json <span className="text-muted-foreground"># Auto-generated metadata</span></div>
+                    <div className="ml-4">└── .cache/ <span className="text-muted-foreground"># AI-enhanced generators (per workspace)</span></div>
+                    <div className="ml-8">└── generator.full.workspace-slug.ts <span className="text-muted-foreground"># 15-min cache</span></div>
                   </div>
                 </div>
                 
@@ -439,10 +477,10 @@ export default function HelpPage() {
                 <div>
                   <h3 className="font-medium mb-2">System Requirements</h3>
                   <ul className="space-y-2 text-sm text-muted-foreground">
-                    <li>• <strong>AnythingLLM:</strong> External service for AI workspaces (configure in Settings)</li>
-                    <li>• <strong>All dependencies:</strong> Included with setup.exe installation</li>
-                    <li>• <strong>Local storage:</strong> Data stored in application directory</li>
-                    <li>• <strong>Internet connection:</strong> Required for AnythingLLM integration</li>
+                    <li>• <strong>AnythingLLM Desktop or Server:</strong> Auto-detected on common ports (3001, 3002, 64685) and Desktop range (50000-70000)</li>
+                    <li>• <strong>Pandoc (optional):</strong> Preferred for DOCX assembly, fallback to html-to-docx if not installed</li>
+                    <li>• <strong>Local storage:</strong> Data stored in %APPDATA%\DocSmith (production) or ./data (development)</li>
+                    <li>• <strong>Internet connection:</strong> Required for AnythingLLM integration and AI features</li>
                   </ul>
                 </div>
               </div>
@@ -458,11 +496,14 @@ export default function HelpPage() {
                 <div>
                   <h3 className="font-medium mb-2">Data Storage Locations</h3>
                   <div className="bg-muted/50 rounded-lg p-4 text-sm font-mono space-y-1">
-                    <div><strong>Application Data:</strong> %APPDATA%/DocSmith/</div>
-                    <div><strong>Customer Files:</strong> data/customers/</div>
-                    <div><strong>Templates:</strong> data/templates/</div>
+                    <div><strong>Production:</strong> %APPDATA%\DocSmith\data\</div>
+                    <div><strong>Development:</strong> ./data/ (project root)</div>
+                    <div className="mt-2 text-muted-foreground">Structure:</div>
+                    <div><strong>Customer Files:</strong> data/customers/CustomerName_Month_Year/</div>
+                    <div><strong>Templates:</strong> data/templates/TemplateName/</div>
                     <div><strong>Database:</strong> data/app.sqlite</div>
-                    <div><strong>Job Files:</strong> .jobs/</div>
+                    <div><strong>Job Files:</strong> .jobs/jobs.json</div>
+                    <div><strong>Temp Files:</strong> OS temp directory (cleaned via Settings)</div>
                   </div>
                 </div>
                 
@@ -502,8 +543,9 @@ export default function HelpPage() {
                     
                     <ul className="space-y-2 text-sm text-muted-foreground">
                       <li>• <strong>Template Compilation:</strong> View detailed logs in Templates page during compilation</li>
-                      <li>• <strong>Document Generation:</strong> Monitor progress and errors in Jobs page</li>
-                      <li>• <strong>Job History:</strong> Persistent job logs stored in .jobs/ directory</li>
+                      <li>• <strong>Document Generation:</strong> Monitor progress and errors in Jobs page with real-time SSE updates</li>
+                      <li>• <strong>Job History:</strong> Persistent job logs stored in .jobs/jobs.json with step tracking</li>
+                      <li>• <strong>Metadata Extraction:</strong> Background process logs visible during document uploads</li>
                       <li>• <strong>Settings Access:</strong> Also available in Settings → Development Tools</li>
                     </ul>
                   </div>
@@ -512,10 +554,12 @@ export default function HelpPage() {
                 <div>
                   <h3 className="font-medium mb-2">File Management</h3>
                   <ul className="space-y-2 text-sm text-muted-foreground">
-                    <li>• Generated documents are automatically organized by customer and date</li>
-                    <li>• Use "Reveal in Explorer" buttons to access files directly</li>
-                    <li>• Template folders can be opened for manual inspection</li>
-                    <li>• Customer uploads are preserved in dedicated folders</li>
+                    <li>• Generated documents are automatically organized by customer folder (CustomerName_Month_Year)</li>
+                    <li>• Use "Reveal in Explorer" buttons to access files directly in file system</li>
+                    <li>• Template folders can be opened for manual inspection and cache management</li>
+                    <li>• Customer uploads preserved in dedicated uploads/ subdirectory</li>
+                    <li>• Document pinning prioritizes specific files for AI context during generation</li>
+                    <li>• Temp file cleanup available in Settings (Pandoc, ts-node, html-to-docx caches)</li>
                   </ul>
                 </div>
               </div>
@@ -532,15 +576,18 @@ export default function HelpPage() {
                   DocSmith is designed to be intuitive, but if you need additional assistance:
                 </p>
                 <ul className="space-y-2 text-sm text-muted-foreground">
-                  <li>• Check the Settings page to verify your AnythingLLM connection</li>
-                  <li>• Review the Jobs page to troubleshoot document generation issues</li>
-                  <li>• Examine template compilation logs for detailed error information</li>
-                  <li>• Ensure you have proper permissions for file system operations</li>
+                  <li>• Use <strong>Auto-detect</strong> in Settings to find AnythingLLM Desktop instances automatically</li>
+                  <li>• Check the <strong>Jobs</strong> panel for real-time document generation progress and error logs</li>
+                  <li>• Review <strong>document metadata extraction</strong> results to verify AI context quality</li>
+                  <li>• Pin important documents in customer workspace for priority AI context</li>
+                  <li>• Examine template compilation logs and metadata for detailed structure information</li>
+                  <li>• Use <strong>Clean Temp Files</strong> in Settings if generation slows down or disk space is low</li>
+                  <li>• Ensure customer has linked workspace before generating documents</li>
                 </ul>
                 <div className="flex items-center gap-2 pt-2">
                   <Icon.AlertTriangle className="h-4 w-4 text-blue-500" />
                   <span className="text-sm text-muted-foreground">
-                    This application stores data locally and integrates with your AnythingLLM instance for AI capabilities.
+                    DocSmith stores data locally (%APPDATA%\DocSmith in production) and integrates with AnythingLLM for AI capabilities. All workspace data is cached for 15 minutes per template for fast regeneration.
                   </span>
                 </div>
               </div>

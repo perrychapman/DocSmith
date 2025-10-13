@@ -9,7 +9,7 @@ import { ensureUploadsDir, resolveCustomerPaths, folderNameForCustomer } from ".
 import { anythingllmRequest } from "../services/anythingllm"
 import { findDocsByFilename, documentExists, qualifiedNamesForShort } from "../services/anythingllmDocs"
 import { secureFileValidation } from "../services/fileSecurityValidator"
-import { analyzeDocumentMetadata, saveDocumentMetadata, loadDocumentMetadata, deleteDocumentMetadata, generateWorkspaceIndex } from "../services/documentMetadata"
+import { analyzeDocumentMetadata, saveDocumentMetadata, loadDocumentMetadata, deleteDocumentMetadata, generateWorkspaceIndex, refreshWorkspaceIndex } from "../services/documentMetadata"
 
 // Lazy import multer to avoid types requirement at compile time
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -96,6 +96,10 @@ async function extractMetadataInBackground(
     await saveDocumentMetadata(customerId, metadata, workspaceSlug)
     
     console.log(`[METADATA] Metadata saved to database for ${filename}`)
+    
+    // Refresh workspace index with new document metadata
+    console.log(`[METADATA] Refreshing workspace index...`)
+    await refreshWorkspaceIndex(customerId, workspaceSlug)
     
     // Give SQLite a moment to commit the transaction before notifying frontend
     await new Promise(resolve => setTimeout(resolve, 100))
@@ -823,6 +827,15 @@ router.delete("/:customerId", (req, res) => {
               removedNames = actuallyRemoved
               // Remove sidecar after successful removal (only if all removed)
               try { if (actuallyRemoved.length === names.length) removeSidecar(uploadsDir, name) } catch {}
+              
+              // Refresh workspace index after document deletion
+              try {
+                console.log(`[DELETE] Refreshing workspace index after removing ${name}...`)
+                await refreshWorkspaceIndex(id, String(slug))
+              } catch (indexErr) {
+                console.error(`[DELETE] Failed to refresh workspace index:`, indexErr)
+                // Non-blocking - document was still deleted
+              }
             }
           }
         } catch (e) {

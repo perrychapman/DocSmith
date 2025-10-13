@@ -283,12 +283,21 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
     const effectiveThread = threadSlug || (threads && threads[0]?.slug ? String(threads[0].slug) : undefined);
     if (!threadSlug && effectiveThread) setThreadSlug(effectiveThread);
 
-    if (effectiveThread && stream) {
+    // Try streaming first (works for both thread and workspace)
+    if (stream) {
       try {
-        const resp = await A.streamThread(slug, effectiveThread, body);
+        const resp = effectiveThread 
+          ? await A.streamThread(slug, effectiveThread, body)
+          : await A.streamWorkspace(slug, body);
+        
         if (!resp.ok || !resp.body) throw new Error(String(resp.status));
         let acc = "";
+        let firstChunk = true;
         await readSSEStream(resp, (payload) => {
+          if (firstChunk) {
+            setReplying(false); // Hide dots as soon as first chunk arrives
+            firstChunk = false;
+          }
           try {
             const j = JSON.parse(payload);
             const piece = j?.textResponse ?? j?.text ?? j?.delta ?? j?.content ?? '';
@@ -301,18 +310,24 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
             return base;
           });
         });
-      } catch {
+        setReplying(false); // Ensure dots are hidden after stream completes
+      } catch (err) {
+        console.error('[WorkspaceChat] Streaming failed, falling back to non-streaming:', err);
+        // Fallback to non-streaming chat
         try {
-          const r = await A.chatThread(slug, effectiveThread, body);
+          const r = effectiveThread ? await A.chatThread(slug, effectiveThread, body) : await A.chatWorkspace(slug, body);
           const text = r?.textResponse || r?.response || JSON.stringify(r);
           setHistory((h) => [...h, { role: 'assistant', content: text, sentAt: Date.now() }]);
-        } catch {}
+        } catch (err2) {
+          console.error('[WorkspaceChat] Non-streaming also failed:', err2);
+        }
       } finally {
         setReplying(false);
       }
       return;
     }
 
+    // Non-streaming fallback
     try {
       const r = effectiveThread ? await A.chatThread(slug, effectiveThread, body) : await A.chatWorkspace(slug, body);
       const text = r?.textResponse || r?.response || JSON.stringify(r);

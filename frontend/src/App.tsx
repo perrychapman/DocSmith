@@ -291,8 +291,8 @@ export default function App() {
         </aside>
         
         {/* Main Content - responsive margins for sidebar */}
-        <main className={`flex-1 lg:ml-[200px] xl:ml-[260px] ${hash === '#settings' ? 'p-3 sm:p-4 md:p-6 overflow-y-auto' : 'p-3 sm:p-4 md:p-6 overflow-y-auto lg:overflow-hidden flex flex-col h-full'}`}>
-          <div className={`mx-auto w-full ${hash === '#settings' ? 'space-y-4 sm:space-y-6 pb-20 sm:pb-32' : 'lg:flex-1 lg:flex lg:flex-col lg:min-h-0'}`}>
+        <main className="flex-1 lg:ml-[200px] xl:ml-[260px] p-3 sm:p-4 md:p-6 overflow-y-auto lg:overflow-hidden flex flex-col h-full">
+          <div className="mx-auto w-full lg:flex-1 lg:flex lg:flex-col lg:min-h-0">
             {content}
           </div>
         </main>

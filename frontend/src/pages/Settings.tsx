@@ -11,6 +11,18 @@ import { toast } from "sonner";
 import { useTheme } from "next-themes";
 import { apiFetch } from "../lib/api";
 import { cn } from "../lib/utils";
+import { Database, Cpu, HardDrive, FolderOpen } from "lucide-react";
+
+type SystemInfo = {
+  LLMProvider?: string;
+  LLMModel?: string;
+  EmbeddingEngine?: string;
+  EmbeddingModelPref?: string;
+  VectorDB?: string;
+  HasExistingEmbeddings?: boolean;
+  HasCachedEmbeddings?: boolean;
+  StorageDir?: string;
+};
 
 export default function SettingsPage() {
   const { theme, setTheme } = useTheme();
@@ -28,6 +40,11 @@ export default function SettingsPage() {
   const [lastChecked, setLastChecked] = React.useState<string>("");
   const [urlTouched, setUrlTouched] = React.useState(false);
   const [keyTouched, setKeyTouched] = React.useState(false);
+
+  // System statistics
+  const [systemInfo, setSystemInfo] = React.useState<SystemInfo | null>(null);
+  const [vectorCount, setVectorCount] = React.useState<number | null>(null);
+  const [loadingSystemInfo, setLoadingSystemInfo] = React.useState(false);
 
   const urlValid = React.useMemo(() => {
     try {
@@ -58,6 +75,32 @@ export default function SettingsPage() {
     } catch { setAuth("error") }
     setLastChecked(new Date().toLocaleString());
     setLoading(false);
+    
+    // Fetch system info if auth is ok
+    if (auth === "ok" || ping === "ok") {
+      await fetchSystemInfo();
+    }
+  }
+
+  async function fetchSystemInfo() {
+    setLoadingSystemInfo(true);
+    try {
+      const [systemRes, vectorRes] = await Promise.all([
+        apiFetch('/api/anythingllm/system').then(r => r.json()).catch(() => null),
+        apiFetch('/api/anythingllm/system/vector-count').then(r => r.json()).catch(() => null)
+      ]);
+      
+      if (systemRes?.settings) {
+        setSystemInfo(systemRes.settings);
+      }
+      if (vectorRes?.vectorCount !== undefined) {
+        setVectorCount(vectorRes.vectorCount);
+      }
+    } catch (error) {
+      console.error('Failed to fetch system info:', error);
+    } finally {
+      setLoadingSystemInfo(false);
+    }
   }
 
   React.useEffect(() => {
@@ -80,6 +123,7 @@ export default function SettingsPage() {
         if (s?.anythingLLMKey) setApiKey(String(s.anythingLLMKey));
       } catch {}
       await check();
+      await fetchSystemInfo();
     })();
   }, []);
 
@@ -161,7 +205,7 @@ export default function SettingsPage() {
   }
 
   return (
-    <div className="space-y-6 animate-in fade-in-0 slide-in-from-top-2">
+    <div className="flex flex-col space-y-6 animate-in fade-in-0 slide-in-from-top-2 h-full">
       <Breadcrumb>
         <BreadcrumbList>
           <BreadcrumbItem>
@@ -173,6 +217,7 @@ export default function SettingsPage() {
           </BreadcrumbItem>
         </BreadcrumbList>
       </Breadcrumb>
+
       <div className="flex items-center justify-between">
         <div className="space-y-1">
           <div className="flex items-center gap-3">
@@ -186,6 +231,10 @@ export default function SettingsPage() {
           </div>
         </div>
       </div>
+
+      <div className="grid grid-cols-12 gap-6 flex-1 min-h-0">
+        <div className="col-span-12 overflow-y-auto">
+          <div className="space-y-6">
 
       <Card className="p-6 space-y-4">
         <div className="font-medium">Appearance</div>
@@ -268,6 +317,100 @@ export default function SettingsPage() {
           {lastChecked ? <div className="text-xs text-muted-foreground">Last checked: {lastChecked}</div> : null}
         </div>
       </Card>
+
+      {/* System Statistics */}
+      {(systemInfo || vectorCount !== null) && (
+        <Card className="p-6 space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="font-medium">AnythingLLM System Statistics</div>
+            <Button onClick={fetchSystemInfo} disabled={loadingSystemInfo} size="sm" variant="ghost">
+              <Icon.Refresh className={cn("h-4 w-4", loadingSystemInfo && "animate-spin")} />
+            </Button>
+          </div>
+          <div className="text-sm text-muted-foreground">
+            Information about your connected AnythingLLM instance
+          </div>
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {systemInfo?.LLMProvider && (
+              <div className="space-y-2 rounded-lg border p-4">
+                <div className="flex items-center gap-2">
+                  <Cpu className="h-4 w-4 text-muted-foreground" />
+                  <div className="text-xs font-medium text-muted-foreground">LLM Provider</div>
+                </div>
+                <div className="text-lg font-semibold">{systemInfo.LLMProvider}</div>
+                {systemInfo.LLMModel && (
+                  <div className="text-xs text-muted-foreground">{systemInfo.LLMModel}</div>
+                )}
+              </div>
+            )}
+            {systemInfo?.EmbeddingEngine && (
+              <div className="space-y-2 rounded-lg border p-4">
+                <div className="flex items-center gap-2">
+                  <Database className="h-4 w-4 text-muted-foreground" />
+                  <div className="text-xs font-medium text-muted-foreground">Embedding Engine</div>
+                </div>
+                <div className="text-lg font-semibold">{systemInfo.EmbeddingEngine}</div>
+                {systemInfo.EmbeddingModelPref && (
+                  <div className="text-xs text-muted-foreground truncate" title={systemInfo.EmbeddingModelPref}>
+                    {systemInfo.EmbeddingModelPref}
+                  </div>
+                )}
+              </div>
+            )}
+            {systemInfo?.VectorDB && (
+              <div className="space-y-2 rounded-lg border p-4">
+                <div className="flex items-center gap-2">
+                  <HardDrive className="h-4 w-4 text-muted-foreground" />
+                  <div className="text-xs font-medium text-muted-foreground">Vector Database</div>
+                </div>
+                <div className="text-lg font-semibold">{systemInfo.VectorDB}</div>
+                {systemInfo.HasExistingEmbeddings && (
+                  <div className="text-xs text-green-600 dark:text-green-400">Has embeddings</div>
+                )}
+              </div>
+            )}
+            {vectorCount !== null && (
+              <div className="space-y-2 rounded-lg border p-4">
+                <div className="flex items-center gap-2">
+                  <Database className="h-4 w-4 text-muted-foreground" />
+                  <div className="text-xs font-medium text-muted-foreground">Total Vectors</div>
+                </div>
+                <div className="text-lg font-semibold">{vectorCount.toLocaleString()}</div>
+                <div className="text-xs text-muted-foreground">Embedded documents</div>
+              </div>
+            )}
+            {systemInfo?.HasExistingEmbeddings !== undefined && (
+              <div className="space-y-2 rounded-lg border p-4">
+                <div className="flex items-center gap-2">
+                  <Database className="h-4 w-4 text-muted-foreground" />
+                  <div className="text-xs font-medium text-muted-foreground">Embeddings Status</div>
+                </div>
+                <div className="text-lg font-semibold">
+                  {systemInfo.HasExistingEmbeddings ? 'Active' : 'None'}
+                </div>
+                <div className={cn(
+                  "text-xs",
+                  systemInfo.HasExistingEmbeddings ? "text-green-600 dark:text-green-400" : "text-amber-600 dark:text-amber-400"
+                )}>
+                  {systemInfo.HasCachedEmbeddings ? 'Cached available' : 'No cache'}
+                </div>
+              </div>
+            )}
+            {systemInfo?.StorageDir && (
+              <div className="space-y-2 rounded-lg border p-4">
+                <div className="flex items-center gap-2">
+                  <FolderOpen className="h-4 w-4 text-muted-foreground" />
+                  <div className="text-xs font-medium text-muted-foreground">Storage Directory</div>
+                </div>
+                <div className="text-sm font-mono truncate" title={systemInfo.StorageDir}>
+                  {systemInfo.StorageDir}
+                </div>
+                <div className="text-xs text-muted-foreground">Data location</div>
+              </div>
+            )}
+          </div>
+        </Card>
+      )}
 
       {/* Development Tools */}
       <Card className="p-6">
@@ -395,6 +538,10 @@ export default function SettingsPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

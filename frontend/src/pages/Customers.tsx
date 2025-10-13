@@ -73,6 +73,9 @@ export function CustomersPage() {
   const [metadataModal, setMetadataModal] = React.useState<DocumentMetadata | null>(null);
   const { metadataProcessing, startTracking, setRefreshCallback } = useMetadata();
 
+  // Accepted file types for upload validation
+  const [acceptedFileTypes, setAcceptedFileTypes] = React.useState<Record<string, string[]> | null>(null);
+
   // No localStorage persistence; cards are saved to SQL via backend
   const [panelMode, setPanelMode] = React.useState<'split' | 'chat' | 'docs'>('split');
   const [docQuery, setDocQuery] = React.useState<string>("");
@@ -82,6 +85,30 @@ export function CustomersPage() {
     : (panelMode === 'chat'
       ? 'grid grid-rows-[minmax(0,1fr)_minmax(0,0fr)]'
       : 'grid grid-rows-[minmax(0,0fr)_minmax(0,1fr)]');
+
+  // Fetch accepted file types when upload dialog opens
+  React.useEffect(() => {
+    if (uploadOpen && !acceptedFileTypes) {
+      apiFetch('/api/anythingllm/document/accepted-file-types')
+        .then(r => r.json())
+        .then(data => setAcceptedFileTypes(data.types || {}))
+        .catch(() => setAcceptedFileTypes({}));
+    }
+  }, [uploadOpen, acceptedFileTypes]);
+
+  // Validate file against accepted types
+  function isFileTypeAccepted(filename: string): { valid: boolean; message?: string } {
+    if (!acceptedFileTypes) return { valid: true }; // Allow if not loaded yet
+    const ext = filename.slice(filename.lastIndexOf('.')).toLowerCase();
+    const allExtensions = Object.values(acceptedFileTypes).flat();
+    if (allExtensions.includes(ext)) {
+      return { valid: true };
+    }
+    return {
+      valid: false,
+      message: `File type "${ext}" not supported. Accepted: ${allExtensions.slice(0, 10).join(', ')}${allExtensions.length > 10 ? '...' : ''}`
+    };
+  }
 
   // Human-readable file size for document list
   function formatBytes(bytes: number): string {
@@ -1158,13 +1185,54 @@ export function CustomersPage() {
                             </DialogDescription>
                           </DialogHeader>
                           <div className="space-y-3">
-                            <div className="text-sm text-muted-foreground">Click the area below to attach a file, or drag and drop.</div>
+                            <div className="flex items-center justify-between">
+                              <div className="text-sm text-muted-foreground">Click the area below to attach a file, or drag and drop.</div>
+                              {acceptedFileTypes && (
+                                <Dialog>
+                                  <DialogTrigger asChild>
+                                    <Button variant="ghost" size="sm" className="h-7 text-xs">
+                                      <FileType className="h-3 w-3 mr-1" />
+                                      View all formats
+                                    </Button>
+                                  </DialogTrigger>
+                                  <DialogContent className="max-w-2xl">
+                                    <DialogHeader>
+                                      <DialogTitle>Accepted File Formats</DialogTitle>
+                                      <DialogDescription>
+                                        These file types can be uploaded to AnythingLLM workspaces
+                                      </DialogDescription>
+                                    </DialogHeader>
+                                    <ScrollArea className="max-h-[400px] pr-4">
+                                      <div className="space-y-3">
+                                        {Object.entries(acceptedFileTypes).map(([mimeType, extensions]) => (
+                                          <div key={mimeType} className="space-y-1">
+                                            <div className="text-sm font-medium">{extensions.join(', ')}</div>
+                                            <div className="text-xs text-muted-foreground">{mimeType}</div>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </ScrollArea>
+                                  </DialogContent>
+                                </Dialog>
+                              )}
+                            </div>
                             <input
                               ref={fileInputRef}
                               type="file"
                               className="hidden"
                               disabled={uploading}
-                              onChange={(e) => setFile(e.target.files?.[0] || null)}
+                              onChange={(e) => {
+                                const selectedFile = e.target.files?.[0] || null;
+                                if (selectedFile) {
+                                  const validation = isFileTypeAccepted(selectedFile.name);
+                                  if (!validation.valid) {
+                                    toast.error(validation.message || 'File type not supported');
+                                    e.target.value = ''; // Clear input
+                                    return;
+                                  }
+                                }
+                                setFile(selectedFile);
+                              }}
                             />
                             <button
                               type="button"
@@ -1173,7 +1241,14 @@ export function CustomersPage() {
                               onDrop={(e) => {
                                 e.preventDefault(); e.stopPropagation();
                                 const f = e.dataTransfer?.files?.[0];
-                                if (f) setFile(f);
+                                if (f) {
+                                  const validation = isFileTypeAccepted(f.name);
+                                  if (!validation.valid) {
+                                    toast.error(validation.message || 'File type not supported');
+                                    return;
+                                  }
+                                  setFile(f);
+                                }
                               }}
                               disabled={uploading}
                               className="w-full rounded-md border border-dashed p-6 text-center hover:bg-accent/40 transition flex flex-col items-center justify-center text-muted-foreground"

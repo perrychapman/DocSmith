@@ -717,8 +717,8 @@ export function deleteDocumentMetadata(
 }
 
 /**
- * Generates a workspace-level index of all documents
- * Useful for providing AI with quick overview of available documents
+ * Generates a comprehensive workspace-level index of all documents
+ * This index is uploaded to AnythingLLM to help AI understand available context
  */
 export async function generateWorkspaceIndex(
   customerId: number
@@ -730,26 +730,176 @@ export async function generateWorkspaceIndex(
       return 'No documents found in workspace.'
     }
     
-    let index = `WORKSPACE DOCUMENT INDEX (${allMetadata.length} documents):\n\n`
+    // Generate rich index with enhanced metadata
+    let index = `WORKSPACE DOCUMENT INDEX\n`
+    index += `Total Documents: ${allMetadata.length}\n`
+    index += `Last Updated: ${new Date().toISOString()}\n`
+    index += `\n=====================================================\n\n`
     
-    allMetadata.forEach((meta, idx) => {
-      index += `${idx + 1}. ${meta.filename}\n`
-      if (meta.documentType) index += `   Type: ${meta.documentType}\n`
-      if (meta.purpose) index += `   Purpose: ${meta.purpose}\n`
-      if (meta.keyTopics && meta.keyTopics.length > 0) {
-        index += `   Topics: ${meta.keyTopics.join(', ')}\n`
-      }
-      if (meta.mentionedSystems && meta.mentionedSystems.length > 0) {
-        index += `   Systems: ${meta.mentionedSystems.join(', ')}\n`
-      }
-      if (meta.meetingDate) index += `   Meeting Date: ${meta.meetingDate}\n`
-      if (meta.dateRange) index += `   Date Range: ${meta.dateRange}\n`
+    // Group documents by type for better organization
+    const byType = new Map<string, DocumentMetadata[]>()
+    allMetadata.forEach(meta => {
+      const type = meta.documentType || 'Unknown'
+      if (!byType.has(type)) byType.set(type, [])
+      byType.get(type)!.push(meta)
+    })
+    
+    // Output grouped documents
+    Array.from(byType.entries()).forEach(([type, docs]) => {
+      index += `${type} (${docs.length})\n`
+      index += `${'='.repeat(50)}\n\n`
+      
+      docs.forEach((meta, idx) => {
+        index += `${idx + 1}. ${meta.filename}\n`
+        
+        if (meta.purpose) {
+          index += `   Purpose: ${meta.purpose}\n`
+        }
+        
+        if (meta.keyTopics && meta.keyTopics.length > 0) {
+          index += `   Topics: ${meta.keyTopics.slice(0, 5).join(', ')}`
+          if (meta.keyTopics.length > 5) index += ` (+${meta.keyTopics.length - 5} more)`
+          index += '\n'
+        }
+        
+        if (meta.dataCategories && meta.dataCategories.length > 0) {
+          index += `   Data: ${meta.dataCategories.join(', ')}\n`
+        }
+        
+        if (meta.stakeholders && meta.stakeholders.length > 0) {
+          index += `   Stakeholders: ${meta.stakeholders.slice(0, 3).join(', ')}\n`
+        }
+        
+        if (meta.mentionedSystems && meta.mentionedSystems.length > 0) {
+          index += `   Systems: ${meta.mentionedSystems.join(', ')}\n`
+        }
+        
+        // Add structural metadata for spreadsheets
+        if (meta.extraFields) {
+          const extra = meta.extraFields as any
+          if (extra.sheetNames && extra.sheetNames.length > 0) {
+            index += `   Sheets: ${extra.sheetNames.join(', ')}\n`
+          }
+          if (extra.dataRowCount) {
+            index += `   Rows: ${extra.dataRowCount.toLocaleString()}\n`
+          }
+          if (extra.columnHeaders && extra.columnHeaders.length > 0) {
+            index += `   Columns: ${extra.columnHeaders.slice(0, 8).join(', ')}`
+            if (extra.columnHeaders.length > 8) index += ` (+${extra.columnHeaders.length - 8} more)`
+            index += '\n'
+          }
+        }
+        
+        if (meta.dateRange) {
+          index += `   Date Range: ${meta.dateRange}\n`
+        } else if (meta.meetingDate) {
+          index += `   Date: ${meta.meetingDate}\n`
+        }
+        
+        if (meta.fileSize) {
+          const sizeMB = (meta.fileSize / (1024 * 1024)).toFixed(2)
+          index += `   Size: ${sizeMB} MB\n`
+        }
+        
+        index += '\n'
+      })
+      
       index += '\n'
     })
     
+    // Add search tips at the end
+    index += `\n=====================================================\n`
+    index += `SEARCH TIPS:\n`
+    index += `- Use document filenames for specific lookups\n`
+    index += `- Search by topic tags for thematic queries\n`
+    index += `- Filter by data categories or systems mentioned\n`
+    index += `- Reference stakeholders for role-based queries\n`
+    
     return index
   } catch (err) {
-    console.error('Failed to generate workspace index:', err)
+    logError('[WORKSPACE-INDEX] Failed to generate index:', err)
     return 'Error generating workspace index.'
+  }
+}
+
+/**
+ * Uploads workspace index to AnythingLLM as a searchable document
+ * This ensures AI always has context about available documents
+ */
+export async function uploadWorkspaceIndex(
+  customerId: number,
+  workspaceSlug: string
+): Promise<boolean> {
+  try {
+    logInfo(`[WORKSPACE-INDEX] Generating index for customer ${customerId}...`)
+    const index = await generateWorkspaceIndex(customerId)
+    
+    if (index.includes('Error') || index.includes('No documents')) {
+      logInfo(`[WORKSPACE-INDEX] Skipping upload - ${index}`)
+      return false
+    }
+    
+    logInfo(`[WORKSPACE-INDEX] Uploading index to workspace ${workspaceSlug}...`)
+    
+    // Upload as raw text document with metadata
+    const result = await anythingllmRequest<{
+      success: boolean
+      error?: string
+      documents?: any[]
+    }>('/document/raw-text', 'POST', {
+      textContent: index,
+      metadata: {
+        title: `Workspace Document Index - ${new Date().toLocaleDateString()}`,
+        docAuthor: 'DocSmith System',
+        description: 'Searchable index of all documents in this workspace',
+        docSource: 'workspace-index',
+        published: new Date().toISOString()
+      }
+    })
+    
+    if (result.success) {
+      logInfo(`[WORKSPACE-INDEX] Successfully uploaded index to ${workspaceSlug}`)
+      
+      // Update workspace embeddings to include the new index
+      if (result.documents && result.documents.length > 0) {
+        const docPath = result.documents[0].location
+        await anythingllmRequest(
+          `/workspace/${encodeURIComponent(workspaceSlug)}/update-embeddings`,
+          'POST',
+          { adds: [docPath] }
+        )
+        logInfo(`[WORKSPACE-INDEX] Embeddings updated for ${workspaceSlug}`)
+      }
+      
+      return true
+    } else {
+      logError(`[WORKSPACE-INDEX] Upload failed: ${result.error}`)
+      return false
+    }
+  } catch (err) {
+    logError('[WORKSPACE-INDEX] Error uploading index:', err)
+    return false
+  }
+}
+
+/**
+ * Refreshes workspace index after metadata changes
+ * Call this after document uploads, deletions, or metadata updates
+ */
+export async function refreshWorkspaceIndex(
+  customerId: number,
+  workspaceSlug: string
+): Promise<void> {
+  try {
+    logInfo(`[WORKSPACE-INDEX] Refreshing index for customer ${customerId}...`)
+    
+    // Small delay to ensure database has committed recent changes
+    await new Promise(resolve => setTimeout(resolve, 500))
+    
+    await uploadWorkspaceIndex(customerId, workspaceSlug)
+    
+    logInfo(`[WORKSPACE-INDEX] Index refresh complete`)
+  } catch (err) {
+    logError('[WORKSPACE-INDEX] Error refreshing index:', err)
   }
 }

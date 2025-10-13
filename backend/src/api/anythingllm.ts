@@ -11,6 +11,46 @@ const router = Router();
 router.get("/debug", (_req, res) => res.json({ mounted: true }));
 
 /**
+ * SYSTEM: Get all system settings and configuration
+ * Proxies: GET /api/v1/system
+ * Returns comprehensive system info including LLM provider, embedding engine, vector DB, etc.
+ */
+router.get("/system", async (_req, res) => {
+  try {
+    const data = await anythingllmRequest<{
+      settings: Record<string, any>
+    }>("/system", "GET");
+    res.json(data);
+  } catch (err: any) {
+    const msg = String(err?.message || "System info fetch failed");
+    const isForbidden = /\b403\b/i.test(msg) || /forbidden/i.test(msg);
+    res.status(isForbidden ? 403 : 502).json({
+      message: isForbidden ? "Invalid API Key" : msg,
+    });
+  }
+});
+
+/**
+ * SYSTEM: Get total vector count across all workspaces
+ * Proxies: GET /api/v1/system/vector-count
+ * Returns total number of embedded vectors in the system
+ */
+router.get("/system/vector-count", async (_req, res) => {
+  try {
+    const data = await anythingllmRequest<{
+      vectorCount: number
+    }>("/system/vector-count", "GET");
+    res.json(data);
+  } catch (err: any) {
+    const msg = String(err?.message || "Vector count fetch failed");
+    const isForbidden = /\b403\b/i.test(msg) || /forbidden/i.test(msg);
+    res.status(isForbidden ? 403 : 502).json({
+      message: isForbidden ? "Invalid API Key" : msg,
+    });
+  }
+});
+
+/**
  * PING (proxy -> /api/ping, no /v1) ΓÇö uses built-in fetch (Node 18+)
  */
 router.get("/ping", async (_req, res) => {
@@ -34,6 +74,26 @@ router.get("/ping", async (_req, res) => {
     return res.status(r.status).json(data);
   } catch (err: any) {
     return res.status(502).json({ message: "Ping failed: Upstream error" });
+  }
+});
+
+/**
+ * DOCUMENT: Get accepted file types for upload validation
+ * Proxies: GET /api/v1/document/accepted-file-types
+ * Returns list of supported MIME types and extensions
+ */
+router.get("/document/accepted-file-types", async (_req, res) => {
+  try {
+    const data = await anythingllmRequest<{
+      types: Record<string, string[]>
+    }>("/document/accepted-file-types", "GET");
+    res.json(data);
+  } catch (err: any) {
+    const msg = String(err?.message || "File types fetch failed");
+    const isForbidden = /\b403\b/i.test(msg) || /forbidden/i.test(msg);
+    res.status(isForbidden ? 403 : 502).json({
+      message: isForbidden ? "Invalid API Key" : msg,
+    });
   }
 });
 
@@ -593,6 +653,69 @@ router.post("/workspace/:slug/thread/:threadSlug/chat", async (req, res) => {
     if (isForbidden) return res.status(403).json({ message: "Invalid API Key" });
     if (isBadReq) return res.status(400).json({ message: "Bad Request" });
     res.status(502).json({ message: msg });
+  }
+});
+
+/**
+ * WORKSPACES: Stream Chat (SSE passthrough)
+ * Proxies: POST /api/v1/workspace/:slug/stream-chat
+ * Body: { message, mode: "query"|"chat", userId?, attachments? }
+ */
+router.post("/workspace/:slug/stream-chat", async (req, res) => {
+  const { slug } = req.params;
+
+  try {
+    // Build upstream URL from configured API root and ensure /api/v1 prefix
+    const s = readSettings();
+    const apiRoot = (String(s.anythingLLMUrl || "http://localhost:3001").trim()).replace(/\/+$/, "");
+    const base = `${apiRoot}/api/v1`;
+    const apiKey = String(s.anythingLLMKey || "").trim();
+
+    // Abort upstream if client disconnects
+    const controller = new AbortController();
+    req.on("close", () => controller.abort());
+    const upstream = await fetch(
+      `${base}/workspace/${encodeURIComponent(slug)}/stream-chat`,
+      {
+        method: "POST",
+        headers: {
+          Accept: "text/event-stream",
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify(req.body ?? {}),
+        signal: controller.signal,
+      }
+    );
+
+    if (upstream.status === 403) {
+      return res.status(403).json({ message: "Invalid API Key" });
+    }
+    if (!upstream.ok) {
+      const detail = await upstream.text().catch(() => "");
+      return res.status(502).json({
+        message: `Stream chat failed: ${upstream.status} ${upstream.statusText}`,
+        detail,
+      });
+    }
+
+    // SSE headers
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-cache");
+    res.setHeader("Connection", "keep-alive");
+    // @ts-ignore (flushHeaders exists in Express types depending on version)
+    res.flushHeaders?.();
+
+    // Pipe upstream web stream -> Express response
+    const reader = upstream.body!.getReader();
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      if (value) res.write(Buffer.from(value));
+    }
+    res.end();
+  } catch (_err) {
+    res.status(502).json({ message: "Stream chat failed: Upstream error" });
   }
 });
 

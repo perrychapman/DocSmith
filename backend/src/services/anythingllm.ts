@@ -20,7 +20,10 @@ export async function anythingllmRequest<T>(
   if (!apiKey) {
     throw new Error('NotConfigured: ANYTHINGLLM_API_KEY missing in settings');
   }
-  const url = `${baseUrl}/api/v1${path}`;
+  
+  // Try v1 API first, fallback to non-versioned API
+  const urlV1 = `${baseUrl}/api/v1${path}`;
+  const urlLegacy = `${baseUrl}/api${path}`;
 
   const headers: Record<string, string> = {
     Authorization: `Bearer ${apiKey}`,
@@ -35,11 +38,21 @@ export async function anythingllmRequest<T>(
     requestBody = body;
   }
 
-  const res = await fetch(url, {
+  // Try v1 API first
+  let res = await fetch(urlV1, {
     method,
     headers,
     body: requestBody,
   });
+
+  // If 404, try legacy API without /v1
+  if (res.status === 404) {
+    res = await fetch(urlLegacy, {
+      method,
+      headers,
+      body: requestBody,
+    });
+  }
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");

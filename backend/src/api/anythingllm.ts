@@ -39,19 +39,38 @@ router.get("/ping", async (_req, res) => {
 
 /**
  * AUTH
- * Proxies: GET http://localhost:3001/api/v1/auth
+ * Proxies: GET http://localhost:3001/api/v1/auth (if available)
+ * Fallback: Check if /workspaces endpoint returns valid response
  * Expects: Authorization: Bearer <API KEY> (added by service helper)
  */
 
 
 router.get("/auth", async (_req, res) => {
   try {
+    // Try the /auth endpoint first
     const data = await anythingllmRequest<{ authenticated: boolean }>("/auth", "GET");
     res.json(data);
   } catch (err: any) {
     const msg = String(err?.message || "Auth check failed");
     const isForbidden = /403/.test(msg);
     const isNotConfigured = /NotConfigured/i.test(msg) || /ANYTHINGLLM_API_KEY.*missing/i.test(msg);
+    const isNotFound = /404/.test(msg) || /Cannot GET/i.test(msg);
+    
+    // If /auth endpoint doesn't exist (404), try /workspaces as fallback
+    if (isNotFound) {
+      try {
+        await anythingllmRequest<any>("/workspaces", "GET");
+        // If workspaces call succeeds, authentication is valid
+        return res.json({ authenticated: true });
+      } catch (fallbackErr: any) {
+        const fallbackMsg = String(fallbackErr?.message || "Auth check failed");
+        const fallbackForbidden = /403/.test(fallbackMsg);
+        return res.status(fallbackForbidden ? 403 : 502).json({
+          message: fallbackForbidden ? "Invalid API Key" : fallbackMsg,
+        });
+      }
+    }
+    
     res.status(isNotConfigured ? 400 : (isForbidden ? 403 : 502)).json({
       message: isNotConfigured ? "Missing API Key in settings" : (isForbidden ? "Invalid API Key" : msg),
     });

@@ -63,8 +63,20 @@ export default function SettingsPage() {
   React.useEffect(() => {
     (async () => {
       try {
+        // Try auto-discovery first
+        try {
+          const discoverResponse = await apiFetch(`/api/settings/discover-anythingllm`, { method: 'POST' });
+          const discoverData = await discoverResponse.json();
+          if (discoverData.success && discoverData.url) {
+            setApiUrl(discoverData.url);
+          }
+        } catch (discoverError) {
+          console.log('Auto-discovery skipped:', discoverError);
+        }
+        
+        // Load saved settings
         const s = await apiFetch(`/api/settings`).then((r) => r.json()).catch(() => ({}));
-        if (s?.anythingLLMUrl) setApiUrl(String(s.anythingLLMUrl)); else setApiUrl('http://localhost:3001');
+        if (s?.anythingLLMUrl) setApiUrl(String(s.anythingLLMUrl));
         if (s?.anythingLLMKey) setApiKey(String(s.anythingLLMKey));
       } catch {}
       await check();
@@ -202,7 +214,34 @@ export default function SettingsPage() {
         </div>
         <div className="grid gap-3 sm:grid-cols-2">
           <div className="space-y-1">
-            <div className="text-sm">API URL</div>
+            <div className="flex items-center justify-between">
+              <div className="text-sm">API URL</div>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={async () => {
+                  try {
+                    const response = await apiFetch('/api/settings/discover-anythingllm', { method: 'POST' });
+                    const data = await response.json();
+                    if (data.success && data.url) {
+                      setApiUrl(data.url);
+                      setUrlTouched(true);
+                      toast.success(`Found AnythingLLM on port ${data.port}`);
+                    } else {
+                      toast.error('Could not find AnythingLLM Desktop');
+                    }
+                  } catch (error) {
+                    console.error('Auto-discovery failed:', error);
+                    toast.error('Auto-discovery failed');
+                  }
+                }}
+                className="text-xs h-6"
+              >
+                <Icon.Refresh className="w-3 h-3 mr-1" />
+                Auto-detect
+              </Button>
+            </div>
             <Input value={apiUrl} onChange={(e) => setApiUrl(e.target.value)} onBlur={() => setUrlTouched(true)} aria-invalid={!urlValid && urlTouched} placeholder="http://localhost:3001" />
             <div className="text-xs text-muted-foreground">Default: http://localhost:3001</div>
             {!urlValid && urlTouched ? <div className="text-xs text-red-600">Enter a valid http(s) URL</div> : null}

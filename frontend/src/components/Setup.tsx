@@ -112,7 +112,21 @@ export default function Setup({ onComplete }: SetupProps) {
     setServiceRunning(null);
     
     try {
-      // First, save the current settings (or defaults) so backend knows where to check
+      // Try auto-discovery first
+      const discoverResponse = await apiFetch(`/api/settings/discover-anythingllm`, { 
+        method: 'POST'
+      });
+      
+      const discoverData = await discoverResponse.json();
+      
+      if (discoverData.success && discoverData.url) {
+        // Auto-discovery succeeded, update UI
+        setApiUrl(discoverData.url);
+        setServiceRunning(true);
+        return;
+      }
+      
+      // Fallback: Try manual check with provided URL
       await apiFetch(`/api/settings`, { 
         method: 'POST', 
         headers: { 'Content-Type': 'application/json' }, 
@@ -122,7 +136,6 @@ export default function Setup({ onComplete }: SetupProps) {
         }) 
       });
 
-      // Use our backend API to check the service
       const response = await apiFetch(`/api/anythingllm/ping`);
       
       if (response.status === 200) {
@@ -332,7 +345,30 @@ export default function Setup({ onComplete }: SetupProps) {
               
               <div className="space-y-4">
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">AnythingLLM URL</label>
+                  <div className="flex items-center justify-between">
+                    <label className="text-sm font-medium">AnythingLLM URL</label>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      onClick={async () => {
+                        try {
+                          const response = await apiFetch('/api/settings/discover-anythingllm', { method: 'POST' });
+                          const data = await response.json();
+                          if (data.success && data.url) {
+                            setApiUrl(data.url);
+                            setUrlTouched(true);
+                          }
+                        } catch (error) {
+                          console.error('Auto-discovery failed:', error);
+                        }
+                      }}
+                      className="text-xs"
+                    >
+                      <Icon.Refresh className="w-3 h-3 mr-1" />
+                      Auto-detect
+                    </Button>
+                  </div>
                   <Input
                     value={apiUrl}
                     onChange={(e) => {

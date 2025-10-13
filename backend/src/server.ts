@@ -5,6 +5,7 @@ import path from "path";
 import fs from "fs";
 import { APP_CONFIG } from "./utils/config";
 import { logInfo } from "./utils/logger";
+import { autoConfigureAnythingLLM, startAnythingLLMMonitor } from "./services/anythingllmDiscovery";
 
 import customersRouter from "./api/customers";
 import promptsRouter from "./api/prompts";
@@ -86,8 +87,24 @@ app.use((req, res) => {
   res.status(404).json({ error: "Not found" });
 });
 
-const server = app.listen(APP_CONFIG.port, () => {
+const server = app.listen(APP_CONFIG.port, async () => {
   logInfo(`Backend running at http://localhost:${APP_CONFIG.port}`);
+  
+  // Auto-discover AnythingLLM Desktop port on startup
+  try {
+    logInfo('[STARTUP] Attempting to auto-configure AnythingLLM Desktop...');
+    const success = await autoConfigureAnythingLLM();
+    if (success) {
+      logInfo('[STARTUP] AnythingLLM Desktop configured successfully');
+    } else {
+      logInfo('[STARTUP] Could not find AnythingLLM Desktop. Configure manually in Settings.');
+    }
+  } catch (error) {
+    logInfo(`[STARTUP] AnythingLLM auto-config failed: ${error}`);
+  }
+  
+  // Start background monitor to handle port changes (Desktop restarts)
+  startAnythingLLMMonitor(60000); // Check every 60 seconds
 });
 
 // Graceful shutdown handling

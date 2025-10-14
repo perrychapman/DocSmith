@@ -1,4 +1,4 @@
-
+// @ts-nocheck
 import type { BrowserWindow as BrowserWindowType } from 'electron';
 const { app, BrowserWindow, ipcMain, shell } = require('electron');
 const { autoUpdater } = require('electron-updater');

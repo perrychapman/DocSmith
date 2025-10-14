@@ -384,7 +384,26 @@ Return ONLY a valid JSON object with the exact structure specified above. No mar
     logInfo(`[METADATA] Target document: "${targetDoc}"`)
     logInfo(`[METADATA] Document type detected: ${isSpreadsheet ? 'Spreadsheet' : isPresentation ? 'Presentation' : isCode ? 'Code' : isImage ? 'Image' : 'Document'}`)
     
-    // Use query mode and potentially document pinning if supported
+    // Pin the specific document before analysis to ensure AI accesses the correct document
+    const docPathToPin = anythingllmPath || documentName || filename
+    logInfo(`[METADATA] Pinning document for analysis: "${docPathToPin}"`)
+    
+    try {
+      await anythingllmRequest(
+        `/workspace/${encodeURIComponent(workspaceSlug)}/update-pin`,
+        'POST',
+        {
+          docPath: docPathToPin,
+          pinStatus: true
+        }
+      )
+      logInfo(`[METADATA] Successfully pinned document: "${docPathToPin}"`)
+    } catch (pinErr) {
+      logError(`[METADATA] Failed to pin document (continuing anyway):`, pinErr)
+      // Continue with analysis even if pinning fails
+    }
+    
+    // Use query mode with the pinned document
     const result = await anythingllmRequest<any>(
       `/workspace/${encodeURIComponent(workspaceSlug)}/chat`,
       'POST',
@@ -392,10 +411,25 @@ Return ONLY a valid JSON object with the exact structure specified above. No mar
         message: analysisPrompt, 
         mode: 'query'
         // Note: temperature parameter removed - not supported by all models
-        // Note: Some AnythingLLM versions support 'sources' parameter to pin specific documents
-        // sources: documentName ? [documentName] : undefined
+        // Document is now pinned, so it should be prioritized in the query
       }
     )
+    
+    // Unpin the document after analysis
+    try {
+      await anythingllmRequest(
+        `/workspace/${encodeURIComponent(workspaceSlug)}/update-pin`,
+        'POST',
+        {
+          docPath: docPathToPin,
+          pinStatus: false
+        }
+      )
+      logInfo(`[METADATA] Successfully unpinned document: "${docPathToPin}"`)
+    } catch (unpinErr) {
+      logError(`[METADATA] Failed to unpin document:`, unpinErr)
+      // Don't throw - analysis was successful
+    }
     
     logInfo(`[METADATA] Got response from AnythingLLM: ${JSON.stringify(result, null, 2)}`)
     const responseText = String(result?.textResponse || result?.message || '')
@@ -535,25 +569,35 @@ export async function saveDocumentMetadata(
   workspaceSlug?: string
 ): Promise<void> {
   // Calculate template relevance scores using AI if workspace available
-  try {
-    const templateRelevance = await calculateDocumentTemplateRelevance(metadata, workspaceSlug)
-    
-    // Store top 10 template matches in extraFields
-    const topMatches = templateRelevance.slice(0, 10).map(t => ({
-      slug: t.templateSlug,
-      name: t.templateName,
-      score: t.score,
-      reasoning: t.reasoning
-    }))
-    
-    if (topMatches.length > 0) {
-      metadata.extraFields = metadata.extraFields || {}
-      metadata.extraFields.templateRelevance = topMatches
-      logInfo(`[METADATA] Calculated template relevance: Top match is ${topMatches[0].name} (${topMatches[0].score}/10)`)
+  // ONLY if template relevance hasn't been calculated yet
+  const hasExistingRelevance = metadata.extraFields?.templateRelevance && 
+    Array.isArray(metadata.extraFields.templateRelevance) &&
+    metadata.extraFields.templateRelevance.length > 0
+  
+  if (!hasExistingRelevance) {
+    try {
+      const templateRelevance = await calculateDocumentTemplateRelevance(metadata, workspaceSlug)
+      
+      // Store top 10 template matches in extraFields
+      const topMatches = templateRelevance.slice(0, 10).map(t => ({
+        slug: t.templateSlug,
+        name: t.templateName,
+        score: t.score,
+        reasoning: t.reasoning
+      }))
+      
+      if (topMatches.length > 0) {
+        metadata.extraFields = metadata.extraFields || {}
+        metadata.extraFields.templateRelevance = topMatches
+        logInfo(`[METADATA] Calculated template relevance: Top match is ${topMatches[0].name} (${topMatches[0].score}/10)`)
+      }
+    } catch (err) {
+      logError('[METADATA] Failed to calculate template relevance:', err)
+      // Continue saving metadata even if template relevance calculation fails
     }
-  } catch (err) {
-    logError('[METADATA] Failed to calculate template relevance:', err)
-    // Continue saving metadata even if template relevance calculation fails
+  } else {
+    const relevanceArray = metadata.extraFields!.templateRelevance as Array<{slug: string, name: string, score: number, reasoning: string}>
+    logInfo(`[METADATA] Using existing template relevance scores (${relevanceArray.length} templates)`)
   }
   
   return new Promise((resolve, reject) => {
@@ -825,6 +869,7 @@ export async function generateWorkspaceIndex(
 /**
  * Uploads workspace index to AnythingLLM as a searchable document
  * This ensures AI always has context about available documents
+ * Replaces any existing workspace index to avoid duplicates
  */
 export async function uploadWorkspaceIndex(
   customerId: number,
@@ -841,7 +886,39 @@ export async function uploadWorkspaceIndex(
     
     logInfo(`[WORKSPACE-INDEX] Uploading index to workspace ${workspaceSlug}...`)
     
-    // Upload as raw text document with metadata
+    // First, try to remove old workspace index documents
+    try {
+      const workspaceData = await anythingllmRequest<any>(
+        `/workspace/${encodeURIComponent(workspaceSlug)}`,
+        'GET'
+      )
+      
+      if (workspaceData?.workspace?.documents) {
+        const oldIndexDocs = workspaceData.workspace.documents.filter((doc: any) => 
+          doc.docSource === 'workspace-index' || 
+          (doc.title && doc.title.includes('Workspace Document Index'))
+        )
+        
+        if (oldIndexDocs.length > 0) {
+          logInfo(`[WORKSPACE-INDEX] Found ${oldIndexDocs.length} old index document(s), removing...`)
+          for (const doc of oldIndexDocs) {
+            try {
+              await anythingllmRequest(
+                `/workspace/${encodeURIComponent(workspaceSlug)}/update-embeddings`,
+                'POST',
+                { deletes: [doc.location] }
+              )
+            } catch (err) {
+              logError(`[WORKSPACE-INDEX] Failed to remove old index ${doc.location}:`, err)
+            }
+          }
+        }
+      }
+    } catch (err) {
+      logInfo(`[WORKSPACE-INDEX] Could not check for old indexes (continuing anyway)`)
+    }
+    
+    // Upload as raw text document with metadata (no timestamp in title)
     const result = await anythingllmRequest<{
       success: boolean
       error?: string
@@ -849,7 +926,7 @@ export async function uploadWorkspaceIndex(
     }>('/document/raw-text', 'POST', {
       textContent: index,
       metadata: {
-        title: `Workspace Document Index - ${new Date().toLocaleDateString()}`,
+        title: 'workspace-document-index.txt',
         docAuthor: 'DocSmith System',
         description: 'Searchable index of all documents in this workspace',
         docSource: 'workspace-index',

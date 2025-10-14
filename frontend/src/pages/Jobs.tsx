@@ -4,12 +4,14 @@ import { Button } from "../components/ui/Button";
 import { Badge } from "../components/ui/badge";
 import { Card } from "../components/ui/card";
 import { Input } from "../components/ui/input";
+import { Textarea } from "../components/ui/textarea";
 import { ScrollArea } from "../components/ui/scroll-area";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "../components/ui/breadcrumb";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { Icon } from "../components/icons";
-import { Search } from "lucide-react";
+import { Search, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { apiFetch } from "../lib/api";
 
@@ -20,6 +22,8 @@ type Job = {
   template: string;
   filename?: string;
   usedWorkspace?: string;
+  instructions?: string;  // Original user instructions
+  pinnedDocuments?: string[];  // AnythingLLM document paths that were pinned
   startedAt: string;
   updatedAt: string;
   completedAt?: string;
@@ -43,6 +47,10 @@ export default function JobsPage() {
   const [error, setError] = React.useState<string | null>(null);
   const [clearOpen, setClearOpen] = React.useState(false);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
+  const [regenerateOpen, setRegenerateOpen] = React.useState(false);
+  const [regenerateJob, setRegenerateJob] = React.useState<Job | null>(null);
+  const [revisionInstructions, setRevisionInstructions] = React.useState('');
+  const [regenerating, setRegenerating] = React.useState(false);
 
   const idFromHash = React.useCallback((): string | null => {
     const h = location.hash || '';
@@ -249,6 +257,62 @@ export default function JobsPage() {
     }
   }
 
+  const handleRegenerate = async () => {
+    if (!regenerateJob) return
+
+    try {
+      setRegenerating(true)
+      
+      // Step 1: Re-pin the original documents if they exist
+      if (regenerateJob.pinnedDocuments && regenerateJob.pinnedDocuments.length > 0 && regenerateJob.usedWorkspace) {
+        toast.info?.(`Re-pinning ${regenerateJob.pinnedDocuments.length} document(s)...`)
+        for (const docPath of regenerateJob.pinnedDocuments) {
+          try {
+            await apiFetch(`/api/anythingllm/workspace/${encodeURIComponent(regenerateJob.usedWorkspace)}/update-pin`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ docPath, pinStatus: true })
+            })
+          } catch (err) {
+            console.error(`Failed to re-pin document ${docPath}:`, err)
+          }
+        }
+      }
+      
+      // Step 2: Combine original instructions with revision instructions
+      const combinedInstructions = regenerateJob.instructions 
+        ? `${regenerateJob.instructions}\n\nREVISIONS:\n${revisionInstructions}`
+        : revisionInstructions
+
+      // Step 3: Call generate API with combined instructions and pinned documents
+      const response = await fetch('/api/generate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          customerId: regenerateJob.customerId,
+          template: regenerateJob.template,
+          filename: regenerateJob.filename,
+          instructions: combinedInstructions,
+          pinnedDocuments: regenerateJob.pinnedDocuments
+        })
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to regenerate document')
+      }
+
+      toast.success?.('Document regeneration started')
+      setRegenerateOpen(false)
+      setRevisionInstructions('')
+      loadJobs() // Refresh the jobs list
+    } catch (error) {
+      console.error(error)
+      toast.error?.('Failed to regenerate document')
+    } finally {
+      setRegenerating(false)
+    }
+  }
+
   return (
     <div className="flex flex-col space-y-6 animate-in fade-in-0 slide-in-from-top-2 h-full">
       <Breadcrumb>
@@ -419,6 +483,11 @@ export default function JobsPage() {
                           <Button size="icon" variant="ghost" aria-label="Open file" title="Open file" onClick={(e) => { e.preventDefault(); openJobFile(active); }}>
                             <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
                           </Button>
+                          {active.status === 'done' && (
+                            <Button size="icon" variant="ghost" aria-label="Regenerate with Revisions" title="Regenerate with Revisions" onClick={(e) => { e.preventDefault(); setRegenerateJob(active); setRegenerateOpen(true); }}>
+                              <RefreshCw className="h-4 w-4" />
+                            </Button>
+                          )}
                         </>
                       ) : null}
                     </div>
@@ -516,6 +585,74 @@ export default function JobsPage() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Regenerate Dialog */}
+      <Dialog open={regenerateOpen} onOpenChange={setRegenerateOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Regenerate Document with Revisions</DialogTitle>
+            <DialogDescription>
+              Add revision instructions to improve or fix the generated document while maintaining the original AI context.
+            </DialogDescription>
+          </DialogHeader>
+
+          {regenerateJob && (
+            <div className="space-y-4">
+              {/* Job Details */}
+              <div className="space-y-2 text-sm">
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground">Template:</span>
+                  <code className="px-2 py-0.5 bg-muted rounded">{regenerateJob.template}</code>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground">Customer:</span>
+                  <span>{regenerateJob.customerName || `Customer ${regenerateJob.customerId}`}</span>
+                </div>
+                {regenerateJob.filename && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-muted-foreground">Filename:</span>
+                    <code className="px-2 py-0.5 bg-muted rounded text-xs">{regenerateJob.filename}</code>
+                  </div>
+                )}
+              </div>
+
+              {/* Original Instructions (if any) */}
+              {regenerateJob.instructions && (
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Original Instructions</label>
+                  <div className="p-3 bg-muted rounded-md text-sm whitespace-pre-wrap">
+                    {regenerateJob.instructions}
+                  </div>
+                </div>
+              )}
+
+              {/* Revision Instructions Input */}
+              <div className="space-y-2">
+                <label htmlFor="revision-instructions" className="text-sm font-medium">
+                  Revision Instructions {!regenerateJob.instructions && <span className="text-muted-foreground">(required)</span>}
+                </label>
+                <Textarea
+                  id="revision-instructions"
+                  placeholder="Describe the changes needed (e.g., 'Fix table 2 formatting', 'Add executive summary section', 'Update conclusion with new data')..."
+                  value={revisionInstructions}
+                  onChange={(e) => setRevisionInstructions(e.target.value)}
+                  rows={6}
+                  className="resize-none"
+                />
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setRegenerateOpen(false); setRevisionInstructions(''); }} disabled={regenerating}>
+              Cancel
+            </Button>
+            <Button onClick={handleRegenerate} disabled={regenerating || !revisionInstructions.trim()}>
+              {regenerating ? 'Regenerating...' : 'Regenerate Document'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

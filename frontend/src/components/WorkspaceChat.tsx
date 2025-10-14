@@ -533,18 +533,55 @@ return (
               // Hide metadata extraction prompts and responses completely
               if (isMetadata) return null;
               
-              // For generation prompts we inject our own sent card; skip rendering the raw prompt replacement
-              if (shouldHideAsCode && isUser) return null;
+              // Hide all generation job messages (prompts and responses)
+              // Only show cards for these, not the raw AI messages
+              if (shouldHideAsCode) return null;
+              
+              // Only show cards and genuine user messages
+              // Cards are injected separately, so messages without cards that aren't job-related are real user chats
               return (
                 <div key={idx} className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
                   <div className="group flex flex-col gap-1 max-w-[75%]">
                     <div className={`whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 ${isUser ? 'bg-primary text-primary-foreground rounded-br-md' : 'bg-card border rounded-bl-md'}`}>
                       {card ? (
                         <div className="space-y-1">
-                          <div className="font-medium">
-                            {isUser
-                              ? (card.jobStatus === 'running' ? 'Document Generating' : 'Document Requested')
-                              : 'Document Generated'}
+                          <div className="flex items-center gap-2">
+                            <div className="font-medium flex-1">
+                              {isUser
+                                ? 'Document Requested'
+                                : (card.jobStatus === 'running' 
+                                    ? 'Document Generating' 
+                                    : card.jobStatus === 'done' 
+                                      ? 'Document Generated'
+                                      : card.jobStatus === 'error'
+                                        ? 'Generation Failed'
+                                        : 'Document Generation'
+                                  )}
+                            </div>
+                            {/* Status Badge */}
+                            {card.jobStatus === 'running' && (
+                              <span className="text-xs px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20 flex items-center gap-1 shrink-0">
+                                <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+                                Running
+                              </span>
+                            )}
+                            {card.jobStatus === 'done' && (
+                              <span className="text-xs px-2 py-0.5 rounded-full bg-green-500/10 text-green-600 dark:text-green-400 border border-green-500/20 flex items-center gap-1 shrink-0">
+                                <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+                                Done
+                              </span>
+                            )}
+                            {card.jobStatus === 'error' && (
+                              <span className="text-xs px-2 py-0.5 rounded-full bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20 flex items-center gap-1 shrink-0">
+                                <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M15 9l-6 6"/><path d="M9 9l6 6"/></svg>
+                                Error
+                              </span>
+                            )}
+                            {card.jobStatus === 'cancelled' && (
+                              <span className="text-xs px-2 py-0.5 rounded-full bg-gray-500/10 text-gray-600 dark:text-gray-400 border border-gray-500/20 shrink-0">
+                                Cancelled
+                              </span>
+                            )}
                           </div>
                           <div className="text-sm text-muted-foreground">
                             {card.template ? (<div>Template: {card.template}</div>) : null}
@@ -559,22 +596,22 @@ return (
                                 <>
                                   <Tooltip>
                                     <TooltipTrigger >
-                                      <Button asChild size="icon" variant="ghost" aria-label="View job" title="View job">
+                                      <Button asChild size="icon" variant="ghost" aria-label="View job details" title="View job details">
                                         <a href={`#jobs?id=${encodeURIComponent(card.jobId)}`}>
                                           <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14L21 3"/></svg>
                                         </a>
                                       </Button>
                                     </TooltipTrigger>
-                                    <TooltipContent>View job</TooltipContent>
+                                    <TooltipContent>View job details & logs</TooltipContent>
                                   </Tooltip>
                                   {onOpenLogs ? (
                                     <Tooltip>
                                       <TooltipTrigger >
-                                        <Button size="icon" variant="ghost" aria-label="View logs" title="View logs" onClick={(e)=>{ e.preventDefault(); onOpenLogs?.(card.jobId!) }}>
-                                          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 4h18"/><path d="M3 10h18"/><path d="M3 16h18"/></svg>
+                                        <Button size="icon" variant="ghost" aria-label="View generation progress" title="View progress" onClick={(e)=>{ e.preventDefault(); onOpenLogs?.(card.jobId!) }}>
+                                          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
                                         </Button>
                                       </TooltipTrigger>
-                                      <TooltipContent>View logs</TooltipContent>
+                                      <TooltipContent>View generation progress</TooltipContent>
                                     </Tooltip>
                                   ) : null}
                                 </>

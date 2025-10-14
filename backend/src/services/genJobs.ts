@@ -24,6 +24,8 @@ export interface GenJob {
   template: string
   filename?: string
   usedWorkspace?: string
+  instructions?: string  // Original user instructions for generation
+  pinnedDocuments?: string[]  // AnythingLLM document paths that were pinned for this generation
   startedAt: string
   updatedAt: string
   completedAt?: string
@@ -60,7 +62,7 @@ function saveJobs() {
   try { ensureJobsDir(); fs.writeFileSync(JOBS_FILE, JSON.stringify(jobs, null, 2), 'utf-8') } catch {}
 }
 
-export function createJob(input: { customerId: number; customerName?: string; template: string; filename?: string; usedWorkspace?: string }): GenJob {
+export function createJob(input: { customerId: number; customerName?: string; template: string; filename?: string; usedWorkspace?: string; instructions?: string; pinnedDocuments?: string[] }): GenJob {
   const now = new Date().toISOString()
   const job: GenJob = {
     id: randomUUID(),
@@ -69,6 +71,8 @@ export function createJob(input: { customerId: number; customerName?: string; te
     template: input.template,
     filename: input.filename,
     usedWorkspace: input.usedWorkspace,
+    instructions: input.instructions,
+    pinnedDocuments: input.pinnedDocuments,
     startedAt: now,
     updatedAt: now,
     status: 'running',
@@ -81,7 +85,7 @@ export function createJob(input: { customerId: number; customerName?: string; te
 }
 
 // Create a job with a client-provided ID (e.g., to enable cancellation from the UI immediately)
-export function createJobWithId(input: { id: string; customerId: number; customerName?: string; template: string; filename?: string; usedWorkspace?: string }): GenJob {
+export function createJobWithId(input: { id: string; customerId: number; customerName?: string; template: string; filename?: string; usedWorkspace?: string; instructions?: string; pinnedDocuments?: string[] }): GenJob {
   const now = new Date().toISOString()
   const job: GenJob = {
     id: input.id,
@@ -90,6 +94,8 @@ export function createJobWithId(input: { id: string; customerId: number; custome
     template: input.template,
     filename: input.filename,
     usedWorkspace: input.usedWorkspace,
+    instructions: input.instructions,
+    pinnedDocuments: input.pinnedDocuments,
     startedAt: now,
     updatedAt: now,
     status: 'running',
@@ -209,6 +215,11 @@ export function cancelJob(jobId: string) {
   job.updatedAt = new Date().toISOString()
   job.completedAt = job.updatedAt
   saveJobs()
+  
+  // Update associated gen_cards
+  updateGenCardStatus(jobId, 'cancelled').catch((err: any) => {
+    console.error('[GEN-JOBS] Failed to update gen_card on cancel:', err)
+  })
 }
 
 export function isCancelled(jobId: string): boolean {

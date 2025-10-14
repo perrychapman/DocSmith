@@ -2,6 +2,7 @@
 import { Router } from "express"
 import { getDB } from "../services/storage"
 import { resolveCustomerPaths } from "../services/customerLibrary"
+import { customerPaths } from "../services/fs"
 import fs from "fs"
 import path from "path"
 import { spawn } from "child_process"
@@ -200,6 +201,42 @@ router.post("/", (req, res) => {
           res.json({ id: this.lastID, customerId: row.id, type, filePath })
         }
       )
+    }
+  )
+})
+
+// DELETE /api/documents/:customerId/file?name=... — delete a generated document file
+router.delete("/:customerId/file", (req, res) => {
+  const customerId = Number(req.params.customerId)
+  const fileName = req.query.name ? String(req.query.name) : undefined
+  
+  if (!customerId || !fileName) {
+    return res.status(400).json({ error: "customerId and name are required" })
+  }
+
+  const db = getDB()
+  db.get<{ id: number; name: string; createdAt: string }>(
+    "SELECT id, name, createdAt FROM customers WHERE id = ?",
+    [customerId],
+    (err, row) => {
+      if (err) return res.status(500).json({ error: err.message })
+      if (!row) return res.status(404).json({ error: "Customer not found" })
+
+      const { documentsDir } = customerPaths(row.id, row.name, new Date(row.createdAt))
+      const filePath = path.join(documentsDir, fileName)
+
+      // Check if file exists
+      if (!fs.existsSync(filePath)) {
+        return res.status(404).json({ error: "File not found" })
+      }
+
+      try {
+        // Delete the file
+        fs.unlinkSync(filePath)
+        res.json({ success: true, message: "Document deleted successfully" })
+      } catch (deleteErr: any) {
+        return res.status(500).json({ error: deleteErr.message || "Failed to delete file" })
+      }
     }
   )
 })

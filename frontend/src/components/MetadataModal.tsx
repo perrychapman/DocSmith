@@ -55,9 +55,10 @@ interface MetadataModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onRetry?: (filename: string) => void;
+  disableRetry?: boolean;
 }
 
-export function MetadataModal({ metadata, open, onOpenChange, onRetry }: MetadataModalProps) {
+export function MetadataModal({ metadata, open, onOpenChange, onRetry, disableRetry }: MetadataModalProps) {
   const [expandedSchemas, setExpandedSchemas] = React.useState<Record<string, boolean>>({});
   const [expandedReasonings, setExpandedReasonings] = React.useState<Record<number, boolean>>({});
 
@@ -93,14 +94,14 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="w-[95vw] sm:max-w-4xl h-[85vh] max-h-[800px] grid-rows-[auto_auto_1fr_auto] p-6 gap-4 overflow-hidden">
-        <DialogHeader>
+      <DialogContent className="w-[95vw] sm:max-w-4xl h-[85vh] max-h-[800px] grid-rows-[auto_auto_1fr_auto] p-6 gap-4 overflow-hidden max-w-full">
+        <DialogHeader className="min-w-0">
           <DialogTitle className="flex items-center gap-2">
             {getDocumentIcon(metadata.documentType)}
             Document Metadata
           </DialogTitle>
-          <div className="flex items-center justify-between gap-3 text-sm text-muted-foreground">
-            <span className="truncate">{metadata.filename}</span>
+          <div className="flex items-center justify-between gap-3 text-sm text-muted-foreground min-w-0">
+            <span className="truncate min-w-0 flex-1">{metadata.filename}</span>
             <div className="flex items-center gap-2 shrink-0">
               {metadata.documentType && (
                 <Badge variant="secondary">{metadata.documentType}</Badge>
@@ -109,8 +110,8 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
           </div>
         </DialogHeader>
         
-        <Tabs defaultValue="overview" className="contents">
-          <TabsList className="w-full justify-start">
+        <Tabs defaultValue="overview" className="contents min-w-0">
+          <TabsList className="w-full justify-start overflow-x-auto flex-shrink-0">
             <TabsTrigger value="overview">Overview</TabsTrigger>
             <TabsTrigger value="content">Content</TabsTrigger>
             {metadata.extraFields?.templateRelevance && metadata.extraFields.templateRelevance.length > 0 && (
@@ -121,10 +122,10 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
             <TabsTrigger value="technical">Technical</TabsTrigger>
           </TabsList>
           
-          <ScrollArea className="min-h-0">
-              <div className="pr-4">
+          <ScrollArea className="min-h-0 overflow-hidden min-w-0 max-w-full">
+              <div className="pr-4 w-full box-border" style={{maxWidth: '100%', overflow: 'hidden', boxSizing: 'border-box', display: 'block'}}>{/* Force block display to override table */}
                 {/* OVERVIEW TAB */}
-                <TabsContent value="overview" className="space-y-4 mt-0 text-left">
+                <TabsContent value="overview" className="space-y-4 mt-0 text-left overflow-hidden w-full box-border" style={{maxWidth: '100%', overflow: 'hidden', boxSizing: 'border-box'}}>{/* Changed overflow-x-hidden to overflow-hidden */}
                   {/* Purpose */}
                   {metadata.purpose && (
                     <div className="space-y-2">
@@ -150,14 +151,14 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
 
                   {/* Primary Entities & Data Structure */}
                   {(metadata.extraFields?.primaryEntities || metadata.extraFields?.dataStructure) && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full overflow-x-hidden">
                       {metadata.extraFields?.primaryEntities && Array.isArray(metadata.extraFields.primaryEntities) && 
                       metadata.extraFields.primaryEntities.length > 0 && (
-                        <div className="space-y-2 min-w-0">
+                        <div className="space-y-2 min-w-0 overflow-hidden">
                           <label className="text-sm font-medium">Primary Entities</label>
                           <div className="flex flex-wrap gap-2">
                             {metadata.extraFields.primaryEntities.map((entity: string, idx: number) => (
-                              <Badge key={idx} variant="default" className="text-xs break-words">
+                              <Badge key={idx} variant="default" className="text-xs break-words max-w-full">
                                 {entity}
                               </Badge>
                             ))}
@@ -165,9 +166,11 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
                         </div>
                       )}
                       {metadata.extraFields?.dataStructure && (
-                        <div className="space-y-2 min-w-0">
+                        <div className="space-y-2 min-w-0 overflow-hidden">
                           <label className="text-sm font-medium">Data Structure</label>
-                          <Badge variant="secondary" className="text-xs break-words">{metadata.extraFields.dataStructure}</Badge>
+                          <div className="break-words max-w-full">
+                            <Badge variant="secondary" className="text-xs break-words max-w-full inline-block">{metadata.extraFields.dataStructure}</Badge>
+                          </div>
                         </div>
                       )}
                     </div>
@@ -198,39 +201,39 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
                         <BarChart3 className="h-4 w-4" />
                         Statistics
                       </label>
-                      <div className="grid grid-cols-2 gap-3">
+                      <div className="grid grid-cols-2 gap-3 w-full overflow-x-hidden">{/* Added w-full overflow-x-hidden */}
                         {metadata.estimatedPageCount && (
-                          <div className="bg-muted/30 p-3 rounded-lg border">
+                          <div className="bg-muted/30 p-3 rounded-lg border min-w-0">{/* Added min-w-0 */}
                             <div className="text-xs text-muted-foreground mb-1">Estimated Pages</div>
                             <div className="text-xl font-semibold">{metadata.estimatedPageCount}</div>
                           </div>
                         )}
                         {metadata.estimatedWordCount && (
-                          <div className="bg-muted/30 p-3 rounded-lg border">
+                          <div className="bg-muted/30 p-3 rounded-lg border min-w-0">
                             <div className="text-xs text-muted-foreground mb-1">Word Count</div>
                             <div className="text-xl font-semibold">{metadata.estimatedWordCount.toLocaleString()}</div>
                           </div>
                         )}
                         {metadata.extraFields?.dataRowCount !== undefined && (
-                          <div className="bg-muted/30 p-3 rounded-lg border">
+                          <div className="bg-muted/30 p-3 rounded-lg border min-w-0">
                             <div className="text-xs text-muted-foreground mb-1">Total Rows</div>
                             <div className="text-xl font-semibold">{metadata.extraFields.dataRowCount.toLocaleString()}</div>
                           </div>
                         )}
                         {metadata.extraFields?.columnCount !== undefined && (
-                          <div className="bg-muted/30 p-3 rounded-lg border">
+                          <div className="bg-muted/30 p-3 rounded-lg border min-w-0">
                             <div className="text-xs text-muted-foreground mb-1">Columns</div>
                             <div className="text-xl font-semibold">{metadata.extraFields.columnCount}</div>
                           </div>
                         )}
                         {metadata.extraFields?.estimatedLineCount && (
-                          <div className="bg-muted/30 p-3 rounded-lg border">
+                          <div className="bg-muted/30 p-3 rounded-lg border min-w-0">{/* Added min-w-0 */}
                             <div className="text-xs text-muted-foreground mb-1">Lines of Code</div>
                             <div className="text-xl font-semibold">{metadata.extraFields.estimatedLineCount.toLocaleString()}</div>
                           </div>
                         )}
                         {metadata.extraFields?.slideCount && (
-                          <div className="bg-muted/30 p-3 rounded-lg border">
+                          <div className="bg-muted/30 p-3 rounded-lg border min-w-0">{/* Added min-w-0 */}
                             <div className="text-xs text-muted-foreground mb-1">Slides</div>
                             <div className="text-xl font-semibold">{metadata.extraFields.slideCount}</div>
                           </div>
@@ -401,7 +404,7 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
                 </TabsContent>
 
                 {/* CONTENT TAB */}
-                <TabsContent value="content" className="space-y-4 mt-0 text-left">
+                <TabsContent value="content" className="space-y-4 mt-0 text-left overflow-hidden w-full box-border" style={{maxWidth: '100%', overflow: 'hidden', boxSizing: 'border-box'}}>{/* Changed overflow-x-hidden to overflow-hidden */}
                   {/* Metrics */}
                   {metadata.metrics && metadata.metrics.length > 0 && (
                     <div className="space-y-2">
@@ -454,23 +457,23 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
                   {/* Timeframe & Geography */}
                   {(metadata.extraFields?.timeframe || metadata.extraFields?.geography || 
                     metadata.extraFields?.aggregationLevel) && (
-                    <div className="grid grid-cols-3 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 w-full overflow-x-hidden">{/* Changed to responsive grid */}
                       {metadata.extraFields?.timeframe && (
-                        <div>
+                        <div className="min-w-0 overflow-hidden">{/* Added constraints */}
                           <div className="text-xs text-muted-foreground mb-1">Timeframe</div>
-                          <Badge variant="outline">{metadata.extraFields.timeframe}</Badge>
+                          <Badge variant="outline" className="break-words max-w-full">{metadata.extraFields.timeframe}</Badge>
                         </div>
                       )}
                       {metadata.extraFields?.geography && (
-                        <div>
+                        <div className="min-w-0 overflow-hidden">
                           <div className="text-xs text-muted-foreground mb-1">Geography</div>
-                          <Badge variant="outline">{metadata.extraFields.geography}</Badge>
+                          <Badge variant="outline" className="break-words max-w-full">{metadata.extraFields.geography}</Badge>
                         </div>
                       )}
                       {metadata.extraFields?.aggregationLevel && (
-                        <div>
+                        <div className="min-w-0 overflow-hidden">
                           <div className="text-xs text-muted-foreground mb-1">Aggregation</div>
-                          <Badge variant="outline">{metadata.extraFields.aggregationLevel}</Badge>
+                          <Badge variant="outline" className="break-words max-w-full">{metadata.extraFields.aggregationLevel}</Badge>
                         </div>
                       )}
                     </div>
@@ -479,7 +482,7 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
 
                 {/* TEMPLATES TAB - Template Relevance */}
                 {metadata.extraFields?.templateRelevance && metadata.extraFields.templateRelevance.length > 0 && (
-                  <TabsContent value="templates" className="space-y-3 mt-0 text-left">
+                  <TabsContent value="templates" className="space-y-3 mt-0 text-left overflow-hidden w-full box-border" style={{maxWidth: '100%', overflow: 'hidden', boxSizing: 'border-box'}}>{/* Changed overflow-x-hidden to overflow-hidden */}
                     <div className="space-y-1">
                       <label className="text-sm font-medium flex items-center gap-2">
                         <FileCheck className="h-4 w-4" />
@@ -516,14 +519,14 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
                             <div key={idx} className="border rounded-lg p-3 space-y-2">
                               {/* Template Header */}
                               <div className="flex items-start justify-between gap-2">
-                                <div className="flex-1 min-w-0">
-                                  <div className="flex items-center gap-2">
-                                    <span className="font-semibold">{template.name}</span>
+                                <div className="flex-1 min-w-0 overflow-hidden">
+                                  <div className="flex items-center gap-2 flex-wrap">
+                                    <span className="font-semibold break-words">{template.name}</span>
                                     {idx === 0 && score >= 7 && (
                                       <Badge variant="default" className="text-xs py-0">Best Match</Badge>
                                     )}
                                   </div>
-                                  <div className="text-xs text-muted-foreground">
+                                  <div className="text-xs text-muted-foreground truncate">
                                     {template.slug}
                                   </div>
                                 </div>
@@ -556,11 +559,11 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
 
                               {/* Reasoning */}
                               {template.reasoning && (
-                                <div className="bg-muted/30 rounded-md p-2.5">
+                                <div className="bg-muted/30 rounded-md p-2.5 overflow-hidden">
                                   <div className="text-xs font-medium text-muted-foreground mb-1.5">
                                     Why this template matches:
                                   </div>
-                                  <div className="text-xs leading-relaxed">
+                                  <div className="text-xs leading-relaxed break-words whitespace-pre-wrap overflow-wrap-anywhere">
                                     {template.reasoning}
                                   </div>
                                 </div>
@@ -591,16 +594,16 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
 
 
                 {/* TECHNICAL TAB */}
-                <TabsContent value="technical" className="space-y-4 mt-0 text-left">
+                <TabsContent value="technical" className="space-y-4 mt-0 text-left overflow-hidden w-full box-border" style={{maxWidth: '100%', overflow: 'hidden', boxSizing: 'border-box'}}>{/* Changed overflow-x-hidden to overflow-hidden */}
                   {/* File Information */}
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full overflow-x-hidden">{/* Made responsive and added constraints */}
+                    <div className="space-y-2 min-w-0 overflow-hidden">{/* Added constraints */}
                       <label className="text-sm font-medium">Filename</label>
-                      <div className="rounded-md border bg-muted/30 p-3 text-xs font-mono break-all">
+                      <div className="rounded-md border bg-muted/30 p-3 text-xs font-mono break-words overflow-wrap-anywhere">
                         {metadata.filename}
                       </div>
                     </div>
-                    <div className="space-y-2">
+                    <div className="space-y-2 min-w-0 overflow-hidden">{/* Added constraints */}
                       <label className="text-sm font-medium">Document Type</label>
                       <div className="rounded-md border bg-muted/30 p-3 text-xs">
                         {metadata.documentType || '-'}
@@ -608,14 +611,14 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full overflow-x-hidden">{/* Made responsive and added constraints */}
+                    <div className="space-y-2 min-w-0 overflow-hidden">{/* Added constraints */}
                       <label className="text-sm font-medium">File Size</label>
                       <div className="rounded-md border bg-muted/30 p-3 text-xs">
                         {formatFileSize(metadata.fileSize)}
                       </div>
                     </div>
-                    <div className="space-y-2">
+                    <div className="space-y-2 min-w-0 overflow-hidden">{/* Added constraints */}
                       <label className="text-sm font-medium">Uploaded</label>
                       <div className="rounded-md border bg-muted/30 p-3 text-xs">
                         {formatDate(metadata.uploadedAt)}
@@ -726,29 +729,29 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
                   metadata.extraFields?.framework || metadata.extraFields?.architecturePattern) && (
                   <div>
                     <h4 className="text-sm font-semibold mb-3">Code Details</h4>
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full overflow-x-hidden">{/* Made responsive and added constraints */}
                       {metadata.extraFields.programmingLanguage && (
-                        <div className="bg-muted/30 p-3 rounded-lg">
+                        <div className="bg-muted/30 p-3 rounded-lg min-w-0 overflow-hidden">{/* Added constraints */}
                           <div className="text-xs text-muted-foreground mb-1">Language</div>
-                          <Badge variant="default">{metadata.extraFields.programmingLanguage}</Badge>
+                          <Badge variant="default" className="break-words max-w-full">{metadata.extraFields.programmingLanguage}</Badge>
                         </div>
                       )}
                       {metadata.extraFields.framework && (
-                        <div className="bg-muted/30 p-3 rounded-lg">
+                        <div className="bg-muted/30 p-3 rounded-lg min-w-0 overflow-hidden">
                           <div className="text-xs text-muted-foreground mb-1">Framework</div>
-                          <Badge variant="secondary">{metadata.extraFields.framework}</Badge>
+                          <Badge variant="secondary" className="break-words max-w-full">{metadata.extraFields.framework}</Badge>
                         </div>
                       )}
                       {metadata.extraFields.codeType && (
-                        <div className="bg-muted/30 p-3 rounded-lg">
+                        <div className="bg-muted/30 p-3 rounded-lg min-w-0 overflow-hidden">
                           <div className="text-xs text-muted-foreground mb-1">Type</div>
-                          <Badge variant="outline">{metadata.extraFields.codeType}</Badge>
+                          <Badge variant="outline" className="break-words max-w-full">{metadata.extraFields.codeType}</Badge>
                         </div>
                       )}
                       {metadata.extraFields.architecturePattern && (
-                        <div className="bg-muted/30 p-3 rounded-lg">
+                        <div className="bg-muted/30 p-3 rounded-lg min-w-0 overflow-hidden">{/* Added constraints */}
                           <div className="text-xs text-muted-foreground mb-1">Architecture</div>
-                          <Badge variant="outline">{metadata.extraFields.architecturePattern}</Badge>
+                          <Badge variant="outline" className="break-words max-w-full">{metadata.extraFields.architecturePattern}</Badge>
                         </div>
                       )}
                     </div>
@@ -767,7 +770,7 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
                           <div className="text-xs text-muted-foreground mb-1.5">Operations</div>
                           <div className="flex flex-wrap gap-2">
                             {metadata.extraFields.keyOperations.map((fn: string, idx: number) => (
-                              <Badge key={idx} variant="default" className="text-xs font-mono">
+                              <Badge key={idx} variant="default" className="text-xs font-mono break-words max-w-full">
                                 {fn}
                               </Badge>
                             ))}
@@ -780,7 +783,7 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
                           <div className="text-xs text-muted-foreground mb-1.5">API Endpoints</div>
                           <div className="flex flex-wrap gap-2">
                             {metadata.extraFields.apiEndpoints.map((api: string, idx: number) => (
-                              <Badge key={idx} variant="secondary" className="text-xs font-mono">
+                              <Badge key={idx} variant="secondary" className="text-xs font-mono break-words max-w-full">
                                 {api}
                               </Badge>
                             ))}
@@ -793,7 +796,7 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
                           <div className="text-xs text-muted-foreground mb-1.5">Database Tables</div>
                           <div className="flex flex-wrap gap-2">
                             {metadata.extraFields.databaseTables.map((table: string, idx: number) => (
-                              <Badge key={idx} variant="default" className="text-xs font-mono">
+                              <Badge key={idx} variant="default" className="text-xs font-mono break-words max-w-full">
                                 {table}
                               </Badge>
                             ))}
@@ -857,17 +860,17 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
                 {(metadata.extraFields?.presentationType || metadata.extraFields?.targetAudience) && (
                   <div>
                     <h4 className="text-sm font-semibold mb-3">Presentation Details</h4>
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 w-full overflow-x-hidden">{/* Made responsive and added constraints */}
                       {metadata.extraFields.presentationType && (
-                        <div className="bg-muted/30 p-3 rounded-lg">
+                        <div className="bg-muted/30 p-3 rounded-lg min-w-0 overflow-hidden">{/* Added constraints */}
                           <div className="text-xs text-muted-foreground mb-1">Type</div>
-                          <Badge variant="default">{metadata.extraFields.presentationType}</Badge>
+                          <Badge variant="default" className="break-words max-w-full">{metadata.extraFields.presentationType}</Badge>
                         </div>
                       )}
                       {metadata.extraFields.targetAudience && (
-                        <div className="bg-muted/30 p-3 rounded-lg">
+                        <div className="bg-muted/30 p-3 rounded-lg min-w-0 overflow-hidden">
                           <div className="text-xs text-muted-foreground mb-1">Target Audience</div>
-                          <span className="text-sm">{metadata.extraFields.targetAudience}</span>
+                          <span className="text-sm break-words">{metadata.extraFields.targetAudience}</span>
                         </div>
                       )}
                     </div>
@@ -905,7 +908,11 @@ export function MetadataModal({ metadata, open, onOpenChange, onRetry }: Metadat
         
         <DialogFooter>
           {onRetry && (
-            <Button variant="secondary" onClick={() => onRetry(metadata.filename)}>
+            <Button 
+              variant="secondary" 
+              onClick={() => onRetry(metadata.filename)}
+              disabled={disableRetry}
+            >
               <RefreshCw className="h-4 w-4 mr-2" />
               Re-analyze
             </Button>

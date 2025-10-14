@@ -16,6 +16,7 @@ import templatesRouter from "./api/templates";
 import generateRouter from "./api/generate";
 import settingsRouter from "./api/settings";
 import resetRouter from "./api/reset";
+import templateMatchingRouter from "./api/templateMatching";
 
 // CommonJS-safe import for AnythingLLM router
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -76,6 +77,7 @@ app.use("/api/prompts", promptsRouter);
 app.use("/api/documents", documentsRouter);
 app.use("/api/uploads", uploadsRouter);
 app.use("/api/templates", templatesRouter);
+app.use("/api/template-matching", templateMatchingRouter);
 app.use("/api/generate", generateRouter);
 app.use("/api/settings", settingsRouter);
 app.use("/api/test", testRouter);

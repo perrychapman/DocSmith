@@ -37,10 +37,10 @@ const router = Router()
 
 const TEMPLATES_ROOT = path.join(libraryRoot(), "templates")
 
-type Body = { customerId?: number; template?: string; filename?: string; refresh?: boolean; jobId?: string; instructions?: string }
+type Body = { customerId?: number; template?: string; filename?: string; refresh?: boolean; jobId?: string; instructions?: string; pinnedDocuments?: string[] }
 
 router.post("/", async (req, res) => {
-  const { customerId, template: slug, filename, refresh, jobId, instructions } = (req.body || {}) as Body
+  const { customerId, template: slug, filename, refresh, jobId, instructions, pinnedDocuments } = (req.body || {}) as Body
   if (!customerId || !slug) return res.status(400).json({ error: "customerId and template are required" })
 
   const db = getDB()
@@ -78,8 +78,8 @@ router.post("/", async (req, res) => {
               usedWorkspace = wsForGen
               
               const job = jobId && String(jobId).trim().length > 0
-                ? createJobWithId({ id: String(jobId), customerId: row.id, customerName: row.name, template: slug as string, filename, usedWorkspace: wsForGen })
-                : createJob({ customerId: row.id, customerName: row.name, template: slug as string, filename, usedWorkspace: wsForGen })
+                ? createJobWithId({ id: String(jobId), customerId: row.id, customerName: row.name, template: slug as string, filename, usedWorkspace: wsForGen, instructions, pinnedDocuments })
+                : createJob({ customerId: row.id, customerName: row.name, template: slug as string, filename, usedWorkspace: wsForGen, instructions, pinnedDocuments })
               const logAndPush = (m: string) => { try { jobLog(job.id, m) } catch {} }
               const stepStartRec = (n: string) => { try { jobStepStart(job.id, n) } catch {} }
               const stepOkRec = (n: string) => { try { jobStepOk(job.id, n) } catch {} }
@@ -558,6 +558,7 @@ router.get("/stream", async (req, res) => {
     const slug = String(req.query.template || '')
     const filename = req.query.filename ? String(req.query.filename) : undefined
     const instructions = req.query.instructions ? String(req.query.instructions) : undefined
+    const pinnedDocuments = req.query.pinnedDocuments ? JSON.parse(String(req.query.pinnedDocuments)) : undefined
     const refresh = String((req.query.refresh ?? 'true')).toLowerCase() === 'true'
     if (!customerId || !slug) {
       res.writeHead(400, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' })
@@ -604,8 +605,8 @@ router.get("/stream", async (req, res) => {
       send({ type: 'info', usedWorkspace: wsForGen })
       stepOk('resolveWorkspace')
 
-      // Create job record
-      const job = createJob({ customerId: row.id, customerName: row.name, template: slug as string, filename, usedWorkspace: wsForGen })
+      // Create job record with pinned documents
+      const job = createJob({ customerId: row.id, customerName: row.name, template: slug as string, filename, usedWorkspace: wsForGen, instructions, pinnedDocuments })
       send({ type: 'info', jobId: job.id })
       const logAndPush = (m: string) => { log(m); jobLog(job.id, m) }
       const stepStartRec = (n: string) => { stepStart(n); jobStepStart(job.id, n) }
@@ -978,7 +979,37 @@ router.get('/cards/by-workspace/:slug', (req, res) => {
     [slug],
     (err, rows) => {
       if (err) return res.status(500).json({ error: err.message })
-      return res.json({ cards: rows || [] })
+      
+      // Sync card status with actual job status
+      const cards = (rows || []).map((card: any) => {
+        if (card.jobId) {
+          try {
+            const job = getJob(card.jobId)
+            if (job && job.status !== card.jobStatus) {
+              // Update card status to match job status
+              const updatedStatus = job.status
+              const updatedFilename = job.file?.name || card.filename
+              
+              // Update in database
+              db.run(
+                'UPDATE gen_cards SET jobStatus = ?, filename = ? WHERE cardId = ?',
+                [updatedStatus, updatedFilename, card.id],
+                (updateErr) => {
+                  if (updateErr) console.error('Failed to sync card status:', updateErr)
+                }
+              )
+              
+              // Return updated card
+              return { ...card, jobStatus: updatedStatus, filename: updatedFilename }
+            }
+          } catch (e) {
+            // Job not found, card status is canonical
+          }
+        }
+        return card
+      })
+      
+      return res.json({ cards })
     }
   )
 })

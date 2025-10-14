@@ -13,7 +13,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/toolti
 import { DocxPreview } from "../components/DocxPreview";
 import { TemplateMetadataModal, type TemplateMetadata } from "../components/TemplateMetadataModal";
 import { useTemplateMetadata } from "../contexts/TemplateMetadataContext";
-import { Search, FileText as FileTextIcon, FileSpreadsheet, FileCode, CheckCircle2, AlertTriangle, Loader2, Sparkles, Copy, X, ExternalLink, Info, RefreshCw } from "lucide-react";
+import { Search, FileText as FileTextIcon, FileSpreadsheet, FileCode, CheckCircle2, AlertTriangle, Loader2, Sparkles, Copy, X, ExternalLink, Info, RefreshCw, Network, Zap } from "lucide-react";
 import { toast } from "sonner";
 import { apiFetch, apiEventSource } from '../lib/api';
 
@@ -67,6 +67,15 @@ export default function TemplatesPage() {
   const [metadataModal, setMetadataModal] = React.useState<TemplateMetadata | null>(null);
   const { metadataProcessing, startTracking, setRefreshCallback } = useTemplateMetadata();
   const [templateMetadataCache, setTemplateMetadataCache] = React.useState<Map<string, boolean>>(new Map());
+  
+  // Template matching job state
+  const [matchingJobRunning, setMatchingJobRunning] = React.useState(false);
+  const [matchingJobId, setMatchingJobId] = React.useState<string | null>(null);
+  const matchingPollRef = React.useRef<NodeJS.Timeout | null>(null);
+
+  // Track if any AI operation (compile or metadata extraction) is running
+  const anyCompileInFlight = Object.values(compileStates).some(s => s.status === 'running');
+  const hasActiveAIOperation = anyCompileInFlight || metadataProcessing.size > 0;
 
   // Format relative time helper (from Customers.tsx)
   function formatRelativeTime(value?: string | number | Date): string {
@@ -183,7 +192,83 @@ export default function TemplatesPage() {
     return div.innerHTML;
   }
 
+  // Template matching job functions
+  async function startMatchingJob(forceRecalculate: boolean = false) {
+    try {
+      const response = await apiFetch('/api/template-matching/jobs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          forceRecalculate,
+          createdBy: 'templates-ui'
+        })
+      });
 
+      if (!response.ok) throw new Error('Failed to start matching job');
+
+      const data = await response.json();
+      if (data.success && data.jobId) {
+        setMatchingJobId(data.jobId);
+        setMatchingJobRunning(true);
+        toast.success(forceRecalculate ? 'Recalculating all matches...' : 'Matching new documents...');
+        
+        // Start polling
+        pollMatchingJob(data.jobId);
+      } else {
+        toast.error('Failed to start matching job');
+      }
+    } catch (err) {
+      console.error('Failed to start matching job:', err);
+      toast.error('Failed to start matching job');
+    }
+  }
+
+  async function pollMatchingJob(jobId: string) {
+    // Clear any existing poll
+    if (matchingPollRef.current) {
+      clearInterval(matchingPollRef.current);
+    }
+
+    matchingPollRef.current = setInterval(async () => {
+      try {
+        const response = await apiFetch(`/api/template-matching/jobs/${jobId}`);
+        if (!response.ok) {
+          clearInterval(matchingPollRef.current!);
+          matchingPollRef.current = null;
+          setMatchingJobRunning(false);
+          return;
+        }
+
+        const data = await response.json();
+        const job = data.job;
+
+        if (job.status === 'completed') {
+          clearInterval(matchingPollRef.current!);
+          matchingPollRef.current = null;
+          setMatchingJobRunning(false);
+          setMatchingJobId(null);
+          toast.success(`Matching complete: ${job.matchedDocuments} documents matched`);
+        } else if (job.status === 'failed' || job.status === 'cancelled') {
+          clearInterval(matchingPollRef.current!);
+          matchingPollRef.current = null;
+          setMatchingJobRunning(false);
+          setMatchingJobId(null);
+          toast.error(job.status === 'failed' ? `Matching failed: ${job.error || 'Unknown error'}` : 'Matching cancelled');
+        }
+      } catch (err) {
+        console.error('Failed to poll matching job:', err);
+      }
+    }, 2000); // Poll every 2 seconds
+  }
+
+  // Cleanup polling on unmount
+  React.useEffect(() => {
+    return () => {
+      if (matchingPollRef.current) {
+        clearInterval(matchingPollRef.current);
+      }
+    };
+  }, []);
 
 
 
@@ -423,7 +508,48 @@ export default function TemplatesPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="secondary" onClick={load}><Icon.Refresh className="h-4 w-4 mr-2" />Refresh</Button>
+          <Tooltip>
+            <TooltipTrigger>
+              <Button 
+                variant="outline" 
+                size="sm"
+                onClick={() => startMatchingJob(false)}
+                disabled={matchingJobRunning}
+              >
+                {matchingJobRunning ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <Zap className="h-4 w-4 mr-2" />
+                )}
+                Match New
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Match documents without scores to templates</TooltipContent>
+          </Tooltip>
+          
+          <Tooltip>
+            <TooltipTrigger>
+              <Button 
+                variant="outline" 
+                size="sm"
+                onClick={() => startMatchingJob(true)}
+                disabled={matchingJobRunning}
+              >
+                {matchingJobRunning ? (
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                ) : (
+                  <Network className="h-4 w-4 mr-2" />
+                )}
+                Recalculate All
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Recalculate template relevance for all documents</TooltipContent>
+          </Tooltip>
+          
+          <Button variant="secondary" onClick={load}>
+            <Icon.Refresh className="h-4 w-4 mr-2" />
+            Refresh
+          </Button>
           <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
             <DialogTrigger>
               <Button><Icon.Upload className="h-4 w-4 mr-2" />Upload</Button>
@@ -606,11 +732,10 @@ export default function TemplatesPage() {
                       const isCompiling = effectiveStatus === 'running' || isActiveCompile;
                       const hadError = effectiveStatus === 'error';
                       const hasCompiled = Boolean(t.hasFullGen || effectiveStatus === 'success');
-                      const anyCompileInFlight = Boolean(compiling);
-                      const disableCompileButton = isCompiling || (anyCompileInFlight && !isActiveCompile);
+                      const disableCompileButton = isCompiling || (anyCompileInFlight && !isActiveCompile) || metadataProcessing.size > 0;
                       const compileLabel = isCompiling ? 'Compiling...' : (hadError ? 'Retry compile' : (hasCompiled ? 'Recompile' : 'Compile'));
                       const compileActionLabel = isCompiling ? 'Compiling template' : (hadError ? 'Retry compile for template' : (hasCompiled ? 'Recompile template' : 'Compile template'));
-                      const compileTooltip = isCompiling ? 'Compilation running...' : (hadError ? 'Last attempt failed - try again' : (hasCompiled ? 'Generate a fresh FullGen script' : 'Create the FullGen script'));
+                      const compileTooltip = metadataProcessing.size > 0 ? 'Metadata extraction in progress' : isCompiling ? 'Compilation running...' : (hadError ? 'Last attempt failed - try again' : (hasCompiled ? 'Generate a fresh FullGen script' : 'Create the FullGen script'));
                       
                       // Determine icon for template type
                       const TemplateIcon = t.hasDocx ? FileTextIcon : (t.hasExcel ? FileSpreadsheet : FileCode);
@@ -720,7 +845,7 @@ export default function TemplatesPage() {
                                         className={`h-9 w-9 ${metadataProcessing.has(t.slug) ? 'opacity-80' : ''}`}
                                         aria-label={`View metadata for ${t.name || t.slug}`}
                                         onClick={(e) => { e.stopPropagation(); loadMetadata(t.slug); }}
-                                        disabled={metadataProcessing.has(t.slug)}
+                                        disabled={metadataProcessing.has(t.slug) || anyCompileInFlight}
                                       >
                                         {metadataProcessing.has(t.slug) ? (
                                           <Loader2 className="h-4 w-4 animate-spin" />
@@ -732,7 +857,9 @@ export default function TemplatesPage() {
                                       </Button>
                                     </TooltipTrigger>
                                     <TooltipContent>
-                                      {metadataProcessing.has(t.slug) 
+                                      {anyCompileInFlight 
+                                        ? 'Template compilation in progress'
+                                        : metadataProcessing.has(t.slug) 
                                         ? 'Extracting template metadata...' 
                                         : templateMetadataCache.get(t.slug) === false
                                         ? 'Extract Metadata'
@@ -829,7 +956,7 @@ export default function TemplatesPage() {
                                         className={`h-8 w-8 ${metadataProcessing.has(t.slug) ? 'opacity-80' : ''}`}
                                         aria-label={`View metadata for ${t.name || t.slug}`}
                                         onClick={(e) => { e.stopPropagation(); loadMetadata(t.slug); }}
-                                        disabled={metadataProcessing.has(t.slug)}
+                                        disabled={metadataProcessing.has(t.slug) || anyCompileInFlight}
                                       >
                                         {metadataProcessing.has(t.slug) ? (
                                           <Loader2 className="h-4 w-4 animate-spin" />
@@ -841,7 +968,9 @@ export default function TemplatesPage() {
                                       </Button>
                                     </TooltipTrigger>
                                     <TooltipContent>
-                                      {metadataProcessing.has(t.slug) 
+                                      {anyCompileInFlight
+                                        ? 'Template compilation in progress'
+                                        : metadataProcessing.has(t.slug) 
                                         ? 'Extracting template metadata...' 
                                         : templateMetadataCache.get(t.slug) === false
                                         ? 'Extract Metadata'

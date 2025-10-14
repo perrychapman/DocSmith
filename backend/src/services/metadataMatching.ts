@@ -28,8 +28,19 @@ export interface MetadataEnhancedContext {
 /**
  * Calculate relevance score between template requirements and document content
  * Returns score (0-10) with detailed reasoning
+ * 
+ * IMPORTANT: This matching is CONTENT-BASED, not file-type-based.
+ * A .md file with meeting notes can match a .xlsx template if the content matches.
+ * We care about WHAT DATA the document contains, not what format it's in.
+ * 
+ * Scoring breakdown (max 10 points):
+ * - Data Type Match: 0-4 points (MOST IMPORTANT - Financial, Sales, Technical, etc.)
+ * - Document Type Compatibility: 0-1 points (SOFT bonus - format doesn't matter much)
+ * - Entity/Topic Match: 0-3 points (HIGH IMPORTANCE - Customers, Products, Projects, etc.)
+ * - Additional Content: 0-2 points (Systems, departments, purpose alignment)
+ * - Structural Bonuses: 0-2 points (Tables, time-series, aggregations)
  */
-function calculateBasicRelevance(
+export function calculateBasicRelevance(
   templateMeta: TemplateMetadata,
   docMeta: DocumentMetadata
 ): { score: number; reasons: string[] } {
@@ -63,7 +74,9 @@ function calculateBasicRelevance(
     score += 2
   }
 
-  // 2. Document Type Compatibility (0-2 points)
+  // 2. Document Type Compatibility (0-1 points) - DE-EMPHASIZED
+  // NOTE: This is a SOFT match - we care about CONTENT, not file format
+  // A .md meeting notes file can provide data for a .xlsx template
   if (templateMeta.compatibleDocumentTypes && templateMeta.compatibleDocumentTypes.length > 0) {
     if (docMeta.documentType) {
       const isCompatible = templateMeta.compatibleDocumentTypes.some(type =>
@@ -71,19 +84,20 @@ function calculateBasicRelevance(
         type.toLowerCase().includes(docMeta.documentType?.toLowerCase() || '')
       )
       if (isCompatible) {
-        score += 2
-        reasons.push(`Document type '${docMeta.documentType}' is compatible`)
+        score += 0.5  // Reduced from 2 to 0.5 - this is just a bonus, not a requirement
+        reasons.push(`Document type '${docMeta.documentType}' is compatible (bonus)`)
       }
     }
-  } else {
-    // No document type restrictions - give base score
-    score += 1
   }
+  // Always give base score regardless of document type match
+  score += 0.5
 
-  // 3. Entity/Topic Match (0-2 points)
+  // 3. Entity/Topic Match (0-3 points) - INCREASED IMPORTANCE
+  // This is what really matters - does the document contain the data we need?
   if (templateMeta.expectedEntities && templateMeta.expectedEntities.length > 0) {
+    let overlap: string[] = []
     if (docMeta.keyTopics && docMeta.keyTopics.length > 0) {
-      const overlap = templateMeta.expectedEntities.filter(entity =>
+      overlap = templateMeta.expectedEntities.filter(entity =>
         docMeta.keyTopics?.some(topic =>
           topic.toLowerCase().includes(entity.toLowerCase()) ||
           entity.toLowerCase().includes(topic.toLowerCase())
@@ -92,15 +106,104 @@ function calculateBasicRelevance(
       
       if (overlap.length > 0) {
         const matchRatio = overlap.length / templateMeta.expectedEntities.length
-        const points = matchRatio * 2
+        const points = matchRatio * 3  // Increased from 2 to 3
         score += points
         reasons.push(`Contains ${overlap.length}/${templateMeta.expectedEntities.length} expected entities: ${overlap.join(', ')}`)
       }
     }
+    
+    // Also check if entities are mentioned in stakeholders or primary entities
+    if (docMeta.stakeholders && docMeta.stakeholders.length > 0) {
+      const stakeholderOverlap = templateMeta.expectedEntities.filter(entity =>
+        docMeta.stakeholders?.some(stakeholder =>
+          stakeholder.toLowerCase().includes(entity.toLowerCase()) ||
+          entity.toLowerCase().includes(stakeholder.toLowerCase())
+        )
+      )
+      if (stakeholderOverlap.length > 0 && !overlap.length) {
+        score += 0.5
+        reasons.push(`Mentions ${stakeholderOverlap.length} expected entities in stakeholders`)
+      }
+    }
+    
+    // Check extraFields.primaryEntities if available
+    const primaryEntities = docMeta.extraFields?.primaryEntities as string[] | undefined
+    if (primaryEntities && Array.isArray(primaryEntities) && primaryEntities.length > 0) {
+      const entityOverlap = templateMeta.expectedEntities.filter(entity =>
+        primaryEntities.some(pe =>
+          pe.toLowerCase().includes(entity.toLowerCase()) ||
+          entity.toLowerCase().includes(pe.toLowerCase())
+        )
+      )
+      if (entityOverlap.length > 0 && !overlap.length) {
+        score += 1
+        reasons.push(`Contains ${entityOverlap.length} expected entities in primary entities`)
+      }
+    }
   } else {
     // No specific entity requirements - give base score
-    score += 1
+    score += 1.5  // Increased from 1
   }
+
+  // 3.5. Additional Content Matching (0-2 points) - NEW
+  // Check for system/technology mentions that match template context
+  let contentMatchPoints = 0
+  
+  // Match mentioned systems if template has context about systems
+  if (docMeta.mentionedSystems && docMeta.mentionedSystems.length > 0) {
+    const templateSystems = templateMeta.expectedEntities?.filter(e => 
+      ['system', 'platform', 'application', 'tool', 'software', 'service'].some(keyword =>
+        e.toLowerCase().includes(keyword)
+      )
+    ) || []
+    
+    if (templateSystems.length > 0) {
+      const systemMatch = templateSystems.some(ts =>
+        docMeta.mentionedSystems?.some(ds =>
+          ds.toLowerCase().includes(ts.toLowerCase()) ||
+          ts.toLowerCase().includes(ds.toLowerCase())
+        )
+      )
+      if (systemMatch) {
+        contentMatchPoints += 0.5
+        reasons.push('Mentions relevant systems/platforms')
+      }
+    }
+  }
+  
+  // Match departments/teams if relevant
+  const templateDepts = templateMeta.targetAudience?.toLowerCase() || ''
+  const docDepts = docMeta.extraFields?.departments as string[] | undefined
+  if (docDepts && Array.isArray(docDepts) && docDepts.length > 0 && templateDepts) {
+    const deptMatch = docDepts.some(dept => 
+      templateDepts.includes(dept.toLowerCase()) ||
+      dept.toLowerCase().includes(templateDepts)
+    )
+    if (deptMatch) {
+      contentMatchPoints += 0.5
+      reasons.push('Relevant to target audience/department')
+    }
+  }
+  
+  // Match purpose/use case overlap
+  if (docMeta.purpose && templateMeta.purpose) {
+    const docPurposeLower = docMeta.purpose.toLowerCase()
+    const templatePurposeLower = templateMeta.purpose.toLowerCase()
+    
+    // Check for key shared terms
+    const sharedTerms = ['report', 'analysis', 'summary', 'tracking', 'planning', 
+                         'metrics', 'performance', 'status', 'review', 'assessment']
+    const docTerms = sharedTerms.filter(term => docPurposeLower.includes(term))
+    const templateTerms = sharedTerms.filter(term => templatePurposeLower.includes(term))
+    const overlap = docTerms.filter(term => templateTerms.includes(term))
+    
+    if (overlap.length > 0) {
+      contentMatchPoints += 0.5
+      reasons.push(`Shared purpose: ${overlap.join(', ')}`)
+    }
+  }
+  
+  score += Math.min(2, contentMatchPoints)
 
   // 4. Structural Bonuses (0-2 points total)
   let structuralPoints = 0

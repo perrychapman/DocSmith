@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { toast } from 'sonner';
-import { apiFetch } from '../lib/api';
+import { apiFetch, apiEventSource } from '../lib/api';
 
 type MetadataNotification = {
   customerId: number;
@@ -49,7 +49,7 @@ export function MetadataProvider({ children }: { children: React.ReactNode }) {
       : `/api/uploads/metadata-stream/${customerId}`;
     
     console.log('[METADATA-SSE] Connecting to SSE:', url);
-    const eventSource = new EventSource(url);
+    const eventSource = apiEventSource(url);
     eventSourceRef.current = eventSource;
 
     eventSource.addEventListener('message', (event) => {

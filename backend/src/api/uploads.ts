@@ -708,10 +708,14 @@ router.post("/:customerId", (req, res, next) => {
                     const fullPath = String(first.location).trim()
                     uploadedLocation = fullPath
                     
-                    // Check if it's a full filesystem path containing "documents" folder
-                    const match = fullPath.match(/documents[/\\](.+)$/i)
+                    // Check if it's a full filesystem path (contains drive letter or starts with slash before "documents")
+                    // Match patterns like: "C:\path\storage\documents\custom-documents\file.json"
+                    // But NOT: "custom-documents/file.json" (relative path)
+                    const match = fullPath.match(/[A-Z]:[/\\].*[/\\]documents[/\\](.+)$/i) || 
+                                  fullPath.match(/^[/\\].*[/\\]documents[/\\](.+)$/i)
+                    
                     if (match && match[1]) {
-                      // Extract everything after "documents\" and normalize slashes
+                      // Extract everything after "storage\documents\" and normalize slashes
                       uploadedDocName = match[1].replace(/\\/g, '/')
                       console.log(`[UPLOAD] Extracted from filesystem path: "${uploadedDocName}"`)
                     } else {

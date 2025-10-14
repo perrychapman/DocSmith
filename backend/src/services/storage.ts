@@ -2,12 +2,13 @@ import sqlite3 from "sqlite3"
 import path from "path"
 import fs from "fs"
 import { runMigrations } from "./migrations"
+import { libraryRoot } from "./fs"
 
 let db: sqlite3.Database | null = null
 
 export function getDB(): sqlite3.Database {
   if (!db) {
-    const dbPath = path.resolve(__dirname, "../../data/app.sqlite")
+    const dbPath = path.join(libraryRoot(), "app.sqlite")
     
     // Try multiple possible schema paths (development vs production/bundled)
     const possibleSchemaPaths = [
@@ -28,9 +29,12 @@ export function getDB(): sqlite3.Database {
       throw new Error(`Could not find schema.sql in any of these locations: ${possibleSchemaPaths.join(", ")}`)
     }
 
-    // Ensure /data exists
-    const dataDir = path.resolve(__dirname, "../../data")
-    if (!fs.existsSync(dataDir)) fs.mkdirSync(dataDir, { recursive: true })
+    // Ensure data directory exists
+    const dataDir = libraryRoot()
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true })
+      console.log('[DB] Created data directory:', dataDir)
+    }
 
     db = new sqlite3.Database(dbPath)
 
@@ -48,7 +52,7 @@ export function getDB(): sqlite3.Database {
 
 // Close and delete the SQLite DB file; next getDB() call will recreate & re-run schema
 export async function resetDatabase(): Promise<void> {
-  const dbPath = path.resolve(__dirname, "../../data/app.sqlite")
+  const dbPath = path.join(libraryRoot(), "app.sqlite")
 
   // Close the current db handle if open
   await new Promise<void>((resolve) => {

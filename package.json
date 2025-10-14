@@ -12,7 +12,7 @@
     ],
     "scripts": {
         "dev:backend": "nodemon --watch backend/src --ext ts,js --exec ts-node backend/src/server.ts",
-        "build:backend": "powershell -Command \"Remove-Item backend/dist -Recurse -Force -ErrorAction SilentlyContinue\" && npx esbuild backend/src/server.ts --bundle --platform=node --target=node20 --outfile=backend/dist/server.js --external:sqlite3 && xcopy \"backend\\src\\db\\*.sql\" \"backend\\dist\\db\\\" /Y && xcopy \"backend\\package.json\" \"backend\\dist\\\" /Y",
+        "build:backend": "powershell -Command \"Remove-Item backend/dist -Recurse -Force -ErrorAction SilentlyContinue\" && npx esbuild backend/src/server.ts --bundle --platform=node --target=node20 --outfile=backend/dist/server.js --external:sqlite3 --external:puppeteer --external:sharp --external:canvas --external:jsdom --external:bufferutil --external:utf-8-validate --external:encoding --keep-names --sourcemap --format=cjs && xcopy \"backend\\src\\db\\*.sql\" \"backend\\dist\\db\\\" /Y && xcopy \"backend\\package.json\" \"backend\\dist\\\" /Y",
         "build:electron": "tsc electron/main.ts --outDir electron --target es2020 --module commonjs --moduleResolution node --esModuleInterop && tsc electron/preload.ts --outDir electron --target es2020 --module commonjs --moduleResolution node --esModuleInterop",
         "start:backend": "node backend/dist/server.js",
         "generate-icons": "node scripts/generate-mac-icons.js",

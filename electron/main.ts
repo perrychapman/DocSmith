@@ -12,9 +12,21 @@ const { spawn } = require('child_process');
 // Configure auto-updater
 autoUpdater.autoDownload = false; // Prompt user before downloading
 autoUpdater.autoInstallOnAppQuit = true;
+autoUpdater.logger = {
+  info: (msg: string) => logToFile(`[AUTO-UPDATE-INFO] ${msg}`),
+  warn: (msg: string) => logToFile(`[AUTO-UPDATE-WARN] ${msg}`),
+  error: (msg: string) => logToFile(`[AUTO-UPDATE-ERROR] ${msg}`)
+};
+
+// Set timeout for update checks (default is 120 seconds, reduce to 30)
+if (autoUpdater.requestHeaders) {
+  autoUpdater.requestHeaders = { 'Cache-Control': 'no-cache' };
+}
 
 // Global window reference
 let mainWindow: BrowserWindowType | null = null;
+let updateCheckInProgress = false;
+let updateCheckTimeout: NodeJS.Timeout | null = null;
 
 // Wait for backend to be ready by polling health endpoint
 async function waitForBackend(port: number, maxAttempts: number = 30, delayMs: number = 500): Promise<boolean> {
@@ -682,9 +694,28 @@ ipcMain.handle('cleanup-temp-files', () => {
 // Auto-updater event handlers
 autoUpdater.on('checking-for-update', () => {
   logToFile('[AUTO-UPDATE] Checking for updates...');
+  updateCheckInProgress = true;
+  
+  // Set a timeout in case the check hangs
+  updateCheckTimeout = setTimeout(() => {
+    if (updateCheckInProgress) {
+      logToFile('[AUTO-UPDATE] Check timed out after 30 seconds');
+      updateCheckInProgress = false;
+      if (mainWindow) {
+        mainWindow.webContents.send('update-error', { 
+          message: 'Update check timed out. Please check your internet connection.' 
+        });
+      }
+    }
+  }, 30000); // 30 second timeout
 });
 
 autoUpdater.on('update-available', (info) => {
+  updateCheckInProgress = false;
+  if (updateCheckTimeout) {
+    clearTimeout(updateCheckTimeout);
+    updateCheckTimeout = null;
+  }
   logToFile(`[AUTO-UPDATE] Update available: ${info.version}`);
   if (mainWindow) {
     mainWindow.webContents.send('update-available', info);
@@ -692,11 +723,28 @@ autoUpdater.on('update-available', (info) => {
 });
 
 autoUpdater.on('update-not-available', (info) => {
+  updateCheckInProgress = false;
+  if (updateCheckTimeout) {
+    clearTimeout(updateCheckTimeout);
+    updateCheckTimeout = null;
+  }
   logToFile(`[AUTO-UPDATE] Current version ${info.version} is up to date`);
+  if (mainWindow) {
+    mainWindow.webContents.send('update-not-available', info);
+  }
 });
 
 autoUpdater.on('error', (err) => {
+  updateCheckInProgress = false;
+  if (updateCheckTimeout) {
+    clearTimeout(updateCheckTimeout);
+    updateCheckTimeout = null;
+  }
   logToFile(`[AUTO-UPDATE] Error: ${err.message}`);
+  logToFile(`[AUTO-UPDATE] Error stack: ${err.stack || 'No stack trace'}`);
+  if (mainWindow) {
+    mainWindow.webContents.send('update-error', { message: err.message });
+  }
 });
 
 autoUpdater.on('download-progress', (progressObj) => {
@@ -716,11 +764,30 @@ autoUpdater.on('update-downloaded', (info) => {
 // IPC handlers for auto-update
 ipcMain.handle('check-for-updates', async () => {
   try {
+    if (updateCheckInProgress) {
+      logToFile('[AUTO-UPDATE] Check already in progress, skipping duplicate request');
+      return { success: false, error: 'Update check already in progress' };
+    }
+    
+    if (!app.isPackaged) {
+      logToFile('[AUTO-UPDATE] Skipping update check in development mode');
+      return { success: false, error: 'Updates not available in development mode' };
+    }
+    
+    logToFile('[AUTO-UPDATE] Starting manual update check...');
     const result = await autoUpdater.checkForUpdates();
+    logToFile(`[AUTO-UPDATE] Check completed, result: ${JSON.stringify(result?.updateInfo?.version || 'unknown')}`);
     return { success: true, updateInfo: result?.updateInfo };
   } catch (error) {
-    logToFile(`[AUTO-UPDATE] Check failed: ${error}`);
-    return { success: false, error: (error as Error).message };
+    updateCheckInProgress = false;
+    if (updateCheckTimeout) {
+      clearTimeout(updateCheckTimeout);
+      updateCheckTimeout = null;
+    }
+    const errorMessage = (error as Error).message || 'Unknown error';
+    logToFile(`[AUTO-UPDATE] Check failed: ${errorMessage}`);
+    logToFile(`[AUTO-UPDATE] Error details: ${JSON.stringify(error)}`);
+    return { success: false, error: errorMessage };
   }
 });
 

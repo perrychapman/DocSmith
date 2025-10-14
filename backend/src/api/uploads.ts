@@ -657,7 +657,7 @@ router.post("/:customerId", (req, res, next) => {
                   console.log(`[UPLOAD] Folder creation response:`, folderErr)
                 }
                 
-                // Step 2: Upload to AnythingLLM (root location first)
+                // Step 2: Upload to AnythingLLM (directly to customer folder if possible)
                 const fd = new FormData()
                 const buf = fs.readFileSync(file.path)
                 const uint = new Uint8Array(buf)
@@ -676,11 +676,13 @@ router.post("/:customerId", (req, res, next) => {
                 
                 // Extract uploaded document name from response
                 let uploadedDocName: string | undefined
+                let uploadedLocation: string | undefined
                 try {
                   const docs = Array.isArray(resp?.documents) ? resp.documents : []
                   const first = docs[0]
                   if (first?.location) {
                     const fullPath = String(first.location)
+                    uploadedLocation = fullPath
                     // Extract relative path from full filesystem path
                     // e.g., "C:\...\storage\documents\custom-documents\file.csv-hash.json" 
                     // becomes "custom-documents/file.csv-hash.json"
@@ -693,6 +695,7 @@ router.post("/:customerId", (req, res, next) => {
                   } else if (first?.name) {
                     uploadedDocName = String(first.name)
                   }
+                  console.log(`[UPLOAD] Uploaded document location: "${uploadedLocation}"`)
                   console.log(`[UPLOAD] Uploaded document name: "${uploadedDocName}"`)
                 } catch (e) {
                   console.error(`[UPLOAD] Error parsing upload response:`, e)
@@ -703,11 +706,12 @@ router.post("/:customerId", (req, res, next) => {
                 }
 
                 // Step 3: Move the file to the customer folder with retry logic
-                // Keep the same filename with hash, just change the folder
-                // e.g., "custom-documents/file.csv-hash.json" -> "Taylor-C_Oct_2025/file.csv-hash.json"
+                // The uploaded file might be in "custom-documents/file-hash.json" or just "file-hash.json"
+                // We want to move it to "CustomerName_Month_Year/file-hash.json"
                 const sourceFilename = uploadedDocName.split('/').pop() || uploadedDocName
                 const targetPath = `${folderName}/${sourceFilename}`
                 console.log(`[UPLOAD] Moving document from "${uploadedDocName}" to "${targetPath}"`)
+                console.log(`[UPLOAD] Source filename extracted: "${sourceFilename}"`)
                 
                 let moveSucceeded = false
                 const maxMoveRetries = 3
@@ -715,25 +719,33 @@ router.post("/:customerId", (req, res, next) => {
                 for (let attempt = 1; attempt <= maxMoveRetries; attempt++) {
                   try {
                     console.log(`[UPLOAD] Move attempt ${attempt}/${maxMoveRetries}`)
+                    console.log(`[UPLOAD] Move payload: from="${uploadedDocName}", to="${targetPath}"`)
                     const moveResp = await anythingllmRequest<{ success: boolean; message: string | null }>(
                       "/document/move-files",
                       "POST",
                       { files: [{ from: uploadedDocName, to: targetPath }] }
                     )
-                    console.log(`[UPLOAD] Move response:`, moveResp)
+                    console.log(`[UPLOAD] Move response:`, JSON.stringify(moveResp, null, 2))
                     
                     if (moveResp?.success !== false) {
                       console.log(`[UPLOAD] File moved successfully to customer folder on attempt ${attempt}`)
+                      console.log(`[UPLOAD] Document is now at: "${targetPath}"`)
                       moveSucceeded = true
                       break
                     } else {
-                      console.log(`[UPLOAD] Move returned success=false, retrying...`)
+                      console.log(`[UPLOAD] Move returned success=false, message: ${moveResp?.message}`)
                       if (attempt < maxMoveRetries) {
+                        console.log(`[UPLOAD] Retrying move in 2s...`)
                         await new Promise(resolve => setTimeout(resolve, 2000))
                       }
                     }
                   } catch (moveErr) {
                     console.error(`[UPLOAD] Move attempt ${attempt} failed:`, moveErr)
+                    console.error(`[UPLOAD] Move error details:`, {
+                      from: uploadedDocName,
+                      to: targetPath,
+                      error: moveErr instanceof Error ? moveErr.message : String(moveErr)
+                    })
                     if (attempt < maxMoveRetries) {
                       console.log(`[UPLOAD] Retrying move in 2s...`)
                       await new Promise(resolve => setTimeout(resolve, 2000))
@@ -760,7 +772,16 @@ router.post("/:customerId", (req, res, next) => {
                 while (!documentExists && (Date.now() - verifyStartTime) < verifyMaxTime) {
                   try {
                     const docsListResp = await anythingllmRequest<any>('/documents', 'GET')
-                    const allDocs = docsListResp?.localFiles || []
+                    // localFiles might be an object with items array, or items might be at root, or it might be an array itself
+                    let allDocs: any[] = []
+                    if (Array.isArray(docsListResp?.localFiles)) {
+                      allDocs = docsListResp.localFiles
+                    } else if (Array.isArray(docsListResp?.localFiles?.items)) {
+                      allDocs = docsListResp.localFiles.items
+                    } else if (Array.isArray(docsListResp)) {
+                      allDocs = docsListResp
+                    }
+                    
                     const foundDoc = allDocs.find((d: any) => 
                       d.name === docName || 
                       d.location?.includes(sourceFilename) ||

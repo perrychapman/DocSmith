@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { toast } from 'sonner';
-import { apiFetch } from '../lib/api';
+import { apiFetch, apiEventSource } from '../lib/api';
 
 type TemplateMetadataNotification = {
   templateSlug: string;
@@ -46,7 +46,7 @@ export function TemplateMetadataProvider({ children }: { children: React.ReactNo
       : `/api/templates/metadata/stream`;
     
     console.log('[TEMPLATE-METADATA-SSE] Connecting to SSE:', url);
-    const eventSource = new EventSource(url);
+    const eventSource = apiEventSource(url);
     eventSourceRef.current = eventSource;
 
     eventSource.addEventListener('message', (event) => {

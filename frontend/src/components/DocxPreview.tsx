@@ -47,10 +47,43 @@ export function DocxPreview({
   const [currentPage, setCurrentPage] = React.useState(1);
   const [totalPages, setTotalPages] = React.useState(1);
   const [zoomLevel, setZoomLevel] = React.useState(100);
+  const [baseZoomLevel, setBaseZoomLevel] = React.useState(100); // Responsive base zoom
   const [pageElements, setPageElements] = React.useState<Element[]>([]);
 
   const docxPreviewRef = React.useRef<HTMLDivElement | null>(null);
   const viewerScrollRef = React.useRef<HTMLDivElement | null>(null);
+
+  // Set responsive base zoom level based on screen size
+  React.useEffect(() => {
+    function updateBaseZoom() {
+      const width = window.innerWidth;
+      if (width < 640) {
+        // Mobile: 50%
+        setBaseZoomLevel(50);
+        setZoomLevel(50);
+      } else if (width < 768) {
+        // Small tablet: 60%
+        setBaseZoomLevel(60);
+        setZoomLevel(60);
+      } else if (width < 1024) {
+        // Tablet: 70%
+        setBaseZoomLevel(70);
+        setZoomLevel(70);
+      } else if (width < 1280) {
+        // Small desktop: 80%
+        setBaseZoomLevel(80);
+        setZoomLevel(80);
+      } else {
+        // Large desktop: 100%
+        setBaseZoomLevel(100);
+        setZoomLevel(100);
+      }
+    }
+
+    updateBaseZoom();
+    window.addEventListener('resize', updateBaseZoom);
+    return () => window.removeEventListener('resize', updateBaseZoom);
+  }, []);
 
   // Extract document metadata from DOCX file
   async function extractDocxMetadata(arrayBuffer: ArrayBuffer): Promise<DocxMetadata> {
@@ -176,7 +209,7 @@ export function DocxPreview({
       // Reset page controls
       setCurrentPage(1);
       setTotalPages(1);
-      setZoomLevel(100);
+      setZoomLevel(baseZoomLevel);
       
       // Render DOCX with all formatting preserved including page breaks
       renderAsync(docxData, container, undefined, {

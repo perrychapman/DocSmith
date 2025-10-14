@@ -2,6 +2,8 @@ import { randomUUID } from 'crypto'
 import fs from 'fs'
 import path from 'path'
 import { libraryRoot } from './fs'
+import { recordGenerationTime } from './templateMetadata'
+import { getDB } from './storage'
 
 export type GenJobStatus = 'running' | 'done' | 'error' | 'cancelled'
 
@@ -115,6 +117,24 @@ export function markJobDone(jobId: string, file?: GenJobFile, meta?: { usedWorks
   if (meta?.usedWorkspace) job.usedWorkspace = meta.usedWorkspace
   job.updatedAt = new Date().toISOString()
   job.completedAt = job.updatedAt
+  
+  // Calculate generation time and record it for the template
+  if (job.template && job.startedAt && job.completedAt) {
+    const startTime = new Date(job.startedAt).getTime()
+    const endTime = new Date(job.completedAt).getTime()
+    const durationSeconds = Math.round((endTime - startTime) / 1000)
+    
+    // Record the generation time asynchronously (don't block job completion)
+    recordGenerationTime(job.template, durationSeconds).catch(err => {
+      console.error(`[GEN-JOBS] Failed to record generation time for ${job.template}:`, err)
+    })
+  }
+  
+  // Update gen_cards in database so cards persist even if frontend EventSource closed
+  updateGenCardStatus(jobId, 'done', file?.name).catch((err: any) => {
+    console.error(`[GEN-JOBS] Failed to update gen_card for job ${jobId}:`, err)
+  })
+  
   saveJobs()
 }
 
@@ -125,6 +145,12 @@ export function markJobError(jobId: string, error: string) {
   job.error = error
   job.updatedAt = new Date().toISOString()
   job.completedAt = job.updatedAt
+  
+  // Update gen_cards status to error
+  updateGenCardStatus(jobId, 'error').catch((err: any) => {
+    console.error(`[GEN-JOBS] Failed to update gen_card for job ${jobId}:`, err)
+  })
+  
   saveJobs()
 }
 
@@ -201,4 +227,63 @@ export function deleteJob(jobId: string) {
 export function clearJobs() {
   jobs = []
   saveJobs()
+}
+
+/**
+ * Update gen_card status in database when job status changes.
+ * This ensures cards persist even if the frontend EventSource is closed.
+ */
+async function updateGenCardStatus(jobId: string, status: 'running' | 'done' | 'error' | 'cancelled', filename?: string): Promise<void> {
+  const db = getDB()
+  
+  return new Promise((resolve, reject) => {
+    // Find the gen_card(s) associated with this jobId
+    db.all<{ cardId: string; workspaceSlug: string | null; customerId: number | null }>(
+      'SELECT cardId, workspaceSlug, customerId FROM gen_cards WHERE jobId = ?',
+      [jobId],
+      (err, rows) => {
+        if (err) {
+          reject(err)
+          return
+        }
+        
+        if (!rows || rows.length === 0) {
+          // No gen_card found for this job - this is normal if job was started from Jobs page
+          resolve()
+          return
+        }
+        
+        // Update all matching cards (usually just 1 user card)
+        let completed = 0
+        const total = rows.length
+        
+        rows.forEach(row => {
+          const updates: string[] = ['jobStatus = ?', 'updatedAt = CURRENT_TIMESTAMP']
+          const params: any[] = [status]
+          
+          if (filename) {
+            updates.push('filename = ?')
+            params.push(filename)
+          }
+          
+          params.push(row.cardId)
+          
+          db.run(
+            `UPDATE gen_cards SET ${updates.join(', ')} WHERE cardId = ?`,
+            params,
+            (updateErr) => {
+              if (updateErr) {
+                console.error(`[GEN-JOBS] Failed to update gen_card ${row.cardId}:`, updateErr)
+              }
+              
+              completed++
+              if (completed === total) {
+                resolve()
+              }
+            }
+          )
+        })
+      }
+    )
+  })
 }

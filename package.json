@@ -1,6 +1,6 @@
 {
     "name": "docsmith",
-    "version": "1.0.2",
+    "version": "1.0.2r1",
     "description": "DocSmith: Document management and workspace collaboration app.",
     "author": "Perry Chapman",
     "main": "electron/main.js",

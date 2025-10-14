@@ -160,7 +160,7 @@ export default function WorkspacesPage() {
                 Create Workspace
               </Button>
             </DialogTrigger>
-            <DialogContent>
+            <DialogContent className="w-[95vw] sm:max-w-md">
               <DialogHeader>
                 <DialogTitle>Create Workspace</DialogTitle>
               </DialogHeader>

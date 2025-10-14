@@ -513,7 +513,7 @@ export default function SettingsPage() {
 
       {/* Reset App Confirmation Dialog */}
       <AlertDialog open={resetDialogOpen} onOpenChange={setResetDialogOpen}>
-        <AlertDialogContent>
+        <AlertDialogContent className="w-[95vw] sm:max-w-md">
           <AlertDialogHeader>
             <AlertDialogTitle>Reset All Application Data?</AlertDialogTitle>
             <AlertDialogDescription>

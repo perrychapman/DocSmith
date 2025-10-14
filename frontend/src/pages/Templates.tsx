@@ -13,7 +13,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/toolti
 import { DocxPreview } from "../components/DocxPreview";
 import { TemplateMetadataModal, type TemplateMetadata } from "../components/TemplateMetadataModal";
 import { useTemplateMetadata } from "../contexts/TemplateMetadataContext";
-import { Search, FileText as FileTextIcon, FileSpreadsheet, FileCode, CheckCircle2, AlertTriangle, Loader2, Sparkles, Copy, X, ExternalLink, Info } from "lucide-react";
+import { Search, FileText as FileTextIcon, FileSpreadsheet, FileCode, CheckCircle2, AlertTriangle, Loader2, Sparkles, Copy, X, ExternalLink, Info, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { apiFetch, apiEventSource } from '../lib/api';
 
@@ -66,6 +66,7 @@ export default function TemplatesPage() {
   // Template metadata modal state
   const [metadataModal, setMetadataModal] = React.useState<TemplateMetadata | null>(null);
   const { metadataProcessing, startTracking, setRefreshCallback } = useTemplateMetadata();
+  const [templateMetadataCache, setTemplateMetadataCache] = React.useState<Map<string, boolean>>(new Map());
 
   // Format relative time helper (from Customers.tsx)
   function formatRelativeTime(value?: string | number | Date): string {
@@ -99,18 +100,23 @@ export default function TemplatesPage() {
   async function loadMetadata(templateSlug: string) {
     try {
       const r = await apiFetch(`/api/templates/${encodeURIComponent(templateSlug)}/metadata`);
-      if (!r.ok) {
-        if (r.status === 404) {
-          toast.error?.('No metadata available for this template yet');
-          return;
-        }
-        throw new Error('Failed to load metadata');
-      }
       const data = await r.json();
-      setMetadataModal(data.metadata);
+      
+      // Check if metadata exists
+      const hasMetadata = data.metadata && (data.metadata.templateType || data.metadata.purpose || (data.metadata.requiredDataTypes && data.metadata.requiredDataTypes.length > 0));
+      setTemplateMetadataCache(prev => new Map(prev).set(templateSlug, hasMetadata));
+      
+      if (!hasMetadata) {
+        // No metadata - trigger extraction
+        await extractMetadata(templateSlug);
+      } else {
+        // Has metadata - show it
+        setMetadataModal(data.metadata);
+      }
     } catch (err) {
       console.error('Failed to load metadata:', err);
-      toast.error?.('Failed to load template metadata');
+      // If error, try extraction
+      await extractMetadata(templateSlug);
     }
   }
 
@@ -626,39 +632,41 @@ export default function TemplatesPage() {
                               <TemplateIcon className="h-4 w-4" />
                             </div>
                             <div className="flex-1 min-w-0">
-                              <div className="flex items-center justify-between gap-3">
-                                <div className="min-w-0 flex-1">
-                                  <div className="font-medium break-words leading-snug" title={t.name || t.slug}>
-                                    {t.name || t.slug}
+                              <div className="flex flex-col gap-2">
+                                <div className="flex items-start justify-between gap-3">
+                                  <div className="min-w-0 flex-1">
+                                    <div className="font-medium break-words leading-snug" title={t.name || t.slug}>
+                                      {t.name || t.slug}
+                                    </div>
+                                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                                      <span title={t.slug}>{t.slug}</span>
+                                      {t.workspaceSlug && (
+                                        <span className="text-primary" title={`Workspace: ${t.workspaceSlug}`}>
+                                          {t.workspaceSlug}
+                                        </span>
+                                      )}
+                                      {t.hasFullGen ? (
+                                        <span className="inline-flex items-center gap-1 text-green-600">
+                                          <CheckCircle2 className="h-3 w-3" />
+                                          Compiled
+                                        </span>
+                                      ) : (
+                                        <span className="inline-flex items-center gap-1 text-amber-600">
+                                          <AlertTriangle className="h-3 w-3" />
+                                          Not compiled
+                                        </span>
+                                      )}
+                                      {t.updatedAt && (
+                                        <span title={new Date(t.updatedAt).toLocaleString()}>
+                                          {formatRelativeTime(t.updatedAt)}
+                                        </span>
+                                      )}
+                                    </div>
                                   </div>
-                                  <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                                    <span title={t.slug}>{t.slug}</span>
-                                    {t.workspaceSlug && (
-                                      <span className="text-primary" title={`Workspace: ${t.workspaceSlug}`}>
-                                        {t.workspaceSlug}
-                                      </span>
-                                    )}
-                                    {t.hasFullGen ? (
-                                      <span className="inline-flex items-center gap-1 text-green-600">
-                                        <CheckCircle2 className="h-3 w-3" />
-                                        Compiled
-                                      </span>
-                                    ) : (
-                                      <span className="inline-flex items-center gap-1 text-amber-600">
-                                        <AlertTriangle className="h-3 w-3" />
-                                        Not compiled
-                                      </span>
-                                    )}
-                                    {t.updatedAt && (
-                                      <span title={new Date(t.updatedAt).toLocaleString()}>
-                                        {formatRelativeTime(t.updatedAt)}
-                                      </span>
-                                    )}
-                                  </div>
-                                </div>
-                                <div className="flex items-center gap-1 sm:gap-2 shrink-0">
-                                  <Tooltip>
-                                    <TooltipTrigger>
+                                  {/* Compile button - always visible on desktop, hidden on mobile */}
+                                  <div className="hidden xl:flex items-center gap-1 sm:gap-2 shrink-0">
+                                    <Tooltip>
+                                      <TooltipTrigger>
                                       <Button
                                         size="icon"
                                         variant={hadError ? "outline" : "default"}
@@ -716,6 +724,8 @@ export default function TemplatesPage() {
                                       >
                                         {metadataProcessing.has(t.slug) ? (
                                           <Loader2 className="h-4 w-4 animate-spin" />
+                                        ) : templateMetadataCache.get(t.slug) === false ? (
+                                          <RefreshCw className="h-4 w-4" />
                                         ) : (
                                           <Info className="h-4 w-4" />
                                         )}
@@ -724,6 +734,8 @@ export default function TemplatesPage() {
                                     <TooltipContent>
                                       {metadataProcessing.has(t.slug) 
                                         ? 'Extracting template metadata...' 
+                                        : templateMetadataCache.get(t.slug) === false
+                                        ? 'Extract Metadata'
                                         : 'View Template Metadata'
                                       }
                                     </TooltipContent>
@@ -750,6 +762,115 @@ export default function TemplatesPage() {
                                         size="icon"
                                         variant="destructive"
                                         className="h-9 w-9"
+                                        aria-label="Delete"
+                                        onClick={(e) => { e.stopPropagation(); startDelete(t.slug); }}
+                                      >
+                                        <Icon.Trash className="h-4 w-4" />
+                                      </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>Delete Template</TooltipContent>
+                                  </Tooltip>
+                                </div>
+                              </div>
+                              {/* All buttons row - visible on mobile below text */}
+                              <div className="flex xl:hidden items-center gap-1 border-t pt-2">
+                                  <Tooltip>
+                                    <TooltipTrigger>
+                                      <Button
+                                        size="icon"
+                                        variant={hadError ? "outline" : "default"}
+                                        className={`h-8 w-8 ${
+                                          hadError ? 'border-amber-500 text-amber-700 hover:bg-amber-50' : ''
+                                        } ${isCompiling ? 'opacity-80' : ''}`}
+                                        aria-label={compileActionLabel}
+                                        onClick={(e) => { e.stopPropagation(); compile(t.slug); }}
+                                        disabled={disableCompileButton}
+                                        aria-busy={isCompiling}
+                                      >
+                                        {isCompiling ? (
+                                          <Loader2 className="h-4 w-4 animate-spin" />
+                                        ) : hadError ? (
+                                          <AlertTriangle className="h-4 w-4" />
+                                        ) : hasCompiled ? (
+                                          <Icon.Refresh className="h-4 w-4" />
+                                        ) : (
+                                          <Sparkles className="h-4 w-4" />
+                                        )}
+                                      </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>{compileTooltip}</TooltipContent>
+                                  </Tooltip>
+                                  <Tooltip>
+                                    <TooltipTrigger>
+                                      <Button
+                                        size="icon"
+                                        variant="ghost"
+                                        className="h-8 w-8"
+                                        aria-label="Open folder"
+                                        onClick={async (e) => {
+                                          e.stopPropagation();
+                                          try {
+                                            const r = await apiFetch(`/api/templates/${encodeURIComponent(t.slug)}/open-folder`, { method: 'POST' });
+                                            if (!r.ok) throw new Error(String(r.status));
+                                            toast.success('Opened folder');
+                                          } catch { toast.error('Failed to open folder') }
+                                        }}
+                                      >
+                                        <Icon.Folder className="h-4 w-4" />
+                                      </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>Open Folder</TooltipContent>
+                                  </Tooltip>
+                                  <Tooltip>
+                                    <TooltipTrigger>
+                                      <Button
+                                        size="icon"
+                                        variant="ghost"
+                                        className={`h-8 w-8 ${metadataProcessing.has(t.slug) ? 'opacity-80' : ''}`}
+                                        aria-label={`View metadata for ${t.name || t.slug}`}
+                                        onClick={(e) => { e.stopPropagation(); loadMetadata(t.slug); }}
+                                        disabled={metadataProcessing.has(t.slug)}
+                                      >
+                                        {metadataProcessing.has(t.slug) ? (
+                                          <Loader2 className="h-4 w-4 animate-spin" />
+                                        ) : templateMetadataCache.get(t.slug) === false ? (
+                                          <RefreshCw className="h-4 w-4" />
+                                        ) : (
+                                          <Info className="h-4 w-4" />
+                                        )}
+                                      </Button>
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                      {metadataProcessing.has(t.slug) 
+                                        ? 'Extracting template metadata...' 
+                                        : templateMetadataCache.get(t.slug) === false
+                                        ? 'Extract Metadata'
+                                        : 'View Template Metadata'
+                                      }
+                                    </TooltipContent>
+                                  </Tooltip>
+                                  {t.hasFullGen && (
+                                    <Tooltip>
+                                      <TooltipTrigger>
+                                        <Button
+                                          size="icon"
+                                          variant="ghost"
+                                          className="h-8 w-8"
+                                          aria-label="View FullGen"
+                                          onClick={(e) => { e.stopPropagation(); viewFullGen(t.slug); }}
+                                        >
+                                          <Icon.File className="h-4 w-4" />
+                                        </Button>
+                                      </TooltipTrigger>
+                                      <TooltipContent>View FullGen Script</TooltipContent>
+                                    </Tooltip>
+                                  )}
+                                  <Tooltip>
+                                    <TooltipTrigger>
+                                      <Button
+                                        size="icon"
+                                        variant="destructive"
+                                        className="h-8 w-8"
                                         aria-label="Delete"
                                         onClick={(e) => { e.stopPropagation(); startDelete(t.slug); }}
                                       >

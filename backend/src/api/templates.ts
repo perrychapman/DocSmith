@@ -76,13 +76,87 @@ async function extractTemplateMetadataInBackground(
   try {
     console.log(`[TEMPLATE-METADATA] Starting background extraction for ${templateSlug}`)
     console.log(`[TEMPLATE-METADATA] Workspace: ${workspaceSlug}`)
+    console.log(`[TEMPLATE-METADATA] Template file: ${path.basename(templatePath)}`)
     
-    // Wait for AnythingLLM to finish indexing the template
-    console.log(`[TEMPLATE-METADATA] Waiting 3s for template indexing...`)
-    await new Promise(resolve => setTimeout(resolve, 3000))
+    // Wait for AnythingLLM to finish indexing the template with retries
+    // Production builds may take longer than dev mode
+    const maxWaitTime = 30000 // 30 seconds max
+    const checkInterval = 2000 // Check every 2 seconds
+    const startTime = Date.now()
+    let isIndexed = false
+    const templateFileName = path.basename(templatePath)
     
+    console.log(`[TEMPLATE-METADATA] Waiting for template to be indexed (max ${maxWaitTime/1000}s)...`)
+    
+    while (!isIndexed && (Date.now() - startTime) < maxWaitTime) {
+      try {
+        // Check if template file exists in workspace embeddings
+        const workspaceInfo = await anythingllmRequest<any>(
+          `/workspace/${encodeURIComponent(workspaceSlug)}`,
+          'GET'
+        )
+        
+        const documents = workspaceInfo?.workspace?.documents || []
+        const foundDoc = documents.find((d: any) => 
+          d.docpath?.includes(templateFileName) ||
+          d.name?.includes(templateFileName) ||
+          d.location?.includes(templateFileName)
+        )
+        
+        if (foundDoc) {
+          console.log(`[TEMPLATE-METADATA] Template indexed successfully after ${((Date.now() - startTime)/1000).toFixed(1)}s`)
+          isIndexed = true
+          break
+        }
+        
+        console.log(`[TEMPLATE-METADATA] Template not yet indexed, waiting ${checkInterval/1000}s... (${((Date.now() - startTime)/1000).toFixed(1)}s elapsed)`)
+        await new Promise(resolve => setTimeout(resolve, checkInterval))
+      } catch (err) {
+        console.error(`[TEMPLATE-METADATA] Error checking indexing status:`, err)
+        // Continue waiting - might just be a transient error
+        await new Promise(resolve => setTimeout(resolve, checkInterval))
+      }
+    }
+    
+    if (!isIndexed) {
+      console.log(`[TEMPLATE-METADATA] Template not indexed after ${maxWaitTime/1000}s, proceeding anyway (might be slow indexing)`)
+      // Proceed anyway - the template might still be queryable even if not showing in workspace.documents yet
+    }
+    
+    // Retry logic for metadata analysis (sometimes first attempt fails if template still indexing)
     console.log(`[TEMPLATE-METADATA] Sending AI analysis request for "${templateName}"`)
-    const metadata = await analyzeTemplateMetadata(templatePath, templateSlug, templateName, workspaceSlug)
+    let metadata: any = null
+    let lastError: Error | null = null
+    const maxRetries = 3
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`[TEMPLATE-METADATA] Analysis attempt ${attempt}/${maxRetries}`)
+        metadata = await analyzeTemplateMetadata(templatePath, templateSlug, templateName, workspaceSlug)
+        
+        // Check if we got meaningful metadata (not just fallback)
+        if (metadata.templateType || metadata.purpose || (metadata.requiredDataTypes && metadata.requiredDataTypes.length > 0)) {
+          console.log(`[TEMPLATE-METADATA] Analysis successful on attempt ${attempt}`)
+          break
+        } else {
+          console.log(`[TEMPLATE-METADATA] Got fallback metadata on attempt ${attempt}, retrying...`)
+          if (attempt < maxRetries) {
+            await new Promise(resolve => setTimeout(resolve, 3000)) // Wait 3s before retry
+          }
+        }
+      } catch (err) {
+        lastError = err as Error
+        console.error(`[TEMPLATE-METADATA] Analysis attempt ${attempt} failed:`, err)
+        if (attempt < maxRetries) {
+          console.log(`[TEMPLATE-METADATA] Retrying in 3s...`)
+          await new Promise(resolve => setTimeout(resolve, 3000))
+        }
+      }
+    }
+    
+    if (!metadata || (!metadata.templateType && !metadata.purpose)) {
+      throw new Error(`Failed to extract template metadata after ${maxRetries} attempts: ${lastError?.message || 'Unknown error'}`)
+    }
     
     console.log(`[TEMPLATE-METADATA] Analysis complete for ${templateSlug}:`, {
       type: metadata.templateType,

@@ -58,6 +58,12 @@ export interface TemplateMetadata {
   compatibleDocumentTypes?: string[] // Document types that work well
   recommendedWorkspaceSize?: string
   
+  // Generation statistics (actual performance data)
+  actualGenerationTimes?: number[]  // Last 20 actual generation times in seconds
+  generationCount?: number          // Total number of times template has been used
+  avgGenerationTime?: number        // Average generation time in seconds
+  lastGeneratedAt?: string          // Last time this template was used
+  
   // System metadata
   lastAnalyzed?: string
   analysisVersion?: number
@@ -102,6 +108,10 @@ interface TemplateMetadataRow {
   lastAnalyzed: string | null
   analysisVersion: number
   workspaceSlug: string | null
+  actualGenerationTimes: string | null
+  generationCount: number | null
+  avgGenerationTime: number | null
+  lastGeneratedAt: string | null
 }
 
 /**
@@ -140,6 +150,10 @@ function rowToMetadata(row: TemplateMetadataRow): TemplateMetadata {
     useCases: row.useCases ? JSON.parse(row.useCases) : undefined,
     compatibleDocumentTypes: row.compatibleDocumentTypes ? JSON.parse(row.compatibleDocumentTypes) : undefined,
     recommendedWorkspaceSize: row.recommendedWorkspaceSize ?? undefined,
+    actualGenerationTimes: row.actualGenerationTimes ? JSON.parse(row.actualGenerationTimes) : undefined,
+    generationCount: row.generationCount ?? undefined,
+    avgGenerationTime: row.avgGenerationTime ?? undefined,
+    lastGeneratedAt: row.lastGeneratedAt ?? undefined,
     lastAnalyzed: row.lastAnalyzed ?? undefined,
     analysisVersion: row.analysisVersion,
     workspaceSlug: row.workspaceSlug ?? undefined
@@ -253,11 +267,17 @@ Return ONLY this JSON structure:
   "requiresComparisons": true/false (needs before/after, period-over-period, variance?),
   "requiresFiltering": true/false (needs filtered subsets of data?),
   "complexity": "Simple" or "Moderate" or "Complex",
-  "estimatedGenerationTime": "Fast (<5s)" or "Moderate (5-15s)" or "Slow (>15s)",
+  "estimatedGenerationTime": "Fast (<5s)" or "Moderate (5-15s)" or "Slow (>15s)" - CALCULATE BASED ON:
+    - Fast: Simple templates, 1-2 sheets, <5 tables, no complex formulas, static content
+    - Moderate: 3-5 sheets, 5-15 tables, some formulas, moderate data queries
+    - Slow: >5 sheets, >15 tables, complex formulas/charts, requires heavy data processing or multiple AI calls,
   "targetAudience": "Executives" or "Technical Teams" or "Customers" or "Internal Staff" or "Finance Team" or "Operations Team",
   "useCases": ["Monthly reporting", "Budget planning", "Inventory audit", "Sales review"],
   "compatibleDocumentTypes": ["Financial Reports", "Inventory Lists", "Meeting Notes", "Sales Data", "Customer Records"],
-  "recommendedWorkspaceSize": "Small (<10 docs)" or "Medium (10-50)" or "Large (>50)"
+  "recommendedWorkspaceSize": "Small (<10 docs)" or "Medium (10-50)" or "Large (>50)" - CALCULATE BASED ON:
+    - Small: Template needs 1-2 specific document types, simple lookups, minimal context
+    - Medium: Template needs 3-5 document types, moderate cross-referencing, some aggregation
+    - Large: Template needs >5 document types, complex cross-referencing, heavy aggregation, historical comparisons
 }`
   } else if (isDocx) {
     analysisPrompt += `This is a WORD DOCUMENT TEMPLATE (DOCX). Analyze what DATA this template NEEDS to generate its output.
@@ -306,11 +326,17 @@ Return ONLY this JSON structure:
   "requiresComparisons": true/false (needs comparisons or variances?),
   "requiresFiltering": true/false (needs filtered/selected data subsets?),
   "complexity": "Simple" or "Moderate" or "Complex",
-  "estimatedGenerationTime": "Fast (<5s)" or "Moderate (5-15s)" or "Slow (>15s)",
+  "estimatedGenerationTime": "Fast (<5s)" or "Moderate (5-15s)" or "Slow (>15s)" - CALCULATE BASED ON:
+    - Fast: Simple templates, 1-2 pages, <3 tables, static/narrative content, minimal data processing
+    - Moderate: 3-10 pages, 3-8 tables, some dynamic content, moderate data queries, 1-2 AI calls
+    - Slow: >10 pages, >8 tables, complex layouts/charts, heavy data processing, multiple AI calls, aggregations,
   "targetAudience": "Executives" or "Customers" or "Technical Teams" or "Internal Staff" or "Legal/Compliance" or "Partners",
   "useCases": ["Quarterly reporting", "Client proposals", "Project documentation", "Vendor communications"],
   "compatibleDocumentTypes": ["Financial Reports", "Meeting Notes", "Technical Specs", "Inventory Data", "Customer Records", "Project Plans"],
-  "recommendedWorkspaceSize": "Small (<10 docs)" or "Medium (10-50)" or "Large (>50)"
+  "recommendedWorkspaceSize": "Small (<10 docs)" or "Medium (10-50)" or "Large (>50)" - CALCULATE BASED ON:
+    - Small: Template needs 1-2 specific document types, simple data extraction, minimal cross-referencing
+    - Medium: Template needs 3-5 document types, moderate cross-referencing, some data aggregation
+    - Large: Template needs >5 document types, complex cross-referencing, heavy aggregation, historical data, trend analysis
 }`
   } else {
     // Generic template
@@ -337,7 +363,20 @@ Return ONLY a JSON object:
 4. For arrays (requiredDataTypes, expectedEntities, etc.), list MULTIPLE relevant items (aim for 3-5)
 5. Set boolean flags (requiresAggregation, requiresTimeSeries, etc.) to true ONLY if clearly needed
 6. Consider what workspace documents would provide the data this template needs
-7. Return ONLY valid JSON - no markdown code blocks, no explanatory text, just the JSON object
+7. **IMPORTANT - Calculate estimatedGenerationTime accurately:**
+   - Count the number of tables, sections, formulas, and data points the template requires
+   - Consider if multiple AI queries will be needed to populate the template
+   - Consider if aggregation, filtering, or complex data transformations are needed
+   - Fast (<5s): Simple templates with 1-5 data fields, no calculations, static content
+   - Moderate (5-15s): Templates with 5-20 data fields, some tables/lists, basic calculations, 1-2 AI calls
+   - Slow (>15s): Complex templates with >20 data fields, multiple tables, formulas, charts, aggregations, multiple AI calls
+8. **IMPORTANT - Calculate recommendedWorkspaceSize accurately:**
+   - Count how many DIFFERENT document types the template needs data from
+   - Consider if the template requires cross-referencing or aggregating across multiple documents
+   - Small (<10 docs): Template pulls from 1-2 specific documents (e.g., just one invoice or one report)
+   - Medium (10-50): Template pulls from 3-10 documents, needs moderate cross-referencing or aggregation
+   - Large (>50): Template pulls from >10 documents, needs extensive cross-referencing, historical data, trend analysis, comparisons across time
+9. Return ONLY valid JSON - no markdown code blocks, no explanatory text, just the JSON object
 
 RESPOND WITH THE JSON OBJECT NOW:`
 
@@ -557,6 +596,84 @@ export function deleteTemplateMetadata(templateSlug: string): Promise<void> {
           logInfo(`[TEMPLATE-METADATA-DB] Deleted metadata for ${templateSlug}`)
           resolve()
         }
+      }
+    )
+  })
+}
+
+/**
+ * Record actual generation time and update template metadata statistics
+ */
+export function recordGenerationTime(templateSlug: string, generationTimeSeconds: number): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const db = getDB()
+    
+    // Get current stats
+    db.get<TemplateMetadataRow>(
+      'SELECT actualGenerationTimes, generationCount, avgGenerationTime FROM template_metadata WHERE templateSlug = ?',
+      [templateSlug],
+      (err, row) => {
+        if (err) {
+          logError(`[TEMPLATE-METADATA] Failed to get stats for ${templateSlug}:`, err)
+          return reject(err)
+        }
+        
+        if (!row) {
+          // Template metadata doesn't exist yet, skip recording
+          logInfo(`[TEMPLATE-METADATA] No metadata for ${templateSlug}, skipping generation time recording`)
+          return resolve()
+        }
+        
+        // Parse existing times (keep last 20 for moving average)
+        let times: number[] = []
+        try {
+          if (row.actualGenerationTimes) {
+            times = JSON.parse(row.actualGenerationTimes)
+          }
+        } catch {
+          times = []
+        }
+        
+        // Add new time and keep last 20
+        times.push(generationTimeSeconds)
+        if (times.length > 20) {
+          times = times.slice(-20)
+        }
+        
+        // Calculate new average
+        const newAvg = times.reduce((sum, t) => sum + t, 0) / times.length
+        const newCount = (row.generationCount || 0) + 1
+        
+        // Determine new estimated category based on actual average
+        let newEstimate: string
+        if (newAvg < 5) {
+          newEstimate = 'Fast (<5s)'
+        } else if (newAvg < 15) {
+          newEstimate = 'Moderate (5-15s)'
+        } else {
+          newEstimate = 'Slow (>15s)'
+        }
+        
+        // Update database
+        db.run(
+          `UPDATE template_metadata 
+           SET actualGenerationTimes = ?,
+               generationCount = ?,
+               avgGenerationTime = ?,
+               estimatedGenerationTime = ?,
+               lastGeneratedAt = CURRENT_TIMESTAMP
+           WHERE templateSlug = ?`,
+          [JSON.stringify(times), newCount, newAvg, newEstimate, templateSlug],
+          (updateErr) => {
+            if (updateErr) {
+              logError(`[TEMPLATE-METADATA] Failed to update stats for ${templateSlug}:`, updateErr)
+              return reject(updateErr)
+            }
+            
+            logInfo(`[TEMPLATE-METADATA] Updated ${templateSlug}: ${newCount} generations, avg ${newAvg.toFixed(1)}s, category: ${newEstimate}`)
+            resolve()
+          }
+        )
       }
     )
   })

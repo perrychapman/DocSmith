@@ -5,12 +5,24 @@ import { randomUUID } from "crypto"
 
 // ---------- Library Root ----------
 // Absolute path to the library root (default: ./data at project root)
+let _cachedLibraryRoot: string | undefined
+let _libraryRootLogged = false
+
 export function libraryRoot(): string {
+  if (_cachedLibraryRoot) {
+    return _cachedLibraryRoot
+  }
+  
   const envRoot = process.env.LIBRARY_ROOT
   
   if (envRoot) {
     // Environment variable takes precedence
-    return path.resolve(envRoot)
+    _cachedLibraryRoot = path.resolve(envRoot)
+    if (!_libraryRootLogged) {
+      console.log('[FS] Using LIBRARY_ROOT env var:', _cachedLibraryRoot)
+      _libraryRootLogged = true
+    }
+    return _cachedLibraryRoot
   }
   
   // Detect if we're in a packaged Electron app
@@ -23,16 +35,22 @@ export function libraryRoot(): string {
     // Use user's AppData in production
     const userDataPath = process.env.APPDATA || 
                          path.join(process.env.USERPROFILE || process.env.HOME || '', 'AppData', 'Roaming')
-    const dataPath = path.join(userDataPath, 'DocSmith', 'data')
-    console.log('[FS] Production mode detected, using AppData:', dataPath)
-    return dataPath
+    _cachedLibraryRoot = path.join(userDataPath, 'DocSmith', 'data')
+    if (!_libraryRootLogged) {
+      console.log('[FS] Production mode detected, using AppData:', _cachedLibraryRoot)
+      _libraryRootLogged = true
+    }
+    return _cachedLibraryRoot
   }
   
   // Development mode: use ./data relative to project root
   // __dirname is .../backend/src/services → go up two to project root
-  const devPath = path.resolve(__dirname, "../../..", "./data")
-  console.log('[FS] Development mode, using project data:', devPath)
-  return devPath
+  _cachedLibraryRoot = path.resolve(__dirname, "../../..", "./data")
+  if (!_libraryRootLogged) {
+    console.log('[FS] Development mode, using project data:', _cachedLibraryRoot)
+    _libraryRootLogged = true
+  }
+  return _cachedLibraryRoot
 }
 
 // ---------- Name Helpers ----------

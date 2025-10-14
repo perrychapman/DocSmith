@@ -6,7 +6,7 @@ import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbP
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, DialogDescription, DialogClose } from "../components/ui/dialog";
 import { Icon } from "../components/icons";
-import { Maximize2, Minimize2, Search, ExternalLink, Download, FileText, FileSpreadsheet, FileCode, FileQuestion, FileType, Info, Loader2, Pin, PinOff } from "lucide-react";
+import { Maximize2, Minimize2, Search, ExternalLink, Download, FileText, FileSpreadsheet, FileCode, FileQuestion, FileType, Info, Loader2, Pin, PinOff, RefreshCw } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "../components/ui/tooltip";
 import { A, apiFetch, apiEventSource } from "../lib/api";
 import WorkspaceChat from "../components/WorkspaceChat";
@@ -72,6 +72,29 @@ export function CustomersPage() {
   // Metadata modal state
   const [metadataModal, setMetadataModal] = React.useState<DocumentMetadata | null>(null);
   const { metadataProcessing, startTracking, setRefreshCallback } = useMetadata();
+  const [uploadMetadataCache, setUploadMetadataCache] = React.useState<Map<string, boolean>>(new Map());
+
+  // Trigger metadata extraction for uploaded document
+  async function extractUploadMetadata(filename: string) {
+    if (!selectedId) return;
+    try {
+      const r = await apiFetch(`/api/uploads/${selectedId}/metadata-extract`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename })
+      });
+      if (!r.ok) {
+        throw new Error('Failed to start metadata extraction');
+      }
+      
+      // Start tracking the metadata extraction
+      startTracking(selectedId, filename);
+      toast.success('Metadata extraction started');
+    } catch (err) {
+      console.error('Failed to extract metadata:', err);
+      toast.error('Failed to start metadata extraction');
+    }
+  }
 
   // Accepted file types for upload validation
   const [acceptedFileTypes, setAcceptedFileTypes] = React.useState<Record<string, string[]> | null>(null);
@@ -611,8 +634,21 @@ export function CustomersPage() {
                 }
               }
             })();
-              // Refresh uploads
-              (async () => { try { const r2 = await apiFetch(`/api/uploads/${selectedId}`); const d2: UploadItem[] = await r2.json(); setUploads(Array.isArray(d2) ? d2 : []) } catch { } })()
+              // Refresh uploads and generated documents
+              (async () => { 
+                try { 
+                  const r2 = await apiFetch(`/api/uploads/${selectedId}`); 
+                  const d2: UploadItem[] = await r2.json(); 
+                  setUploads(Array.isArray(d2) ? d2 : []) 
+                } catch { } 
+              })();
+              (async () => { 
+                try { 
+                  const r3 = await apiFetch(`/api/documents/${selectedId}`); 
+                  const d3: UploadItem[] = await r3.json(); 
+                  setGeneratedDocs(Array.isArray(d3) ? d3 : []) 
+                } catch { } 
+              })();
             toast.success('Document generated')
           }
         } catch { }
@@ -1392,24 +1428,42 @@ export function CustomersPage() {
                                             if (!selectedId) return;
                                             try {
                                               const r = await apiFetch(`/api/uploads/${selectedId}/metadata?name=${encodeURIComponent(u.name)}`);
-                                              if (!r.ok) throw new Error('Failed to load metadata');
                                               const data = await r.json();
-                                              setMetadataModal(data.metadata || null);
+                                              
+                                              // Check if metadata exists
+                                              const hasMetadata = data.metadata && (data.metadata.documentType || data.metadata.purpose || (data.metadata.keyTopics && data.metadata.keyTopics.length > 0));
+                                              setUploadMetadataCache(prev => new Map(prev).set(u.name, hasMetadata));
+                                              
+                                              if (!hasMetadata) {
+                                                // No metadata - trigger extraction
+                                                await extractUploadMetadata(u.name);
+                                              } else {
+                                                // Has metadata - show it
+                                                setMetadataModal(data.metadata || null);
+                                              }
                                             } catch (err) {
                                               console.error('Failed to load metadata:', err);
-                                              toast.error('Failed to load metadata');
+                                              // If error, try extraction
+                                              await extractUploadMetadata(u.name);
                                             }
                                           }}
                                         >
                                           {metadataProcessing.has(u.name) ? (
                                             <Loader2 className="h-4 w-4 animate-spin" />
+                                          ) : uploadMetadataCache.get(u.name) === false ? (
+                                            <RefreshCw className="h-4 w-4" />
                                           ) : (
                                             <Info className="h-4 w-4" />
                                           )}
                                         </Button>
                                       </TooltipTrigger>
                                       <TooltipContent>
-                                        {metadataProcessing.has(u.name) ? 'Extracting metadata...' : 'View Metadata'}
+                                        {metadataProcessing.has(u.name) 
+                                          ? 'Extracting metadata...' 
+                                          : uploadMetadataCache.get(u.name) === false
+                                          ? 'Extract Metadata'
+                                          : 'View Metadata'
+                                        }
                                       </TooltipContent>
                                     </Tooltip>
                                     <Tooltip>
@@ -1531,7 +1585,7 @@ export function CustomersPage() {
 
       {/* Delete Customer Confirm */}
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>
-        <AlertDialogContent>
+        <AlertDialogContent className="w-[95vw] sm:max-w-md">
           <AlertDialogHeader>
             <AlertDialogTitle>Delete customer "{deleteName}"?</AlertDialogTitle>
           </AlertDialogHeader>

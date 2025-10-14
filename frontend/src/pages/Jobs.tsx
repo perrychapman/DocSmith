@@ -491,7 +491,7 @@ export default function JobsPage() {
 
       {/* Clear All Jobs */}
       <AlertDialog open={clearOpen} onOpenChange={setClearOpen}>
-        <AlertDialogContent>
+        <AlertDialogContent className="w-[95vw] sm:max-w-md">
           <AlertDialogHeader>
             <AlertDialogTitle>Clear all job records?</AlertDialogTitle>
           </AlertDialogHeader>

@@ -51,6 +51,60 @@ const migrations: Migration[] = [
         })
       })
     }
+  },
+  {
+    version: 4,
+    name: "add-template-generation-stats",
+    up: async (db: sqlite3.Database) => {
+      return new Promise((resolve, reject) => {
+        db.serialize(() => {
+          // Add fields to template_metadata
+          db.run("ALTER TABLE template_metadata ADD COLUMN actualGenerationTimes TEXT", (err1) => {
+            if (err1 && !err1.message.includes("duplicate column")) {
+              return reject(err1)
+            }
+            
+            db.run("ALTER TABLE template_metadata ADD COLUMN generationCount INTEGER DEFAULT 0", (err2) => {
+              if (err2 && !err2.message.includes("duplicate column")) {
+                return reject(err2)
+              }
+              
+              db.run("ALTER TABLE template_metadata ADD COLUMN avgGenerationTime REAL", (err3) => {
+                if (err3 && !err3.message.includes("duplicate column")) {
+                  return reject(err3)
+                }
+                
+                db.run("ALTER TABLE template_metadata ADD COLUMN lastGeneratedAt TIMESTAMP", (err4) => {
+                  if (err4 && !err4.message.includes("duplicate column")) {
+                    return reject(err4)
+                  }
+                  
+                  // Add fields to gen_cards
+                  db.run("ALTER TABLE gen_cards ADD COLUMN startedAt TIMESTAMP", (err5) => {
+                    if (err5 && !err5.message.includes("duplicate column")) {
+                      return reject(err5)
+                    }
+                    
+                    db.run("ALTER TABLE gen_cards ADD COLUMN completedAt TIMESTAMP", (err6) => {
+                      if (err6 && !err6.message.includes("duplicate column")) {
+                        return reject(err6)
+                      }
+                      
+                      db.run("ALTER TABLE gen_cards ADD COLUMN generationTimeSeconds REAL", (err7) => {
+                        if (err7 && !err7.message.includes("duplicate column")) {
+                          return reject(err7)
+                        }
+                        resolve()
+                      })
+                    })
+                  })
+                })
+              })
+            })
+          })
+        })
+      })
+    }
   }
 ]
 

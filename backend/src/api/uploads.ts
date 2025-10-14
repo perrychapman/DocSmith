@@ -636,6 +636,16 @@ router.post("/:customerId", (req, res, next) => {
           if (uErr) return res.status(400).json({ error: String(uErr?.message || uErr) })
           const file = (req as any).file as { filename: string; path: string } | undefined
           if (!file) return res.status(400).json({ error: "No file uploaded" })
+          
+          // Log environment info for debugging computer-specific issues
+          console.log(`[UPLOAD-ENV] Computer: ${process.env.COMPUTERNAME || 'unknown'}`)
+          console.log(`[UPLOAD-ENV] User: ${process.env.USERNAME || 'unknown'}`)
+          console.log(`[UPLOAD-ENV] Platform: ${process.platform}`)
+          console.log(`[UPLOAD-ENV] Node version: ${process.version}`)
+          console.log(`[UPLOAD-ENV] Upload file: ${file.filename}`)
+          console.log(`[UPLOAD-ENV] Customer: ${row.name} (ID: ${row.id})`)
+          console.log(`[UPLOAD-ENV] Workspace slug: ${row.workspaceSlug || 'NONE'}`)
+          
           // Trigger AnythingLLM upload + embed into workspace, then persist mapping sidecar
           try {
             const slug = row.workspaceSlug
@@ -688,30 +698,37 @@ router.post("/:customerId", (req, res, next) => {
                     console.log(`[UPLOAD] First document name:`, first.name)
                   }
                   
+                  // CRITICAL FIX: Always prefer location field and preserve full relative path
+                  // AnythingLLM returns location as either:
+                  // 1. Full filesystem path: "C:\...\storage\documents\custom-documents\file.json"
+                  // 2. Relative path: "custom-documents/file.json"
+                  // We need to preserve "custom-documents/" prefix for move and embed operations!
+                  
                   if (first?.location) {
-                    const fullPath = String(first.location)
+                    const fullPath = String(first.location).trim()
                     uploadedLocation = fullPath
-                    // Extract relative path from full filesystem path
-                    // e.g., "C:\...\storage\documents\custom-documents\file.csv-hash.json" 
-                    // becomes "custom-documents/file.csv-hash.json"
+                    
+                    // Check if it's a full filesystem path containing "documents" folder
                     const match = fullPath.match(/documents[/\\](.+)$/i)
                     if (match && match[1]) {
-                      uploadedDocName = match[1].replace(/\\/g, '/') // Normalize to forward slashes
-                      console.log(`[UPLOAD] Extracted from location regex: "${uploadedDocName}"`)
+                      // Extract everything after "documents\" and normalize slashes
+                      uploadedDocName = match[1].replace(/\\/g, '/')
+                      console.log(`[UPLOAD] Extracted from filesystem path: "${uploadedDocName}"`)
                     } else {
-                      // Location might already be a relative path like "custom-documents/file.json"
+                      // It's already a relative path - use it directly
                       uploadedDocName = fullPath.replace(/\\/g, '/')
-                      console.log(`[UPLOAD] Using location as-is: "${uploadedDocName}"`)
+                      console.log(`[UPLOAD] Using relative path from location: "${uploadedDocName}"`)
                     }
                   } else if (first?.name) {
-                    // Fallback to name, but this is usually just the filename without folder
-                    // Try to construct the expected path
-                    const baseName = String(first.name)
-                    uploadedDocName = `custom-documents/${baseName}`
-                    console.log(`[UPLOAD] Constructed from name: "${uploadedDocName}"`)
+                    // Fallback: construct path from name (assume custom-documents folder)
+                    const baseName = String(first.name).trim()
+                    // If name already has a folder prefix, use it; otherwise add custom-documents/
+                    uploadedDocName = baseName.includes('/') ? baseName : `custom-documents/${baseName}`
+                    console.log(`[UPLOAD] Constructed from name field: "${uploadedDocName}"`)
                   }
+                  
                   console.log(`[UPLOAD] Final uploaded document location: "${uploadedLocation}"`)
-                  console.log(`[UPLOAD] Final uploaded document name: "${uploadedDocName}"`)
+                  console.log(`[UPLOAD] Final uploaded document name (for move/embed): "${uploadedDocName}"`)
                 } catch (e) {
                   console.error(`[UPLOAD] Error parsing upload response:`, e)
                 }
@@ -720,21 +737,21 @@ router.post("/:customerId", (req, res, next) => {
                   throw new Error(`Failed to get document name from upload response`)
                 }
 
-                // Step 3: Move the file to the customer folder with retry logic
-                // The uploaded file might be in "custom-documents/file-hash.json" or just "file-hash.json"
-                // We want to move it to "CustomerName_Month_Year/file-hash.json"
+                // Step 3: Try to move the file to the customer folder (OPTIONAL - graceful fallback)
+                // Note: AnythingLLM's move-files API has been unreliable in some environments
+                // If move fails, we'll still embed using the original path (custom-documents/...)
+                // The document will still work correctly for metadata extraction even without moving
+                
                 const sourceFilename = uploadedDocName.split('/').pop() || uploadedDocName
                 const targetPath = `${folderName}/${sourceFilename}`
-                console.log(`[UPLOAD] Moving document from "${uploadedDocName}" to "${targetPath}"`)
-                console.log(`[UPLOAD] Source filename extracted: "${sourceFilename}"`)
+                console.log(`[UPLOAD] Attempting to organize document: "${uploadedDocName}" -> "${targetPath}"`)
                 
                 let moveSucceeded = false
-                const maxMoveRetries = 3
+                const maxMoveRetries = 2 // Reduced retries since move often fails
                 
                 for (let attempt = 1; attempt <= maxMoveRetries; attempt++) {
                   try {
                     console.log(`[UPLOAD] Move attempt ${attempt}/${maxMoveRetries}`)
-                    console.log(`[UPLOAD] Move payload: from="${uploadedDocName}", to="${targetPath}"`)
                     const moveResp = await anythingllmRequest<{ success: boolean; message: string | null }>(
                       "/document/move-files",
                       "POST",
@@ -743,39 +760,26 @@ router.post("/:customerId", (req, res, next) => {
                     console.log(`[UPLOAD] Move response:`, JSON.stringify(moveResp, null, 2))
                     
                     if (moveResp?.success !== false) {
-                      console.log(`[UPLOAD] File moved successfully to customer folder on attempt ${attempt}`)
-                      console.log(`[UPLOAD] Document is now at: "${targetPath}"`)
+                      console.log(`[UPLOAD] ✓ Document successfully organized in customer folder: "${targetPath}"`)
                       moveSucceeded = true
                       break
                     } else {
-                      console.log(`[UPLOAD] Move returned success=false, message: ${moveResp?.message}`)
-                      if (attempt < maxMoveRetries) {
-                        console.log(`[UPLOAD] Retrying move in 2s...`)
-                        await new Promise(resolve => setTimeout(resolve, 2000))
-                      }
+                      console.log(`[UPLOAD] Move API returned failure: ${moveResp?.message}`)
+                      break // Don't retry on explicit API failure
                     }
                   } catch (moveErr) {
-                    console.error(`[UPLOAD] Move attempt ${attempt} failed:`, moveErr)
-                    console.error(`[UPLOAD] Move error details:`, {
-                      from: uploadedDocName,
-                      to: targetPath,
-                      error: moveErr instanceof Error ? moveErr.message : String(moveErr)
-                    })
-                    if (attempt < maxMoveRetries) {
-                      console.log(`[UPLOAD] Retrying move in 2s...`)
-                      await new Promise(resolve => setTimeout(resolve, 2000))
+                    console.error(`[UPLOAD] Move attempt ${attempt} failed:`, moveErr instanceof Error ? moveErr.message : String(moveErr))
+                    if (attempt >= maxMoveRetries) {
+                      console.log(`[UPLOAD] ⚠ File organization skipped - will proceed with original path`)
+                      console.log(`[UPLOAD] Document remains at: "${uploadedDocName}"`)
+                      console.log(`[UPLOAD] This is OK - metadata extraction will still work correctly!`)
                     }
                   }
                 }
-                
-                if (!moveSucceeded) {
-                  console.error(`[UPLOAD] Failed to move file after ${maxMoveRetries} attempts - document will remain in ${uploadedDocName}`)
-                  // Fall back to using the original uploaded path
-                }
 
-                // After moving, the document path is now targetPath (or original if move failed)
+                // Use moved path if successful, otherwise use original upload path
                 const docName = moveSucceeded ? targetPath : uploadedDocName
-                console.log(`[UPLOAD] Document final path: "${docName}"`)
+                console.log(`[UPLOAD] Final document path for embedding: "${docName}"`)
 
                 // Step 4: Verify document exists in AnythingLLM before embedding
                 console.log(`[UPLOAD] Verifying document exists in AnythingLLM...`)

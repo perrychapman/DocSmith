@@ -83,7 +83,8 @@
             "node_modules/bindings/**",
             "node_modules/file-uri-to-path/**",
             "electron/main.js",
-            "electron/preload.js"
+            "electron/preload.js",
+            "electron/package.json"
         ],
         "asarUnpack": [
             "backend/dist/**",

@@ -1,19 +1,16 @@
 import { Router } from "express"
 import fs from "fs"
 import path from "path"
+import child_process from "child_process"
 import { getDB } from "../services/storage"
-import { renderTemplate, loadTemplate } from "../services/templateEngine"
-import { mergeHtmlIntoDocxTemplate } from "../services/docxCompose"
-import { ensureDocumentsDir, resolveCustomerPaths } from "../services/customerLibrary"
+import { loadTemplate } from "../services/templateEngine"
+import { ensureDocumentsDir } from "../services/customerLibrary"
 import { libraryRoot, safeFileName, displayNameFromSlug } from "../services/fs"
 import { anythingllmRequest } from "../services/anythingllm"
-import { createJob, createJobWithId, appendLog as jobLog, markJobDone, markJobError, setJobMeta, listJobs, getJob, stepStart as jobStepStart, stepOk as jobStepOk, cancelJob, isCancelled, initJobs, deleteJob, clearJobs } from "../services/genJobs"
+import { createJob, createJobWithId, appendLog as jobLog, markJobDone, markJobError, listJobs, getJob, stepStart as jobStepStart, stepOk as jobStepOk, cancelJob, isCancelled, initJobs, deleteJob, clearJobs } from "../services/genJobs"
 import { analyzeDocumentIntelligently } from "../services/documentIntelligence"
 import { buildMetadataEnhancedContext } from "../services/metadataMatching"
 
-import child_process from 'child_process'
-// eslint-disable-next-line @typescript-eslint/no-var-requires
-const Handlebars = require('handlebars')
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const ts = require('typescript')
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -40,10 +37,10 @@ const router = Router()
 
 const TEMPLATES_ROOT = path.join(libraryRoot(), "templates")
 
- type Body = { customerId?: number; template?: string; filename?: string; data?: any; embed?: boolean; refresh?: boolean; jobId?: string; instructions?: string }
+type Body = { customerId?: number; template?: string; filename?: string; refresh?: boolean; jobId?: string; instructions?: string }
 
 router.post("/", async (req, res) => {
-  const { customerId, template: slug, filename, data, embed, refresh, jobId, instructions } = (req.body || {}) as Body
+  const { customerId, template: slug, filename, refresh, jobId, instructions } = (req.body || {}) as Body
   if (!customerId || !slug) return res.status(400).json({ error: "customerId and template are required" })
 
   const db = getDB()
@@ -58,23 +55,18 @@ router.post("/", async (req, res) => {
         const tpl = loadTemplate(String(slug), TEMPLATES_ROOT)
         if (!tpl) return res.status(404).json({ error: "Template not found" })
         const docsDir = ensureDocumentsDir(row.id, row.name, new Date(row.createdAt))
-
-        // Build initial context
-        const context: any = { customer: { id: row.id, name: row.name }, now: new Date().toISOString(), ...(data || {}) }
+        
+        const context: any = { customer: { id: row.id, name: row.name }, now: new Date().toISOString() }
         if (instructions && String(instructions).trim().length) {
           context.userInstructions = String(instructions)
         }
 
-        // Enforce single-path generation via generator.full.ts producing raw WML
         let usedWorkspace: string | undefined
         const logs: string[] = []
         try {
-          // Prefer customer's workspace; do not rely on template.json
           let wsSlug: string | undefined = row.workspaceSlug ? String(row.workspaceSlug) : undefined
           const fullGenPath = path.join(tpl.dir, 'generator.full.ts')
-          // Require full generator for all outputs
           if (fs.existsSync(fullGenPath)) {
-            // Declare these outside try block so they're accessible in catch for cleanup
             let wsForGen: string | undefined
 
             
@@ -84,26 +76,26 @@ router.post("/", async (req, res) => {
                 return res.status(400).json({ error: 'Customer workspace is required to generate. Please attach a workspace to this customer.' })
               }
               usedWorkspace = wsForGen
-              // Create a job record (allow client-provided id for immediate cancel capability)
+              
               const job = jobId && String(jobId).trim().length > 0
                 ? createJobWithId({ id: String(jobId), customerId: row.id, customerName: row.name, template: slug as string, filename, usedWorkspace: wsForGen })
                 : createJob({ customerId: row.id, customerName: row.name, template: slug as string, filename, usedWorkspace: wsForGen })
               const logAndPush = (m: string) => { try { jobLog(job.id, m) } catch {} }
               const stepStartRec = (n: string) => { try { jobStepStart(job.id, n) } catch {} }
               const stepOkRec = (n: string) => { try { jobStepOk(job.id, n) } catch {} }
+              
               let tsCode = fs.readFileSync(fullGenPath, 'utf-8')
               stepOkRec('readGenerator')
 
-              // Cache AI-modified generator per-template per-workspace to reduce latency
+              // Check for cached AI-enhanced generator (per-workspace, 15min TTL)
               const cacheDir = path.join((tpl as any).dir, '.cache')
               try { fs.mkdirSync(cacheDir, { recursive: true }) } catch {}
               const cacheFile = path.join(cacheDir, `generator.full.${wsForGen}.ts`)
               const genStat = (()=>{ try { return fs.statSync(fullGenPath) } catch { return null } })()
               const cacheStat = (()=>{ try { return fs.statSync(cacheFile) } catch { return null } })()
-              const CACHE_TTL_MS = 15 * 60 * 1000 // 15 minutes
+              const CACHE_TTL_MS = 15 * 60 * 1000
               const cacheFresh = !!(cacheStat && (Date.now() - cacheStat.mtimeMs) < CACHE_TTL_MS)
               const cacheUpToDate = !!(cacheStat && genStat && cacheStat.mtimeMs >= genStat.mtimeMs)
-              // Default behavior: refresh each run unless explicitly disabled
               const forceRefresh = refresh !== false
               if (!forceRefresh && cacheFresh && cacheUpToDate) {
                 try {
@@ -113,17 +105,14 @@ router.post("/", async (req, res) => {
                 } catch {}
               }
 
-              // Ask the AI (customer workspace) to update the generator code to use workspace data
+              // AI enhancement: modify generator to incorporate workspace-specific data
               try {
                 if (forceRefresh || !(logs.includes('ai-cache:hit'))) {
-                
-                // Use intelligent document analysis to understand template structure and workspace data
                 stepStartRec('analyzeTemplate')
                 logAndPush('Analyzing template structure and workspace data...')
                 let documentAnalysis = ''
                 let metadataContext = ''
                 try {
-                  // Build metadata-enhanced context
                   logAndPush('[METADATA] Analyzing template requirements and available documents')
                   const enhancedCtx = await buildMetadataEnhancedContext(
                     String(slug),
@@ -157,7 +146,6 @@ router.post("/", async (req, res) => {
                   logAndPush(`[METADATA] Context enhancement complete (${enhancedCtx.promptEnhancement.length + enhancedCtx.documentSummaries.length} chars)`)
                   metadataContext = enhancedCtx.promptEnhancement + enhancedCtx.documentSummaries
                   
-                  // Also do structural analysis if template file exists
                   if ((tpl as any).templatePath && fs.existsSync((tpl as any).templatePath)) {
                     documentAnalysis = await analyzeDocumentIntelligently(
                       (tpl as any).templatePath,
@@ -168,95 +156,19 @@ router.post("/", async (req, res) => {
                   }
                 } catch (analysisErr) {
                   logAndPush(`Analysis warning: ${(analysisErr as Error).message}`)
-                  // Continue without analysis if it fails
                 }
                 stepOkRec('analyzeTemplate')
                 
-                // NEW: Fetch actual data from workspace before AI enhancement
-                stepStartRec('fetchWorkspaceData')
-                logAndPush('[DATA-FETCH] Querying workspace for actual data...')
-                let workspaceData = ''
-                let dataRowCount = 0
-                try {
-                  // Query workspace for structured data based on template requirements
-                  const dataQuery = ((tpl as any).kind === 'excel')
-                    ? `Return a complete JSON array of ALL data rows from the documents in this workspace. Include every single row - do not limit or sample. For inventory/product data, include fields like: name, quantity, price, category, SKU, location, etc. For other data types, include all available columns. Return ONLY the JSON array, no explanations.`
-                    : `List ALL items/rows from the documents in this workspace as a complete JSON array. Include every entry - do not limit to samples. Return ONLY the JSON array, no explanations.`
-                  
-                  logAndPush(`[DATA-FETCH] Sending data query to workspace...`)
-                  const dataResponse = await anythingllmRequest<any>(
-                    `/workspace/${encodeURIComponent(wsForGen)}/chat`,
-                    'POST',
-                    { message: dataQuery, mode: 'query' }
-                  )
-                  
-                  const dataText = String(dataResponse?.textResponse || dataResponse?.message || '')
-                  logAndPush(`[DATA-FETCH] Response received (${dataText.length} chars)`)
-                  
-                  // Try to extract JSON from response
-                  let jsonData: any[] = []
-                  try {
-                    // Try direct parse first
-                    jsonData = JSON.parse(dataText)
-                  } catch {
-                    // Try to extract JSON from markdown code blocks
-                    const jsonMatch = dataText.match(/```(?:json)?\s*([\s\S]*?)```/)
-                    if (jsonMatch && jsonMatch[1]) {
-                      try {
-                        jsonData = JSON.parse(jsonMatch[1].trim())
-                      } catch {
-                        logAndPush('[DATA-FETCH] Could not parse JSON from code block')
-                      }
-                    }
-                  }
-                  
-                  if (Array.isArray(jsonData) && jsonData.length > 0) {
-                    dataRowCount = jsonData.length
-                    logAndPush(`[DATA-FETCH] Successfully extracted ${dataRowCount} data rows`)
-                    
-                    // Show sample of what we got
-                    const firstRow = jsonData[0]
-                    const fieldNames = Object.keys(firstRow)
-                    logAndPush(`[DATA-FETCH] Fields detected: ${fieldNames.join(', ')}`)
-                    
-                    // Format as structured data for AI
-                    workspaceData = `\n\n=== ACTUAL WORKSPACE DATA (${dataRowCount} rows) ===\n`
-                    workspaceData += `Fields: ${fieldNames.join(', ')}\n\n`
-                    workspaceData += `Complete dataset (hardcode ALL ${dataRowCount} rows in the generator):\n`
-                    workspaceData += JSON.stringify(jsonData, null, 2)
-                    workspaceData += `\n\nIMPORTANT: This is the COMPLETE dataset with all ${dataRowCount} rows. Encode ALL of them in the generator code, not just a sample.\n`
-                  } else {
-                    logAndPush('[DATA-FETCH] No structured data array found in response')
-                    logAndPush(`[DATA-FETCH] Raw response: ${dataText.substring(0, 500)}...`)
-                    workspaceData = `\n\n=== WORKSPACE RESPONSE ===\n${dataText}\n\nNote: Could not parse as structured data. Use this information to query workspace appropriately.\n`
-                  }
-                  
-                  stepOkRec('fetchWorkspaceData')
-                } catch (fetchErr: any) {
-                  logAndPush(`[DATA-FETCH] Error fetching workspace data: ${fetchErr.message}`)
-                  logAndPush('[DATA-FETCH] Will proceed with metadata-only enhancement')
-                  stepOkRec('fetchWorkspaceData')
-                }
-                
                 const userAddendum = instructions && String(instructions).trim().length
-                  ? `\n\nUSER ADDITIONAL INSTRUCTIONS (prioritize when choosing workspace data):\n${String(instructions).trim()}\n`
+                  ? `\n\nUSER ADDITIONAL INSTRUCTIONS (prioritize when writing queries):\n${String(instructions).trim()}\n`
                   : ''
                   
-                // Build enhanced prompt with actual workspace data
-                const dataGuidance = dataRowCount > 0
-                  ? `\n\nCRITICAL - YOU HAVE ${dataRowCount} ROWS OF ACTUAL DATA BELOW:\n- The complete dataset with ALL ${dataRowCount} rows is provided below in the ACTUAL WORKSPACE DATA section\n- You MUST hardcode ALL ${dataRowCount} rows into the generator code\n- DO NOT reduce to 3-5 samples - include the complete dataset\n- For ${dataRowCount}+ rows, use efficient data structures (ranges for Excel, loops for DOCX)\n`
-                  : `\n\nNOTE: No structured data was pre-fetched. The generator should use toolkit methods or return placeholder data.\n`
-                  
+                const modeGuidance = `\n\nHYBRID DYNAMIC MODE (ALWAYS ENABLED):\n- At runtime, toolkit.json/query/text ARE AVAILABLE for data fetching\n- PRESERVE the template's structure and formatting (static)\n- FETCH variable data dynamically using toolkit methods\n- Example: const data = await toolkit.json('Check workspace index, then return all inventory items with columns: name, quantity, price')\n- The generator will be called fresh for each document generation\n- Use the metadata context below to write intelligent queries that target specific documents\n- Reference pinned or high-relevance documents explicitly in queries\n- ALWAYS reference the workspace document index first to discover available files\n\nIMPORTANT SEPARATION:\n1. STATIC PART (from template): Headers, titles, formatting, styles, table structure, fonts, colors\n2. DYNAMIC PART (from workspace): Actual data values, list items, table rows, variable content\n`
+                
                 const aiPrompt = ((tpl as any).kind === 'excel')
-                  ? `You are a senior TypeScript engineer and spreadsheet specialist. Update the following DocSmith Excel generator function to incorporate the ACTUAL WORKSPACE DATA provided below. Keep the EXACT export signature. Compose the final output by returning { sheets } (sheet ops). Do not import external modules or do file I/O.${dataGuidance}\nSTRICT CONSTRAINTS:
+                  ? `You are a senior TypeScript engineer and spreadsheet specialist. Update the following DocSmith Excel generator function to use a HYBRID approach: preserve the template's structure/formatting (static) but fetch variable data dynamically. Keep the EXACT export signature. Compose the final output by returning { sheets } (sheet ops). Do not import external modules or do file I/O.${modeGuidance}\nSTRICT CONSTRAINTS:
 - PRESERVE EXISTING SHEET STRUCTURE AND FORMATTING from the CURRENT GENERATOR CODE: do not alter existing fonts, colors, fills, borders, number formats, alignment, merged ranges, column widths, or sheet order unless absolutely necessary.
-- DYNAMIC EXPANSION REQUIRED: You MUST expand tables/rows to include ALL available data from the pinned documents. If the template shows 3 sample rows but workspace has 50 items, generate ALL 50 rows. Do not limit to template sample size.
-- You MAY append or insert new rows to accommodate variable-length data. Use insertRows with copyStyleFromRow when appropriate to preserve formatting. You MAY add new sheets when clearly necessary, but do not remove or reorder existing sheets.
-- Prefer preserving existing row/column styles; only specify formatting (numFmt, bold/italic/underline/strike, font color via hex, background fill, horizontal alignment, wrap) for new or dynamically added content.
-- If the template has a merged and centered header row, do not break its merge; write data starting below it unless the header text itself must be updated.
-- At runtime, toolkit.json/query/text are DISABLED. Encode all workspace data directly into the returned { sheets }.
-- For ${dataRowCount} rows, use the 'ranges' array for efficiency instead of individual cells.
-- EXPAND LISTS AND SECTIONS: If workspace data contains more items than the template shows, expand the output to include everything. The template is a STARTING POINT, not a limit.${documentAnalysis}${metadataContext}${workspaceData}${userAddendum}
+- SEPARATE CONCERNS:\n  * STATIC: Sheet names, header rows, column headers, formatting rules, merged cells, widths\n  * DYNAMIC: Data rows fetched via toolkit.json() - query workspace for actual values\n- DYNAMIC EXPANSION: Use toolkit.json() to fetch ALL data rows at runtime. If workspace has 500 items, fetch all 500.\n  Example: const data = await toolkit.json('From inventory.xlsx, return all rows as JSON array with columns: Item, Quantity, Price')\n- You MAY append or insert new rows to accommodate variable-length data. Use insertRows with copyStyleFromRow when appropriate to preserve formatting.\n- If the template has a merged and centered header row, preserve it exactly - write data below it.\n- For variable data rows, use 'ranges' array for efficiency instead of individual cells.\n- EXPAND DYNAMICALLY: The template structure is preserved, but data is fetched fresh each generation.${documentAnalysis}${metadataContext}${userAddendum}
 
 Return type reminder:
 Promise<{ sheets: Array<{ name: string; insertRows?: Array<{ at: number; count: number; copyStyleFromRow?: number }>; cells?: Array<{ ref: string; v: string|number|boolean; numFmt?: string; bold?: boolean; italic?: boolean; underline?: boolean; strike?: boolean; color?: string; bg?: string; align?: 'left'|'center'|'right'; wrap?: boolean }>; ranges?: Array<{ start: string; values: any[][]; numFmt?: string }> }> }>;
@@ -268,19 +180,10 @@ CURRENT GENERATOR CODE:
 \`\`\`ts
 ${tsCode}
 \`\`\``
-                  : `You are a senior TypeScript engineer. Update the following DocSmith generator function to incorporate the ACTUAL WORKSPACE DATA provided below. Keep the EXACT export signature. Compose the final output as raw WordprocessingML (WML) via return { wml }. Do not import external modules or do file I/O. Maintain formatting with runs (color/size/bold/italic/underline/strike/font) and paragraph props (align/spacing/indents).${dataGuidance}
+                  : `You are a senior TypeScript engineer. Update the following DocSmith generator function to use a HYBRID approach: preserve the template's WML structure/styling (static) but fetch variable data dynamically. Keep the EXACT export signature. Compose the final output as raw WordprocessingML (WML) via return { wml }. Do not import external modules or do file I/O. Maintain formatting with runs (color/size/bold/italic/underline/strike/font) and paragraph props (align/spacing/indents).${modeGuidance}
 STRICT CONSTRAINTS:
 - PRESERVE ALL EXISTING WML STRUCTURE AND STYLING from the CURRENT GENERATOR CODE: do not alter fonts, colors, sizes, spacing, numbering, table properties, headers/footers, or section settings.
-- DYNAMIC EXPANSION REQUIRED: You MUST expand tables, lists, and sections to include ALL available data from the pinned documents. If the template shows 3 sample items but workspace has 50 items, generate ALL 50 items. Do not limit to template sample size.
-- For TABLES: Add as many <w:tr> (table rows) as needed to include all data. Preserve row formatting from template.
-- For LISTS: Add as many <w:p> (paragraphs) with list numbering as needed. Preserve list styling from template.
-- For SECTIONS: Replicate section structure for each item if data is grouped/categorized.
-- ONLY substitute text content (and list/table cell values) with workspace-derived strings.
-- DO NOT add, remove, or reorder sections/paragraphs/tables/runs unless necessary for data expansion. If no data is found, keep the section and leave values empty rather than inventing content.
-- No boilerplate or extra headings; do not add content beyond what the template structure implies and data expansion requires.
-- IMPORTANT: At runtime, toolkit.json/query/text are DISABLED. Encode all workspace data directly in the returned WML.
-- For ${dataRowCount} table rows, build them all with proper WML structure.
-- EXPAND DYNAMICALLY: The template is a STARTING POINT and STYLE GUIDE, not a limit on output size. Include all relevant data from pinned documents.${documentAnalysis}${metadataContext}${workspaceData}${userAddendum}
+- SEPARATE CONCERNS:\n  * STATIC: Document structure, headers, titles, formatting tags, paragraph props, table structure, styles\n  * DYNAMIC: Text content values fetched via toolkit.json() - query workspace for actual data\n- DYNAMIC EXPANSION: Use toolkit.json() to fetch ALL data at runtime.\n  Example: const items = await toolkit.json('From inventory.xlsx, return all items with columns: name, quantity, price')\n- For TABLES: Preserve WML table structure (<w:tbl>), replicate <w:tr> for each data row\n- For LISTS: Preserve numbering format, replicate <w:p> with list props for each item\n- For SECTIONS: Keep section structure from template, populate with workspace data\n- ONLY substitute <w:t> text content with workspace-derived values\n- DO NOT alter WML formatting tags unless expanding data requires it\n- EXPAND DYNAMICALLY: The template WML is the STRUCTURE, workspace data fills the VALUES.${documentAnalysis}${metadataContext}${userAddendum}
 
 Only output TypeScript code with the updated generate implementation.
 
@@ -320,7 +223,6 @@ ${tsCode}
               if (isCancelled(job.id)) { logAndPush('cancelled'); return res.status(499).json({ error: 'cancelled', jobId: job.id }) }
               const jsOut = ts.transpileModule(tsCode, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2019 } })
               const sandbox: any = { module: { exports: {} }, console }
-              // Ensure `exports` references `module.exports` like Node's wrapper
               ;(sandbox as any).exports = (sandbox as any).module.exports
               vm.createContext(sandbox)
               const wrapped = `(function (module, exports) { ${jsOut.outputText}\n;return module.exports; })`
@@ -344,7 +246,7 @@ ${tsCode}
               }
               if (typeof generateFull === 'function') {
                 if (isCancelled(job.id)) { logAndPush('cancelled'); return res.status(499).json({ error: 'cancelled', jobId: job.id }) }
-                // Minimal DOCX builder API (available but not used as an output path)
+                
                 const docxLib = require('docx')
                 const {
                   Document,
@@ -473,7 +375,6 @@ ${tsCode}
                   },
                   addNumberedList: (items: string[], opts?: any) => {
                     builderUsed.used = true
-                    // Note: Using basic numbering; underlying template merge preserves numbering styles if present
                     for (const it of (items||[])) {
                       const p = new Paragraph({
                         alignment: toAlignment(opts?.align),
@@ -512,9 +413,47 @@ ${tsCode}
                   }
                 }
                 const toolkit = {
-                  json: async (_prompt: string) => { throw new Error('Runtime AI disabled: toolkit.json unavailable') },
-                  query: async (_prompt: string) => { throw new Error('Runtime AI disabled: toolkit.query unavailable') },
-                  text: async (_prompt: string) => { throw new Error('Runtime AI disabled: toolkit.text unavailable') },
+                  json: async (prompt: string) => {
+                    logAndPush(`[RUNTIME-QUERY] Executing toolkit.json query...`)
+                    const response = await anythingllmRequest<any>(
+                      `/workspace/${encodeURIComponent(wsForGen!)}/chat`,
+                      'POST',
+                      { message: String(prompt), mode: 'query' }
+                    )
+                    const text = String(response?.textResponse || response?.message || '')
+                    try {
+                      const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/)
+                      const jsonText = jsonMatch ? jsonMatch[1] : text
+                      const parsed = JSON.parse(jsonText)
+                      logAndPush(`[RUNTIME-QUERY] Successfully parsed JSON response`)
+                      return parsed
+                    } catch {
+                      logAndPush('[RUNTIME-QUERY] Could not parse JSON, returning raw text')
+                      return text
+                    }
+                  },
+                  query: async (prompt: string) => {
+                    logAndPush(`[RUNTIME-QUERY] Executing toolkit.query...`)
+                    const response = await anythingllmRequest<any>(
+                      `/workspace/${encodeURIComponent(wsForGen!)}/chat`,
+                      'POST',
+                      { message: String(prompt), mode: 'query' }
+                    )
+                    const result = response?.textResponse || response?.message || ''
+                    logAndPush(`[RUNTIME-QUERY] Response received (${String(result).length} chars)`)
+                    return result
+                  },
+                  text: async (prompt: string) => {
+                    logAndPush(`[RUNTIME-QUERY] Executing toolkit.text query...`)
+                    const response = await anythingllmRequest<any>(
+                      `/workspace/${encodeURIComponent(wsForGen!)}/chat`,
+                      'POST',
+                      { message: String(prompt), mode: 'query' }
+                    )
+                    const result = String(response?.textResponse || response?.message || '')
+                    logAndPush(`[RUNTIME-QUERY] Response received (${result.length} chars)`)
+                    return result
+                  },
                   getSkeleton: async (kind?: 'html'|'text') => {
                     try {
                       const buffer = fs.readFileSync((tpl as any).templatePath)
@@ -547,7 +486,7 @@ ${tsCode}
                   const inner = String((result as any).wml || (result as any).bodyXml || '')
                   if (isCancelled(job.id)) { logAndPush('cancelled'); return res.status(499).json({ error: 'cancelled', jobId: job.id }) }
                   const merged = (await import('../services/docxCompose')).mergeWmlIntoDocxTemplate(fs.readFileSync((tpl as any).templatePath), inner)
-                  // Default filename: {Customer}_{TemplateName}_{YYYYMMDD_HHmmss}
+                  
                   const dt = new Date()
                   const dtStr = `${dt.getFullYear()}${String(dt.getMonth()+1).padStart(2,'0')}${String(dt.getDate()).padStart(2,'0')}_${String(dt.getHours()).padStart(2,'0')}${String(dt.getMinutes()).padStart(2,'0')}${String(dt.getSeconds()).padStart(2,'0')}`
                   const templateName = safeFileName(getTemplateDisplayName((tpl as any).dir, String(slug)))
@@ -598,8 +537,6 @@ ${tsCode}
             return res.status(400).json({ error: 'Template not compiled: generator.full.ts missing' })
           }
         } catch {}
-
-        // No alternate paths; single-method WML merge enforced
         return
       } catch (e) {
         return res.status(500).json({ error: (e as Error).message })
@@ -610,19 +547,17 @@ ${tsCode}
 
 export default router
 
-// Lightweight health + signature endpoint for troubleshooting runtime version
 router.get("/health", (_req, res) => {
   try { return res.json({ ok: true, signature: 'naming-v2' }) } catch (e:any) { return res.status(500).json({ ok: false, error: String(e?.message || e) }) }
 })
 
-// Live log streaming via Server-Sent Events (SSE)
+// Server-Sent Events (SSE) endpoint for live generation progress
 router.get("/stream", async (req, res) => {
   try {
     const customerId = Number(req.query.customerId)
     const slug = String(req.query.template || '')
     const filename = req.query.filename ? String(req.query.filename) : undefined
     const instructions = req.query.instructions ? String(req.query.instructions) : undefined
-    // Default to refresh=true so the AI-updated generator is rebuilt each run unless explicitly disabled
     const refresh = String((req.query.refresh ?? 'true')).toLowerCase() === 'true'
     if (!customerId || !slug) {
       res.writeHead(400, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive' })
@@ -631,10 +566,9 @@ router.get("/stream", async (req, res) => {
     }
     res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache', Connection: 'keep-alive', 'X-DocSmith-Signature': 'naming-v2' })
     const send = (obj: any) => { try { res.write(`data: ${JSON.stringify(obj)}\n\n`) } catch {} }
-    // Identify server build for troubleshooting
     try { send({ type: 'info', signature: 'naming-v2' }) } catch {}
     const log = (message: string) => send({ type: 'log', message })
-    // Structured step reporting
+    
     const totalSteps = 8
     let completed = 0
     const stepStart = (name: string) => send({ type: 'step', name, status: 'start', progress: Math.round((completed/totalSteps)*100) })
@@ -655,7 +589,6 @@ router.get("/stream", async (req, res) => {
     if (!tpl) { send({ type: 'error', error: 'Template not found' }); return res.end() }
     stepOk('loadTemplate')
     const docsDir = ensureDocumentsDir(row.id, row.name, new Date(row.createdAt))
-    // Inform client where the document will be stored (dir only)
     try { send({ type: 'info', documentsDir: docsDir }) } catch {}
 
     try {
@@ -680,7 +613,7 @@ router.get("/stream", async (req, res) => {
 
       let tsCode = fs.readFileSync(fullGenPath, 'utf-8')
       stepOkRec('readGenerator')
-      // Cache AI-modified generator per template/workspace
+      
       const cacheDir = path.join((tpl as any).dir, '.cache')
       try { fs.mkdirSync(cacheDir, { recursive: true }) } catch {}
       const cacheFile = path.join(cacheDir, `generator.full.${wsForGen}.ts`)
@@ -697,7 +630,6 @@ router.get("/stream", async (req, res) => {
         logAndPush('ai-modified:start')
         stepStartRec('aiUpdate')
         try {
-          // Use intelligent document analysis to understand template structure and workspace data
           logAndPush('Analyzing template structure and workspace data...')
           let documentAnalysis = ''
           try {
@@ -717,9 +649,10 @@ router.get("/stream", async (req, res) => {
           const userAddendum = instructions && String(instructions).trim().length
             ? `\n\nUSER ADDITIONAL INSTRUCTIONS (prioritize when choosing workspace data):\n${String(instructions).trim()}\n`
             : ''
+          const modeGuidance = `\n\nHYBRID DYNAMIC MODE (ALWAYS ENABLED):\n- At runtime, toolkit.json/query/text ARE AVAILABLE for data fetching\n- PRESERVE the template's structure and formatting (static)\n- FETCH variable data dynamically using toolkit methods\n- Example: const data = await toolkit.json('Check workspace document index first. Then return all inventory items with columns: name, quantity, price')\n- The generator will be called fresh for each document generation\n- Use the metadata context below to write intelligent queries that target specific documents\n- ALWAYS reference the workspace document index first to discover available files\n\nIMPORTANT SEPARATION:\n1. STATIC PART (from template): Headers, titles, formatting, styles, table structure, fonts, colors\n2. DYNAMIC PART (from workspace): Actual data values, list items, table rows, variable content\n`
           const aiPrompt = ((tpl as any).kind === 'excel')
-            ? `You are a senior TypeScript engineer and spreadsheet specialist. Update the following DocSmith Excel generator function to incorporate customer-specific data inferred from THIS WORKSPACE and the provided user instructions. Keep the EXACT export signature. Compose the final output by returning { sheets } (sheet ops). Do not import external modules or do file I/O.\n\nSTRICT CONSTRAINTS:\n- PRESERVE EXISTING SHEET STRUCTURE AND FORMATTING from the CURRENT GENERATOR CODE: do not alter existing fonts, colors, fills, borders, number formats, alignment, merged ranges, column widths, or sheet order unless absolutely necessary.\n- You MAY append or insert new rows to accommodate variable-length data. Use insertRows with copyStyleFromRow when appropriate to preserve formatting. You MAY add new sheets when clearly necessary, but do not remove or reorder existing sheets.\n- Prefer preserving existing row/column styles; only specify formatting (numFmt, bold/italic/underline/strike, font color via hex, background fill, horizontal alignment, wrap) for new or dynamically added content.\n- If the template has a merged and centered header row, do not break its merge; write data starting below it unless the header text itself must be updated.\n- At runtime, toolkit.json/query/text are DISABLED. Encode workspace-informed content directly into the returned { sheets } or via the provided context parameter.\n- Use minimal LLM calls (within this single update).${documentAnalysis}${userAddendum}\n\nReturn type reminder:\nPromise<{ sheets: Array<{ name: string; insertRows?: Array<{ at: number; count: number; copyStyleFromRow?: number }>; cells?: Array<{ ref: string; v: string|number|boolean; numFmt?: string; bold?: boolean; italic?: boolean; underline?: boolean; strike?: boolean; color?: string; bg?: string; align?: 'left'|'center'|'right'; wrap?: boolean }>; ranges?: Array<{ start: string; values: any[][]; numFmt?: string }> }> }>;\n\nOnly output TypeScript code with the updated generate implementation.\n\nCURRENT GENERATOR CODE:\n\n\`\`\`ts\n${tsCode}\n\`\`\``
-            : `You are a senior TypeScript engineer. Update the following document generator function to incorporate customer-specific data from THIS WORKSPACE. Keep the EXACT export signature. Compose the final output as raw WordprocessingML (WML) via return { wml }. Do not import external modules or do file I/O. Maintain formatting with runs (color/size/bold/italic/underline/strike/font) and paragraph props (align/spacing/indents).\n\nSTRICT CONSTRAINTS:\n- PRESERVE ALL EXISTING WML STRUCTURE AND STYLING from the CURRENT GENERATOR CODE: do not alter fonts, colors, sizes, spacing, numbering, table properties, headers/footers, or section settings.\n- ONLY substitute text content (and list/table cell values) with workspace-derived strings.\n- DO NOT add, remove, or reorder sections/paragraphs/tables/runs unless absolutely necessary. If no data is found, keep the section and leave values empty rather than inventing content.\n- No boilerplate or extra headings; do not add content beyond what the template structure implies.\n- IMPORTANT: At runtime, toolkit.json/query/text are DISABLED. Do not rely on them. Encode all workspace-informed content directly in the returned WML or via the provided context parameter.\n- Use minimal LLM calls (within this single update).${documentAnalysis}${userAddendum}\n\nOnly output TypeScript code with the updated generate implementation.\n\nCURRENT GENERATOR CODE:\n\n\`\`\`ts\n${tsCode}\n\`\`\``
+            ? `You are a senior TypeScript engineer and spreadsheet specialist. Update the following DocSmith Excel generator function to use a HYBRID approach: preserve the template's structure/formatting (static) but fetch variable data dynamically. Keep the EXACT export signature. Compose the final output by returning { sheets } (sheet ops). Do not import external modules or do file I/O.${modeGuidance}\n\nSTRICT CONSTRAINTS:\n- PRESERVE EXISTING SHEET STRUCTURE AND FORMATTING from the CURRENT GENERATOR CODE: do not alter existing fonts, colors, fills, borders, number formats, alignment, merged ranges, column widths, or sheet order unless absolutely necessary.\n- SEPARATE CONCERNS:\n  * STATIC: Sheet names, header rows, column headers, formatting rules, merged cells, widths\n  * DYNAMIC: Data rows fetched via toolkit.json() - query workspace for actual values\n- DYNAMIC EXPANSION: Use toolkit.json() to fetch ALL data rows at runtime. If workspace has 500 items, fetch all 500.\n- You MAY append or insert new rows to accommodate variable-length data. Use insertRows with copyStyleFromRow when appropriate to preserve formatting.\n- If the template has a merged and centered header row, preserve it exactly - write data below it.\n- For variable data rows, use 'ranges' array for efficiency instead of individual cells.\n- EXPAND DYNAMICALLY: The template structure is preserved, but data is fetched fresh each generation.${documentAnalysis}${userAddendum}\n\nReturn type reminder:\nPromise<{ sheets: Array<{ name: string; insertRows?: Array<{ at: number; count: number; copyStyleFromRow?: number }>; cells?: Array<{ ref: string; v: string|number|boolean; numFmt?: string; bold?: boolean; italic?: boolean; underline?: boolean; strike?: boolean; color?: string; bg?: string; align?: 'left'|'center'|'right'; wrap?: boolean }>; ranges?: Array<{ start: string; values: any[][]; numFmt?: string }> }> }>;\n\nOnly output TypeScript code with the updated generate implementation.\n\nCURRENT GENERATOR CODE:\n\n\`\`\`ts\n${tsCode}\n\`\`\``
+            : `You are a senior TypeScript engineer. Update the following DocSmith generator function to use a HYBRID approach: preserve the template's WML structure/styling (static) but fetch variable data dynamically. Keep the EXACT export signature. Compose the final output as raw WordprocessingML (WML) via return { wml }. Do not import external modules or do file I/O. Maintain formatting with runs (color/size/bold/italic/underline/strike/font) and paragraph props (align/spacing/indents).${modeGuidance}\n\nSTRICT CONSTRAINTS:\n- PRESERVE ALL EXISTING WML STRUCTURE AND STYLING from the CURRENT GENERATOR CODE: do not alter fonts, colors, sizes, spacing, numbering, table properties, headers/footers, or section settings.\n- SEPARATE CONCERNS:\n  * STATIC: Document structure, headers, titles, formatting tags, paragraph props, table structure, styles\n  * DYNAMIC: Text content values fetched via toolkit.json() - query workspace for actual data\n- DYNAMIC EXPANSION: Use toolkit.json() to fetch ALL data at runtime.\n  Example: const items = await toolkit.json('Check workspace document index first. Then from inventory.xlsx, return all items with columns: name, quantity, price')\n- For TABLES: Preserve WML table structure (<w:tbl>), replicate <w:tr> for each data row\n- For LISTS: Preserve numbering format, replicate <w:p> with list props for each item\n- For SECTIONS: Keep section structure from template, populate with workspace data\n- ONLY substitute <w:t> text content with workspace-derived values\n- DO NOT alter WML formatting tags unless expanding data requires it\n- EXPAND DYNAMICALLY: The template WML is the STRUCTURE, workspace data fills the VALUES.${documentAnalysis}${userAddendum}\n\nOnly output TypeScript code with the updated generate implementation.\n\nCURRENT GENERATOR CODE:\n\n\`\`\`ts\n${tsCode}\n\`\`\``
           const r = await anythingllmRequest<any>(`/workspace/${encodeURIComponent(wsForGen)}/chat`, 'POST', { message: aiPrompt, mode: 'query' })
           const t = String(r?.textResponse || r?.message || r || '')
           const m = t.match(/```[a-z]*\s*([\s\S]*?)```/i)
@@ -768,7 +701,6 @@ router.get("/stream", async (req, res) => {
         jobLog(job.id, 'error:generate-missing'); markJobError(job.id, 'generate function missing'); send({ type: 'error', error: 'generate function missing' }); return res.end()
       }
 
-      // Minimal builder + toolkit
       const docxLib = require('docx')
       const { Document, Packer, Paragraph, HeadingLevel, TextRun, Table, TableRow, TableCell, WidthType, AlignmentType, UnderlineType } = docxLib
       const doc = new Document({ sections: [{ properties: {}, children: [] }] })
@@ -784,9 +716,47 @@ router.get("/stream", async (req, res) => {
         save: async (): Promise<Uint8Array> => { return await Packer.toUint8Array(new Document({ sections: [{ properties: {}, children }] })) }
       }
       const toolkit = {
-        json: async (_prompt: string) => { throw new Error('Runtime AI disabled: toolkit.json unavailable') },
-        query: async (_prompt: string) => { throw new Error('Runtime AI disabled: toolkit.query unavailable') },
-        text: async (_prompt: string) => { throw new Error('Runtime AI disabled: toolkit.text unavailable') },
+        json: async (prompt: string) => {
+          log('[RUNTIME-QUERY] Executing toolkit.json query...')
+          const response = await anythingllmRequest<any>(
+            `/workspace/${encodeURIComponent(wsForGen)}/chat`,
+            'POST',
+            { message: String(prompt), mode: 'query' }
+          )
+          const text = String(response?.textResponse || response?.message || '')
+          try {
+            const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/)
+            const jsonText = jsonMatch ? jsonMatch[1] : text
+            const parsed = JSON.parse(jsonText)
+            log('[RUNTIME-QUERY] Successfully parsed JSON response')
+            return parsed
+          } catch {
+            log('[RUNTIME-QUERY] Could not parse JSON, returning raw text')
+            return text
+          }
+        },
+        query: async (prompt: string) => {
+          log('[RUNTIME-QUERY] Executing toolkit.query...')
+          const response = await anythingllmRequest<any>(
+            `/workspace/${encodeURIComponent(wsForGen)}/chat`,
+            'POST',
+            { message: String(prompt), mode: 'query' }
+          )
+          const result = response?.textResponse || response?.message || ''
+          log(`[RUNTIME-QUERY] Response received (${String(result).length} chars)`)
+          return result
+        },
+        text: async (prompt: string) => {
+          log('[RUNTIME-QUERY] Executing toolkit.text query...')
+          const response = await anythingllmRequest<any>(
+            `/workspace/${encodeURIComponent(wsForGen)}/chat`,
+            'POST',
+            { message: String(prompt), mode: 'query' }
+          )
+          const result = String(response?.textResponse || response?.message || '')
+          log(`[RUNTIME-QUERY] Response received (${result.length} chars)`)
+          return result
+        },
         getSkeleton: async (kind?: 'html'|'text') => { try { const buffer = fs.readFileSync((tpl as any).templatePath); if (kind === 'html' || !kind) { const result = await (mammoth as any).convertToHtml({ buffer }, { styleMap: ["p[style-name='Title'] => h1:fresh","p[style-name='Subtitle'] => h2:fresh","p[style-name='Heading 1'] => h1:fresh","p[style-name='Heading 2'] => h2:fresh","p[style-name='Heading 3'] => h3:fresh"] }); return String(result?.value || '') } else { const result = await (mammoth as any).extractRawText({ buffer }); return String(result?.value || '') } } catch { return '' } },
         markdownToHtml: (md: string) => (marked as any).parse(String(md || '')) as string,
         htmlToDocx: async (html: string) => { return await (htmlToDocx as any)(String(html || '')) }
@@ -882,7 +852,6 @@ router.get("/jobs/:id/file", (req, res) => {
     if (!j || !j.file?.path) return res.status(404).json({ error: 'Not found' })
     const root = libraryRoot()
     const resolved = path.resolve(String(j.file.path))
-    // Ensure the file is under the library root for safety
     if (!resolved.startsWith(path.resolve(root))) {
       return res.status(403).json({ error: 'Forbidden' })
     }
@@ -912,12 +881,11 @@ router.post("/jobs/:id/open-file", (req, res) => {
     return res.status(500).json({ error: String(e?.message || e) })
   }
 })
-// Delete one job record (does not delete any files)
+
 router.delete("/jobs/:id", (req, res) => {
   try { deleteJob(String(req.params.id)); return res.json({ ok: true }) } catch (e:any) { return res.status(500).json({ error: String(e?.message || e) }) }
 })
 
-// Clear all job records (does not delete files)
 router.delete("/jobs", (_req, res) => {
   try { clearJobs(); return res.json({ ok: true }) } catch (e:any) { return res.status(500).json({ error: String(e?.message || e) }) }
 })
@@ -945,8 +913,6 @@ router.get("/jobs/:id/reveal", (req, res) => {
   }
 })
 
-// --- Persisted generation chat cards ---------------------------------------------------------
-// Upsert a card by `cardId`
 router.post("/cards", (req, res) => {
   const db = getDB()
   const body = req.body || {}

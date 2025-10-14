@@ -611,18 +611,70 @@ router.post("/:slug/compile", async (req, res) => {
       }
     } catch {}
 
-    // Build metadata-enhanced context
-    let metadataContext = ''
-    try {
-      // Pass 0 as customerId to signal workspace-only mode
-      const enhancedCtx = await buildMetadataEnhancedContext(slug, 0, wsSlug)
-      metadataContext = enhancedCtx.promptEnhancement + enhancedCtx.documentSummaries
-    } catch (err: any) {
-      // Metadata context is optional, don't fail compilation if unavailable
-      console.log(`[TEMPLATE-COMPILE] Metadata context unavailable: ${err.message}`)
-    }
+    // Template compilation is agnostic - no customer data needed
+    // The generator code will query customer workspaces at generation time
 
-    const prompt = `You are a senior TypeScript engineer and document automation specialist. Recreate this template faithfully while preserving layout, headers/footers, spacing, lists, tables, images, hyperlinks, and emphasis.\n\nOutput: ONLY TypeScript code that returns raw WordprocessingML (WML).\n\nExport exactly:\nexport async function generate(\n  toolkit: { json: (prompt: string) => Promise<any>; text: (prompt: string) => Promise<string>; query?: (prompt: string) => Promise<any>; getSkeleton?: (kind?: 'html'|'text') => Promise<string> },\n  builder: any,\n  context?: Record<string, any>\n): Promise<{ wml: string }>;\n\nHard requirements:\n- Return ONLY { wml } containing the inner <w:body> children (<w:p>, <w:tbl>, ...). Do NOT include <w:sectPr> or any package-level parts.\n- Mirror the TEMPLATE SKELETON (prefer HTML skeleton) for headings/order/grouping.\n- Apply formatting in WML: run properties (color, size, bold/italic/underline/strike, font) and paragraph properties (alignment, spacing, indents), table widths/styles, list/numbering with <w:numPr> matching template numbering.\n- Use STYLES, THEME, and NUMBERING XML excerpts to choose brand colors, fonts, and list styles. Convert theme colors to hex where needed.\n- Do NOT output HTML, Markdown, or a DOCX buffer. No external imports or file I/O.\n- Do NOT add any sections, paragraphs, tables, or content that are not present in the provided skeleton; if unsure, omit rather than invent.\n- Preserve styling exactly; do not change fonts, colors, sizes, spacing, numbering, or table properties beyond what the skeleton and excerpts imply.${documentAnalysis}\n\n${metadataContext}\n\nTEMPLATE ARTIFACTS (HTML skeleton + XML excerpts):\n${skeleton}`
+    const prompt = `You are a senior TypeScript engineer. Analyze this TEMPLATE and generate generator code that preserves ALL formatting/structure while enabling dynamic data replacement.
+
+**CRITICAL: You are analyzing a TEMPLATE only. Do NOT assume what data will be available. Write GENERIC code that can query ANY customer workspace.**
+
+OUTPUT: ONLY TypeScript code that returns raw WordprocessingML (WML).
+
+EXPORT SIGNATURE (exact):
+export async function generate(
+  toolkit: { 
+    json: (prompt: string) => Promise<any>; 
+    text: (prompt: string) => Promise<string>; 
+    query?: (prompt: string) => Promise<any>; 
+    getSkeleton?: (kind?: 'html'|'text') => Promise<string> 
+  },
+  builder: any,
+  context?: Record<string, any>
+): Promise<{ wml: string }>;
+
+YOUR JOB: Separate TEMPLATE STRUCTURE from PLACEHOLDER DATA
+
+1. PRESERVE EXACTLY (from template):
+   - ALL formatting: fonts, colors, sizes, spacing, alignment, borders
+   - Document structure: headers, footers, sections, page layout
+   - Styles: numbering patterns, list styles, table formatting
+   - Theme colors, paragraph properties, run properties
+
+2. IDENTIFY PLACEHOLDERS (replace with toolkit queries):
+   - Sample data values: "Widget A", "100", "$50.00", "John Doe", "2024-01-01"
+   - Repeated sample rows in tables (Product 1, Product 2, Product 3)
+   - List items that look like examples
+   - Any text enclosed in brackets: [Name], {Date}, {{Variable}}
+   - Generic text: "Sample Item", "Example", "TBD", "Lorem ipsum"
+
+3. WRITE SMART QUERIES:
+   For tables with sample data, use toolkit.json() to fetch array of objects.
+   For single values, use toolkit.text() to get specific values.
+   Always start with "Check workspace document index first, then..."
+
+4. BUILD WML DYNAMICALLY:
+   - Preserve template WML structure for headers/formatting
+   - Loop through fetched data to generate content rows/paragraphs
+   - Apply template formatting to generated content
+   - Use <w:rPr> for text formatting, <w:pPr> for paragraph props
+
+WML REQUIREMENTS:
+- Return { wml: string } with <w:body> children only
+- No <w:sectPr> or package-level parts
+- Preserve ALL XML formatting from template
+- Use STYLES, THEME, NUMBERING XML for accurate styling
+
+STRICT RULES:
+- NO external imports or file I/O
+- Do NOT assume specific data exists
+- Do NOT hardcode data values
+- Do NOT invent content not in template
+- If something could be data OR structure, keep as structure
+
+${documentAnalysis}
+
+TEMPLATE ARTIFACTS (HTML skeleton + XML excerpts):
+${skeleton}`
 
     const chat = await anythingllmRequest<any>(`/workspace/${encodeURIComponent(String(wsSlug))}/chat`, 'POST', { message: prompt, mode: 'query' })
     const text = String(chat?.textResponse || chat?.message || chat || '')
@@ -919,8 +971,131 @@ router.get("/:slug/compile/stream", async (req, res) => {
     stepStart('buildPrompt')
     logPush(`Building ${isExcel ? 'Excel' : 'DOCX'} compilation prompt...`)
     const prompt = isExcel
-        ? `You are a senior TypeScript engineer and spreadsheet automation specialist. Recreate this Excel template faithfully while preserving existing colors and formatting (fonts, fills, borders, number formats, alignment), sheet order, headers, merged ranges, column widths, and general layout.\n\nOutput: ONLY TypeScript code.\n\nExport exactly:\nexport async function generate(\n  toolkit: { json: (prompt: string) => Promise<any>; text: (prompt: string) => Promise<string>; query?: (prompt: string) => Promise<any>; getSkeleton?: (kind?: 'text') => Promise<string> },\n  builder: any,\n  context?: Record<string, any>\n): Promise<{ sheets: Array<{ name: string; insertRows?: Array<{ at: number; count: number; copyStyleFromRow?: number }>; cells?: Array<{ ref: string; v: string|number|boolean; numFmt?: string; bold?: boolean; italic?: boolean; underline?: boolean; strike?: boolean; color?: string; bg?: string; align?: 'left'|'center'|'right'; wrap?: boolean }>; ranges?: Array<{ start: string; values: any[][]; numFmt?: string }> }> }>;\n\nHard requirements:\n- Mirror the EXCEL TEMPLATE SKELETON for sheet names/order and structure. You MAY add new sheets when necessary to represent additional, clearly-related data, but do not remove or reorder existing sheets.\n- You MAY append or insert new rows when necessary to accommodate variable-length data. Prefer preserving existing row/column styles; use insertRows with copyStyleFromRow when appropriate.\n- If the template has a merged and centered header row, do not break its merge; write data starting below it unless the header text itself must be updated.\n- Populate values and, only when required, formatting (number formats, bold/italic/underline/strike, font color via hex, background fill, horizontal alignment, wrap).\n- Use A1 references in 'cells' and a 2D array for 'ranges' anchored at 'start'.\n- No imports or file I/O. Encode any workspace/context-derived knowledge directly in the returned structure.\n- Do not invent content unrelated to the skeleton/context; if unknown, leave blank.\n\n${metadataContext}\n\nEXCEL TEMPLATE ARTIFACTS (includes merges, column widths, and alignment samples):\n${skeleton}`
-        : `You are a senior TypeScript engineer and document automation specialist. Recreate this template faithfully while preserving layout, headers/footers, spacing, lists, tables, images, hyperlinks, and emphasis.\n\nOutput: ONLY TypeScript code that returns raw WordprocessingML (WML).\n\nExport exactly:\nexport async function generate(\n  toolkit: { json: (prompt: string) => Promise<any>; text: (prompt: string) => Promise<string>; query?: (prompt: string) => Promise<any>; getSkeleton?: (kind?: 'html'|'text') => Promise<string> },\n  builder: any,\n  context?: Record<string, any>\n): Promise<{ wml: string }>;\n\nHard requirements:\n- Return ONLY { wml } containing the inner <w:body> children (<w:p>, <w:tbl>, ...). Do NOT include <w:sectPr> or any package-level parts.\n- Mirror the TEMPLATE SKELETON (prefer HTML skeleton) for headings/order/grouping.\n- Apply formatting in WML: run properties (color, size, bold/italic/underline/strike, font) and paragraph properties (alignment, spacing, indents), table widths/styles, list/numbering with <w:numPr> matching template numbering.\n- Use STYLES, THEME, and NUMBERING XML excerpts to choose brand colors, fonts, and list styles. Convert theme colors to hex where needed.\n- Do NOT output HTML, Markdown, or a DOCX buffer. No external imports or file I/O.\n- Do NOT add any sections, paragraphs, tables, or content that are not present in the provided skeleton; if unsure, omit rather than invent.\n- Preserve styling exactly; do not change fonts, colors, sizes, spacing, numbering, or table properties beyond what the skeleton and excerpts imply.\n- Use the DOCUMENT STRUCTURE ANALYSIS below to understand the content organization and make intelligent decisions about placeholder placement.${documentStructure}\n\n${metadataContext}\n\nTEMPLATE ARTIFACTS (HTML skeleton + XML excerpts):\n${skeleton}`
+        ? `You are a senior TypeScript engineer. Analyze this Excel TEMPLATE and generate code that preserves ALL formatting while enabling dynamic data population.
+
+**CRITICAL: You are analyzing a TEMPLATE only. Do NOT assume what data will be available. Write GENERIC code that can query ANY customer workspace.**
+
+OUTPUT: ONLY TypeScript code.
+
+EXPORT SIGNATURE (exact):
+export async function generate(
+  toolkit: { 
+    json: (prompt: string) => Promise<any>; 
+    text: (prompt: string) => Promise<string>; 
+    query?: (prompt: string) => Promise<any>; 
+    getSkeleton?: (kind?: 'text') => Promise<string> 
+  },
+  builder: any,
+  context?: Record<string, any>
+): Promise<{ sheets: Array<{ name: string; insertRows?: Array<{ at: number; count: number; copyStyleFromRow?: number }>; cells?: Array<{ ref: string; v: string|number|boolean; numFmt?: string; bold?: boolean; italic?: boolean; underline?: boolean; strike?: boolean; color?: string; bg?: string; align?: 'left'|'center'|'right'; wrap?: boolean }>; ranges?: Array<{ start: string; values: any[][]; numFmt?: string }> }> }>;
+
+YOUR JOB: Separate TEMPLATE STRUCTURE from PLACEHOLDER DATA
+
+1. PRESERVE EXACTLY (from template):
+   - Sheet names, order, structure
+   - Header rows, column headers
+   - ALL formatting: fonts, colors, fills, borders, number formats, alignment
+   - Merged cells, column widths, row heights
+
+2. IDENTIFY PLACEHOLDERS (replace with toolkit queries):
+   - Sample data rows (Product 1, Product 2, Item A, Item B)
+   - Generic values: "Sample", "Example", "TBD", dummy numbers
+   - Repeated patterns suggesting variable-length data
+
+3. WRITE SMART QUERIES:
+   For data to populate rows, use toolkit.json() to fetch array of objects.
+   Always start with "Check workspace document index first, then..."
+   Match field names to column headers from the template.
+
+4. POPULATE DYNAMICALLY:
+   - Use insertRows with copyStyleFromRow to preserve formatting
+   - Use 'ranges' array for efficiency (2D array of values)
+   - Preserve header row exactly as-is
+   - Start data population below headers
+
+EXCEL REQUIREMENTS:
+- Mirror sheet names/order exactly
+- Use A1 references for individual cells
+- Use ranges for bulk data population
+- Do NOT remove or reorder sheets
+
+STRICT RULES:
+- NO external imports or file I/O
+- Do NOT assume specific data exists
+- Do NOT hardcode data values
+- Do NOT add sheets not in template
+
+EXCEL TEMPLATE ARTIFACTS (merges, widths, alignment):
+${skeleton}`
+        : `You are a senior TypeScript engineer and document automation specialist. Analyze this template and generate INTELLIGENT generator code that separates STRUCTURE from DATA.
+
+OUTPUT: ONLY TypeScript code that returns raw WordprocessingML (WML).
+
+EXPORT SIGNATURE (exact):
+export async function generate(
+  toolkit: { 
+    json: (prompt: string) => Promise<any>; 
+    text: (prompt: string) => Promise<string>; 
+    query?: (prompt: string) => Promise<any>; 
+    getSkeleton?: (kind?: 'html'|'text') => Promise<string> 
+  },
+  builder: any,
+  context?: Record<string, any>
+): Promise<{ wml: string }>;
+
+CRITICAL: HYBRID DYNAMIC APPROACH
+1. STATIC PART (preserve from template):
+   - Document structure (sections, paragraphs, tables, lists)
+   - All formatting (fonts, colors, sizes, spacing, alignment)
+   - Headers, footers, page layout
+   - Numbering patterns, list styles
+   - Table borders, cell formatting
+   - Theme colors and styles
+
+2. DYNAMIC PART (fetch at runtime via toolkit):
+   - Variable text content (names, dates, values)
+   - Table rows with data
+   - List items from data sources
+   - Any content that looks like placeholder/sample data
+   
+HOW TO IDENTIFY DATA vs STRUCTURE:
+- STRUCTURE: "Inventory Report", "Total:", "Item", "Quantity", "Price" (headers/labels)
+- DATA: "Widget A", "100", "$50.00", "Product 1", "Sample Item" (actual values)
+- If template has sample rows/items, REPLACE with toolkit.json() query
+- If template has placeholders like [Name], {Date}, replace with dynamic fetch
+
+TOOLKIT USAGE:
+- toolkit.json() returns structured data as JSON array/object
+- ALWAYS start queries with: "First check workspace document index, then..."
+- Reference specific documents from metadata context
+- Example: const data = await toolkit.json('First check workspace document index. Then from the most relevant spreadsheet, return all rows as JSON array with columns: Item, Quantity, Price')
+
+WML REQUIREMENTS:
+- Return ONLY { wml } containing inner <w:body> children (<w:p>, <w:tbl>, ...)
+- Do NOT include <w:sectPr> or package-level parts
+- Mirror template structure exactly for static elements
+- Use run properties: <w:rPr> for color/size/bold/italic/underline/strike/font
+- Use paragraph properties: <w:pPr> for alignment/spacing/indents
+- Use table properties: <w:tblPr> for widths/borders/styles
+- Use <w:numPr> for list numbering matching template
+- Preserve ALL styling from STYLES, THEME, NUMBERING XML
+- Convert theme colors to hex where needed
+
+STRICT CONSTRAINTS:
+- Do NOT output HTML, Markdown, or DOCX buffer
+- No external imports or file I/O
+- Do NOT add content not in template skeleton
+- Do NOT change fonts/colors/spacing unless expanding data
+- If unsure whether something is data or structure, treat as structure
+- For tables: preserve header row formatting, replicate data rows
+- For lists: preserve numbering format, populate items from data
+
+${documentStructure}
+
+${metadataContext}
+
+TEMPLATE ARTIFACTS (HTML skeleton + XML excerpts):
+${skeleton}`
     logPush(`Prompt built (${prompt.length} chars, ${skeleton.length} chars skeleton, ${metadataContext.length} chars metadata)`)
     stepOk('buildPrompt')
 

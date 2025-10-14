@@ -29,6 +29,34 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Clean up temporary files
   cleanupTempFiles: () => ipcRenderer.invoke('cleanup-temp-files'),
   
+  // Auto-updater methods
+  checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
+  downloadUpdate: () => ipcRenderer.invoke('download-update'),
+  installUpdate: () => ipcRenderer.invoke('install-update'),
+  getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+  
+  // Listen for update events
+  onUpdateAvailable: (callback: (info: any) => void) => {
+    ipcRenderer.on('update-available', (_: any, info: any) => callback(info));
+    return () => ipcRenderer.removeAllListeners('update-available');
+  },
+  onUpdateNotAvailable: (callback: () => void) => {
+    ipcRenderer.on('update-not-available', () => callback());
+    return () => ipcRenderer.removeAllListeners('update-not-available');
+  },
+  onUpdateDownloaded: (callback: (info: any) => void) => {
+    ipcRenderer.on('update-downloaded', (_: any, info: any) => callback(info));
+    return () => ipcRenderer.removeAllListeners('update-downloaded');
+  },
+  onDownloadProgress: (callback: (progress: any) => void) => {
+    ipcRenderer.on('download-progress', (_: any, progress: any) => callback(progress));
+    return () => ipcRenderer.removeAllListeners('download-progress');
+  },
+  onUpdateError: (callback: (error: any) => void) => {
+    ipcRenderer.on('update-error', (_: any, error: any) => callback(error));
+    return () => ipcRenderer.removeAllListeners('update-error');
+  },
+  
   // Listen for window state changes
   onWindowStateChanged: (callback: (state: { isMaximized: boolean }) => void) => {
     ipcRenderer.on('window-state-changed', (_: any, state: { isMaximized: boolean }) => callback(state));
@@ -60,6 +88,16 @@ declare global {
       restoreWindow: () => Promise<void>;
       revealLogs: () => Promise<{ success: boolean; error?: string }>;
       openPath: (filePath: string) => Promise<{ success: boolean; error?: string }>;
+      cleanupTempFiles: () => Promise<{ success: boolean; error?: string }>;
+      checkForUpdates: () => Promise<void>;
+      downloadUpdate: () => Promise<void>;
+      installUpdate: () => Promise<void>;
+      getAppVersion: () => Promise<string>;
+      onUpdateAvailable: (callback: (info: any) => void) => () => void;
+      onUpdateNotAvailable: (callback: () => void) => () => void;
+      onUpdateDownloaded: (callback: (info: any) => void) => () => void;
+      onDownloadProgress: (callback: (progress: any) => void) => () => void;
+      onUpdateError: (callback: (error: any) => void) => () => void;
       isElectron: boolean;
     };
   }

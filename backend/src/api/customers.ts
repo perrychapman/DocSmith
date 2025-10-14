@@ -5,7 +5,6 @@ import path from "path"
 import { getDB } from "../services/storage"
 import { rmrf } from "../services/fs"
 import { ensureCustomerLibrary, resolveCustomerPaths, folderNameForCustomer } from "../services/customerLibrary"
-import { ensureCustomersWorkspaceSlugColumn } from "../services/storage"
 import { anythingllmRequest } from "../services/anythingllm"
 import { listFlattenedDocs, documentExists, qualifiedNamesForShort } from "../services/anythingllmDocs"
 import { removeUploadAndAnythingLLM } from "../services/anythingllmDelete"
@@ -129,7 +128,6 @@ router.post("/", (req, res) => {
         // Persist slug on the customer row
         try {
           const db2 = getDB()
-          ensureCustomersWorkspaceSlugColumn(db2)
           if (resp?.workspace?.slug) {
             await new Promise<void>((resolve) => {
               db2.run(

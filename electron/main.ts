@@ -1,14 +1,20 @@
 
-import { app, BrowserWindow, ipcMain, shell } from 'electron';
-import * as path from 'path';
-import { fileURLToPath } from 'url';
-import * as fs from 'fs';
-import * as os from 'os';
-import { spawn } from 'child_process';
+import type { BrowserWindow as BrowserWindowType } from 'electron';
+const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const { autoUpdater } = require('electron-updater');
+const path = require('path');
+const fs = require('fs');
+const os = require('os');
+const { spawn } = require('child_process');
 
-// ES module-compatible __dirname
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// __dirname is available in CommonJS by default
+
+// Configure auto-updater
+autoUpdater.autoDownload = false; // Prompt user before downloading
+autoUpdater.autoInstallOnAppQuit = true;
+
+// Global window reference
+let mainWindow: BrowserWindowType | null = null;
 
 // Wait for backend to be ready by polling health endpoint
 async function waitForBackend(port: number, maxAttempts: number = 30, delayMs: number = 500): Promise<boolean> {
@@ -153,7 +159,7 @@ async function createWindow() {
   // Clean up logs on startup
   cleanupLogs();
   
-  const win = new BrowserWindow({
+  mainWindow = new BrowserWindow({
     width: 600,  // Smaller width to fit card content
     height: 750, // Increased height to fit welcome step content
     webPreferences: {
@@ -174,18 +180,18 @@ async function createWindow() {
   });
 
   // Show window when ready to reduce loading artifacts
-  win.once('ready-to-show', () => {
-    win.show();
+  mainWindow.once('ready-to-show', () => {
+    if (mainWindow) mainWindow.show();
     logToFile('Window shown');
   });
 
   // Window state change listeners
-  win.on('maximize', () => {
-    win.webContents.send('window-state-changed', { isMaximized: true });
+  mainWindow.on('maximize', () => {
+    if (mainWindow) mainWindow.webContents.send('window-state-changed', { isMaximized: true });
   });
 
-  win.on('unmaximize', () => {
-    win.webContents.send('window-state-changed', { isMaximized: false });
+  mainWindow.on('unmaximize', () => {
+    if (mainWindow) mainWindow.webContents.send('window-state-changed', { isMaximized: false });
   });
 
   const distPath = path.join(__dirname, '../frontend/dist/index.html');
@@ -210,12 +216,12 @@ async function createWindow() {
 
   // Only open dev tools in development mode
   if (!isProduction && process.env.ELECTRON_DEV === 'true') {
-    win.webContents.openDevTools();
+    mainWindow.webContents.openDevTools();
     logToFile('Dev tools opened');
   }
 
   // Suppress console errors we can't control (like autofill)
-  win.webContents.on('console-message', (event, level, message, line, sourceId) => {
+  mainWindow.webContents.on('console-message', (event, level, message, line, sourceId) => {
     // Filter out autofill-related errors
     if (message.includes('Autofill') || message.includes('autofill') || 
         sourceId.includes('devtools://') || message.includes('protocol_client')) {
@@ -226,13 +232,14 @@ async function createWindow() {
   });
 
   // Handle web contents errors
-  win.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
+  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription, validatedURL) => {
     logToFile(`Failed to load ${validatedURL}: ${errorDescription} (${errorCode})`);
   });
 
   // Disable autofill and other unwanted features
-  win.webContents.on('dom-ready', () => {
-    win.webContents.executeJavaScript(`
+  mainWindow.webContents.on('dom-ready', () => {
+    if (!mainWindow) return;
+    mainWindow.webContents.executeJavaScript(`
       // Disable autofill warnings in console (only if not already done)
       if (!window.__docsmithConsoleOverridden) {
         window.__docsmithConsoleOverridden = true;
@@ -264,7 +271,7 @@ async function createWindow() {
     
     if (!backendReady) {
       logToFile('Backend failed to start, showing error page');
-      await win.loadURL('data:text/html,<h1>DocSmith</h1><p style="color:red;">Backend server failed to start.</p><p>Please check the logs and ensure the backend is running on port ' + backendPort + '.</p>');
+      await mainWindow.loadURL('data:text/html,<h1>DocSmith</h1><p style="color:red;">Backend server failed to start.</p><p>Please check the logs and ensure the backend is running on port ' + backendPort + '.</p>');
       return;
     }
     
@@ -272,10 +279,15 @@ async function createWindow() {
     
     // Try to load Vite dev server, with fallback to static build if it fails
     const loadDevServer = async () => {
+      if (!mainWindow) {
+        logToFile('mainWindow is null, cannot load content');
+        return;
+      }
+      
       try {
         // Use Promise.race to implement timeout
         await Promise.race([
-          win.loadURL('http://localhost:5173'),
+          mainWindow.loadURL('http://localhost:5173'),
           new Promise((_, reject) => 
             setTimeout(() => reject(new Error('Timeout')), 5000)
           )
@@ -283,12 +295,14 @@ async function createWindow() {
         logToFile('Successfully loaded Vite dev server');
       } catch (error) {
         logToFile('Failed to load Vite dev server, falling back to static build');
+        if (!mainWindow) return;
+        
         if (fs.existsSync(distPath)) {
-          await win.loadFile(distPath);
+          await mainWindow.loadFile(distPath);
           logToFile('Loaded static build as fallback');
         } else {
           logToFile('No static build available, loading error page');
-          await win.loadURL('data:text/html,<h1>DocSmith</h1><p>Development server not running and no static build found.</p><p>Run <code>npm run dev</code> to start the development server.</p>');
+          await mainWindow.loadURL('data:text/html,<h1>DocSmith</h1><p>Development server not running and no static build found.</p><p>Run <code>npm run dev</code> to start the development server.</p>');
         }
       }
     };
@@ -343,7 +357,7 @@ async function createWindow() {
     
     if (!backendReady) {
       logToFile('Backend failed to start in production mode');
-      await win.loadURL('data:text/html,<h1>DocSmith</h1><p style="color:red;">Backend server failed to start.</p><p>Please check the logs for more information.</p>');
+      await mainWindow.loadURL('data:text/html,<h1>DocSmith</h1><p style="color:red;">Backend server failed to start.</p><p>Please check the logs for more information.</p>');
       return;
     }
     
@@ -352,10 +366,10 @@ async function createWindow() {
     // Try to load static build, fallback to dev server if missing
     if (fs.existsSync(distPath)) {
       logToFile('Loading static build: ' + distPath);
-      await win.loadFile(distPath);
+      await mainWindow.loadFile(distPath);
     } else {
       logToFile('Static build not found, loading Vite dev server at http://localhost:5173');
-      await win.loadURL('http://localhost:5173');
+      await mainWindow.loadURL('http://localhost:5173');
     }
   }
 
@@ -404,7 +418,7 @@ async function createWindow() {
   });
 
   // Handle window close
-  win.on('closed', async () => {
+  mainWindow.on('closed', async () => {
     if (backendProcess && !backendProcess.killed && !cleanupPromise) {
       logToFile('Window closed, shutting down backend...');
       cleanupPromise = shutdownBackend();
@@ -416,25 +430,25 @@ async function createWindow() {
 // Set up IPC handlers
 ipcMain.handle('setup-completed', () => {
   const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
-  if (win) {
+  if (mainWindow) {
     logToFile('Setup completed - showing menu bar and restoring window functionality');
-    win.setAutoHideMenuBar(false);
-    win.setMenuBarVisibility(true);
-    win.setResizable(true);
+    mainWindow.setAutoHideMenuBar(false);
+    mainWindow.setMenuBarVisibility(true);
+    mainWindow.setResizable(true);
     
     // Resize window to normal application size after setup
-    win.setSize(1200, 800);
-    win.center(); // Re-center the larger window
+    mainWindow.setSize(1200, 800);
+    mainWindow.center(); // Re-center the larger window
   }
 });
 
 ipcMain.handle('restore-window', () => {
   const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
-  if (win) {
+  if (mainWindow) {
     logToFile('Restoring full window functionality');
-    win.setAutoHideMenuBar(false);
-    win.setMenuBarVisibility(true);
-    win.setResizable(true);
+    mainWindow.setAutoHideMenuBar(false);
+    mainWindow.setMenuBarVisibility(true);
+    mainWindow.setResizable(true);
     // Note: Frame cannot be changed after window creation in Electron
   }
 });
@@ -459,31 +473,31 @@ ipcMain.handle('close-app', () => {
 
 ipcMain.handle('minimize-app', () => {
   const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
-  if (win) {
+  if (mainWindow) {
     logToFile('Minimize app requested from renderer');
-    win.minimize();
+    mainWindow.minimize();
   }
 });
 
 ipcMain.handle('maximize-app', () => {
   const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
-  if (win) {
+  if (mainWindow) {
     logToFile('Maximize app requested from renderer');
-    if (win.isMaximized()) {
-      win.restore();
+    if (mainWindow.isMaximized()) {
+      mainWindow.restore();
     } else {
-      win.maximize();
+      mainWindow.maximize();
     }
   }
 });
 
 ipcMain.handle('get-window-state', () => {
   const win = BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0];
-  if (win) {
+  if (mainWindow) {
     return {
-      isMaximized: win.isMaximized(),
-      isMinimized: win.isMinimized(),
-      isFullScreen: win.isFullScreen()
+      isMaximized: mainWindow.isMaximized(),
+      isMinimized: mainWindow.isMinimized(),
+      isFullScreen: mainWindow.isFullScreen()
     };
   }
   return { isMaximized: false, isMinimized: false, isFullScreen: false };
@@ -665,8 +679,81 @@ ipcMain.handle('cleanup-temp-files', () => {
   }
 });
 
+// Auto-updater event handlers
+autoUpdater.on('checking-for-update', () => {
+  logToFile('[AUTO-UPDATE] Checking for updates...');
+});
+
+autoUpdater.on('update-available', (info) => {
+  logToFile(`[AUTO-UPDATE] Update available: ${info.version}`);
+  if (mainWindow) {
+    mainWindow.webContents.send('update-available', info);
+  }
+});
+
+autoUpdater.on('update-not-available', (info) => {
+  logToFile(`[AUTO-UPDATE] Current version ${info.version} is up to date`);
+});
+
+autoUpdater.on('error', (err) => {
+  logToFile(`[AUTO-UPDATE] Error: ${err.message}`);
+});
+
+autoUpdater.on('download-progress', (progressObj) => {
+  logToFile(`[AUTO-UPDATE] Download speed: ${progressObj.bytesPerSecond} - Downloaded ${progressObj.percent}%`);
+  if (mainWindow) {
+    mainWindow.webContents.send('update-download-progress', progressObj);
+  }
+});
+
+autoUpdater.on('update-downloaded', (info) => {
+  logToFile(`[AUTO-UPDATE] Update downloaded: ${info.version}`);
+  if (mainWindow) {
+    mainWindow.webContents.send('update-downloaded', info);
+  }
+});
+
+// IPC handlers for auto-update
+ipcMain.handle('check-for-updates', async () => {
+  try {
+    const result = await autoUpdater.checkForUpdates();
+    return { success: true, updateInfo: result?.updateInfo };
+  } catch (error) {
+    logToFile(`[AUTO-UPDATE] Check failed: ${error}`);
+    return { success: false, error: (error as Error).message };
+  }
+});
+
+ipcMain.handle('download-update', async () => {
+  try {
+    await autoUpdater.downloadUpdate();
+    return { success: true };
+  } catch (error) {
+    return { success: false, error: (error as Error).message };
+  }
+});
+
+ipcMain.handle('install-update', () => {
+  autoUpdater.quitAndInstall(false, true);
+});
+
+ipcMain.handle('get-app-version', () => {
+  return app.getVersion();
+});
+
 app.whenReady().then(() => {
   createWindow();
+  
+  // Check for updates after 3 seconds (give app time to fully load)
+  setTimeout(() => {
+    if (!app.isPackaged) {
+      logToFile('[AUTO-UPDATE] Skipping update check in development mode');
+      return;
+    }
+    autoUpdater.checkForUpdates().catch(err => {
+      logToFile(`[AUTO-UPDATE] Initial check failed: ${err.message}`);
+    });
+  }, 3000);
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();
@@ -691,4 +778,5 @@ process.on('SIGTERM', async () => {
 process.on('exit', (code) => {
   logToFile(`Electron process exiting with code: ${code}`);
 });
+
 

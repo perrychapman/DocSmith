@@ -11,6 +11,16 @@ interface ElectronAPI {
   restoreWindow: () => Promise<void>;
   revealLogs: () => Promise<{ success: boolean; error?: string }>;
   openPath: (filePath: string) => Promise<{ success: boolean; error?: string }>;
+  cleanupTempFiles: () => Promise<{ success: boolean; error?: string }>;
+  checkForUpdates: () => Promise<void>;
+  downloadUpdate: () => Promise<void>;
+  installUpdate: () => Promise<void>;
+  getAppVersion: () => Promise<string>;
+  onUpdateAvailable: (callback: (info: any) => void) => () => void;
+  onUpdateNotAvailable: (callback: () => void) => () => void;
+  onUpdateDownloaded: (callback: (info: any) => void) => () => void;
+  onDownloadProgress: (callback: (progress: any) => void) => () => void;
+  onUpdateError: (callback: (error: any) => void) => () => void;
   isElectron: boolean;
 }
 

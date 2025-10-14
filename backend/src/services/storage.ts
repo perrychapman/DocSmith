@@ -1,6 +1,7 @@
 import sqlite3 from "sqlite3"
 import path from "path"
 import fs from "fs"
+import { runMigrations } from "./migrations"
 
 let db: sqlite3.Database | null = null
 
@@ -33,13 +34,14 @@ export function getDB(): sqlite3.Database {
 
     db = new sqlite3.Database(dbPath)
 
-    // Run schema
+    // Run base schema (CREATE TABLE IF NOT EXISTS ensures safe idempotence)
     const schema = fs.readFileSync(schemaPath, "utf8")
     db.exec(schema)
-    // Lightweight migrations for existing DBs
-    try { ensureCustomersWorkspaceSlugColumn(db) } catch {}
-    try { ensureDocumentMetadataExtraFieldsColumn(db) } catch {}
-    try { ensureDocumentMetadataAnythingllmPathColumn(db) } catch {}
+    
+    // Run migrations asynchronously (non-blocking)
+    runMigrations(db).catch(err => {
+      console.error('[DB] Migration error:', err)
+    })
   }
   return db
 }
@@ -66,46 +68,3 @@ export async function resetDatabase(): Promise<void> {
     // ignore
   }
 }
-
-// --- Lightweight migration helpers ---
-export function ensureCustomersWorkspaceSlugColumn(handle: sqlite3.Database) {
-  handle.serialize(() => {
-    handle.all("PRAGMA table_info(customers)", (err, rows: any[]) => {
-      if (err) return
-      const has = Array.isArray(rows) && rows.some((r) => String(r?.name) === "workspaceSlug")
-      if (has) return
-      handle.run("ALTER TABLE customers ADD COLUMN workspaceSlug TEXT", () => {})
-    })
-  })
-}
-
-export function ensureDocumentMetadataExtraFieldsColumn(handle: sqlite3.Database) {
-  handle.serialize(() => {
-    handle.all("PRAGMA table_info(document_metadata)", (err, rows: any[]) => {
-      if (err) return
-      const has = Array.isArray(rows) && rows.some((r) => String(r?.name) === "extraFields")
-      if (has) return
-      console.log('[MIGRATION] Adding extraFields column to document_metadata table')
-      handle.run("ALTER TABLE document_metadata ADD COLUMN extraFields TEXT", (err) => {
-        if (err) console.error('[MIGRATION] Failed to add extraFields column:', err)
-        else console.log('[MIGRATION] Successfully added extraFields column')
-      })
-    })
-  })
-}
-
-export function ensureDocumentMetadataAnythingllmPathColumn(handle: sqlite3.Database) {
-  handle.serialize(() => {
-    handle.all("PRAGMA table_info(document_metadata)", (err, rows: any[]) => {
-      if (err) return
-      const has = Array.isArray(rows) && rows.some((r) => String(r?.name) === "anythingllmPath")
-      if (has) return
-      console.log('[MIGRATION] Adding anythingllmPath column to document_metadata table')
-      handle.run("ALTER TABLE document_metadata ADD COLUMN anythingllmPath TEXT", (err) => {
-        if (err) console.error('[MIGRATION] Failed to add anythingllmPath column:', err)
-        else console.log('[MIGRATION] Successfully added anythingllmPath column')
-      })
-    })
-  })
-}
-

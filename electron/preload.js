@@ -21,6 +21,32 @@ contextBridge.exposeInMainWorld('electronAPI', {
     openPath: (filePath) => ipcRenderer.invoke('open-path', filePath),
     // Clean up temporary files
     cleanupTempFiles: () => ipcRenderer.invoke('cleanup-temp-files'),
+    // Auto-updater methods
+    checkForUpdates: () => ipcRenderer.invoke('check-for-updates'),
+    downloadUpdate: () => ipcRenderer.invoke('download-update'),
+    installUpdate: () => ipcRenderer.invoke('install-update'),
+    getAppVersion: () => ipcRenderer.invoke('get-app-version'),
+    // Listen for update events
+    onUpdateAvailable: (callback) => {
+        ipcRenderer.on('update-available', (_, info) => callback(info));
+        return () => ipcRenderer.removeAllListeners('update-available');
+    },
+    onUpdateNotAvailable: (callback) => {
+        ipcRenderer.on('update-not-available', () => callback());
+        return () => ipcRenderer.removeAllListeners('update-not-available');
+    },
+    onUpdateDownloaded: (callback) => {
+        ipcRenderer.on('update-downloaded', (_, info) => callback(info));
+        return () => ipcRenderer.removeAllListeners('update-downloaded');
+    },
+    onDownloadProgress: (callback) => {
+        ipcRenderer.on('download-progress', (_, progress) => callback(progress));
+        return () => ipcRenderer.removeAllListeners('download-progress');
+    },
+    onUpdateError: (callback) => {
+        ipcRenderer.on('update-error', (_, error) => callback(error));
+        return () => ipcRenderer.removeAllListeners('update-error');
+    },
     // Listen for window state changes
     onWindowStateChanged: (callback) => {
         ipcRenderer.on('window-state-changed', (_, state) => callback(state));

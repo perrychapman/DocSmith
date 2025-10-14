@@ -1,6 +1,6 @@
 {
     "name": "docsmith",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "description": "DocSmith: Document management and workspace collaboration app.",
     "author": "Perry Chapman",
     "main": "electron/main.js",
@@ -13,8 +13,9 @@
     "scripts": {
         "dev:backend": "nodemon --watch backend/src --ext ts,js --exec ts-node backend/src/server.ts",
         "build:backend": "powershell -Command \"Remove-Item backend/dist -Recurse -Force -ErrorAction SilentlyContinue\" && npx esbuild backend/src/server.ts --bundle --platform=node --target=node20 --outfile=backend/dist/server.js --external:sqlite3 && xcopy \"backend\\src\\db\\*.sql\" \"backend\\dist\\db\\\" /Y && xcopy \"backend\\package.json\" \"backend\\dist\\\" /Y",
-        "build:electron": "tsc electron/main.ts --outDir electron --target es2020 --module es2020 --moduleResolution node --esModuleInterop && tsc electron/preload.ts --outDir electron --target es2020 --module commonjs --moduleResolution node --esModuleInterop",
+        "build:electron": "tsc electron/main.ts --outDir electron --target es2020 --module commonjs --moduleResolution node --esModuleInterop && tsc electron/preload.ts --outDir electron --target es2020 --module commonjs --moduleResolution node --esModuleInterop",
         "start:backend": "node backend/dist/server.js",
+        "generate-icons": "node scripts/generate-mac-icons.js",
         "dev": "concurrently -n backend,frontend -c yellow,cyan \"npm:dev:backend\" \"npm --workspace frontend run dev\"",
         "build": "npm run build:backend && npm run build:electron && npm --workspace backend install && cd backend && npm install typescript@^5.9.2 --no-workspaces && cd .. && cross-env VITE_ELECTRON=true npm --workspace frontend run build",
         "electron:dev": "concurrently -n backend,frontend,electron -c yellow,cyan,magenta \"npm:dev:backend\" \"npm --workspace frontend run dev\" \"electron .\"",
@@ -24,6 +25,7 @@
         "electron:build:linux": "npm run build && electron-builder --linux"
     },
     "devDependencies": {
+        "@electron/osx-sign": "^1.3.3",
         "@types/cors": "^2.8.19",
         "@types/express": "^5.0.3",
         "@types/node": "^24.5.1",
@@ -33,6 +35,8 @@
         "electron-builder": "^26.0.12",
         "esbuild": "^0.25.10",
         "nodemon": "^3.1.10",
+        "png-to-icns": "^1.0.0",
+        "png2icons": "^2.0.1",
         "sharp": "^0.34.4",
         "to-ico": "^1.1.5",
         "ts-node": "^10.9.2",
@@ -45,6 +49,7 @@
         "docx": "^8.5.0",
         "docxtemplater": "^3.45.0",
         "dotenv": "^17.2.1",
+        "electron-updater": "^6.6.2",
         "exceljs": "^4.4.0",
         "express": "^5.1.0",
         "handlebars": "^4.7.8",
@@ -64,6 +69,11 @@
         "directories": {
             "buildResources": "build",
             "output": "dist-release"
+        },
+        "publish": {
+            "provider": "github",
+            "owner": "perrychapman",
+            "repo": "DocSmith"
         },
         "files": [
             "frontend/dist/**",
@@ -97,10 +107,45 @@
             "uninstallerIcon": "frontend\\public\\favicon.ico",
             "createDesktopShortcut": true,
             "createStartMenuShortcut": true,
-            "shortcutName": "DocSmith"
+            "shortcutName": "DocSmith",
+            "perMachine": false,
+            "runAfterFinish": true
         },
         "mac": {
-            "target": "dmg"
+            "target": [
+                {
+                    "target": "dmg",
+                    "arch": [
+                        "x64",
+                        "arm64"
+                    ]
+                }
+            ],
+            "category": "public.app-category.productivity",
+            "icon": "frontend/public/docsmith-icon.png",
+            "hardenedRuntime": false,
+            "gatekeeperAssess": false,
+            "type": "distribution"
+        },
+        "dmg": {
+            "title": "DocSmith ${version}",
+            "icon": "frontend/public/docsmith-icon.png",
+            "contents": [
+                {
+                    "x": 130,
+                    "y": 220
+                },
+                {
+                    "x": 410,
+                    "y": 220,
+                    "type": "link",
+                    "path": "/Applications"
+                }
+            ],
+            "window": {
+                "width": 540,
+                "height": 380
+            }
         },
         "linux": {
             "target": "AppImage"

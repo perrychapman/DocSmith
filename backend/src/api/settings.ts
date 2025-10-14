@@ -1,6 +1,8 @@
 import { Router } from "express"
 import { readSettings, writeSettings, type AppSettings } from "../services/settings"
 import { discoverAnythingLLMPort } from "../services/anythingllmDiscovery"
+import { getMigrationStatus } from "../services/migrations"
+import { getDB } from "../services/storage"
 
 const router = Router()
 
@@ -42,6 +44,17 @@ router.post("/discover-anythingllm", async (_req, res) => {
     }
   } catch (e) { 
     res.status(500).json({ success: false, error: (e as Error).message }) 
+  }
+})
+
+// Get database migration status
+router.get("/migrations", async (_req, res) => {
+  try {
+    const db = getDB()
+    const status = await getMigrationStatus(db)
+    res.json(status)
+  } catch (e) {
+    res.status(500).json({ error: (e as Error).message })
   }
 })
 

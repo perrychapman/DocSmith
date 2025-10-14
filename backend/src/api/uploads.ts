@@ -679,7 +679,15 @@ router.post("/:customerId", (req, res, next) => {
                 let uploadedLocation: string | undefined
                 try {
                   const docs = Array.isArray(resp?.documents) ? resp.documents : []
+                  console.log(`[UPLOAD] Found ${docs.length} documents in upload response`)
                   const first = docs[0]
+                  
+                  if (first) {
+                    console.log(`[UPLOAD] First document keys:`, Object.keys(first))
+                    console.log(`[UPLOAD] First document location:`, first.location)
+                    console.log(`[UPLOAD] First document name:`, first.name)
+                  }
+                  
                   if (first?.location) {
                     const fullPath = String(first.location)
                     uploadedLocation = fullPath
@@ -689,14 +697,21 @@ router.post("/:customerId", (req, res, next) => {
                     const match = fullPath.match(/documents[/\\](.+)$/i)
                     if (match && match[1]) {
                       uploadedDocName = match[1].replace(/\\/g, '/') // Normalize to forward slashes
+                      console.log(`[UPLOAD] Extracted from location regex: "${uploadedDocName}"`)
                     } else {
-                      uploadedDocName = fullPath
+                      // Location might already be a relative path like "custom-documents/file.json"
+                      uploadedDocName = fullPath.replace(/\\/g, '/')
+                      console.log(`[UPLOAD] Using location as-is: "${uploadedDocName}"`)
                     }
                   } else if (first?.name) {
-                    uploadedDocName = String(first.name)
+                    // Fallback to name, but this is usually just the filename without folder
+                    // Try to construct the expected path
+                    const baseName = String(first.name)
+                    uploadedDocName = `custom-documents/${baseName}`
+                    console.log(`[UPLOAD] Constructed from name: "${uploadedDocName}"`)
                   }
-                  console.log(`[UPLOAD] Uploaded document location: "${uploadedLocation}"`)
-                  console.log(`[UPLOAD] Uploaded document name: "${uploadedDocName}"`)
+                  console.log(`[UPLOAD] Final uploaded document location: "${uploadedLocation}"`)
+                  console.log(`[UPLOAD] Final uploaded document name: "${uploadedDocName}"`)
                 } catch (e) {
                   console.error(`[UPLOAD] Error parsing upload response:`, e)
                 }

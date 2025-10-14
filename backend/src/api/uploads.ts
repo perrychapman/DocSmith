@@ -770,22 +770,20 @@ router.post("/:customerId", (req, res, next) => {
                   } catch (moveErr) {
                     console.error(`[UPLOAD] Move attempt ${attempt} failed:`, moveErr instanceof Error ? moveErr.message : String(moveErr))
                     if (attempt >= maxMoveRetries) {
-                      console.log(`[UPLOAD] ⚠ File organization skipped - will proceed with original path`)
+                      console.log(`[UPLOAD] File organization skipped - will proceed with original path`)
                       console.log(`[UPLOAD] Document remains at: "${uploadedDocName}"`)
                       console.log(`[UPLOAD] This is OK - metadata extraction will still work correctly!`)
                     }
                   }
                 }
 
-                // Use moved path if successful, otherwise use original upload path
-                const docName = moveSucceeded ? targetPath : uploadedDocName
-                console.log(`[UPLOAD] Final document path for embedding: "${docName}"`)
-
-                // Step 4: Verify document exists in AnythingLLM before embedding
-                console.log(`[UPLOAD] Verifying document exists in AnythingLLM...`)
+                // Step 4: Verify document exists and get the ACTUAL path from AnythingLLM
+                // This is critical - we must use AnythingLLM's reported path for embedding!
+                console.log(`[UPLOAD] Querying AnythingLLM to find uploaded document...`)
                 const verifyMaxTime = 20000 // 20 seconds max
                 const verifyInterval = 2000 // Check every 2 seconds
                 const verifyStartTime = Date.now()
+                let actualDocPath: string | undefined
                 let documentExists = false
                 
                 while (!documentExists && (Date.now() - verifyStartTime) < verifyMaxTime) {
@@ -801,14 +799,17 @@ router.post("/:customerId", (req, res, next) => {
                       allDocs = docsListResp
                     }
                     
+                    // Find our uploaded document by matching the source filename
                     const foundDoc = allDocs.find((d: any) => 
-                      d.name === docName || 
-                      d.location?.includes(sourceFilename) ||
-                      d.name?.includes(sourceFilename)
+                      d.name?.includes(sourceFilename) ||
+                      d.location?.includes(sourceFilename)
                     )
                     
                     if (foundDoc) {
-                      console.log(`[UPLOAD] Document verified in AnythingLLM after ${((Date.now() - verifyStartTime)/1000).toFixed(1)}s`)
+                      // Use AnythingLLM's reported path - this is the SOURCE OF TRUTH!
+                      actualDocPath = foundDoc.name || foundDoc.location
+                      console.log(`[UPLOAD] ✓ Document found in AnythingLLM after ${((Date.now() - verifyStartTime)/1000).toFixed(1)}s`)
+                      console.log(`[UPLOAD] AnythingLLM reports document path: "${actualDocPath}"`)
                       documentExists = true
                       break
                     }
@@ -821,8 +822,14 @@ router.post("/:customerId", (req, res, next) => {
                   }
                 }
                 
+                // Use the actual path from AnythingLLM, or fall back to our best guess
+                const docName = actualDocPath || (moveSucceeded ? targetPath : uploadedDocName)
+                
                 if (!documentExists) {
-                  console.log(`[UPLOAD] Document not verified after ${verifyMaxTime/1000}s, proceeding anyway`)
+                  console.log(`[UPLOAD] ⚠ Document not found in AnythingLLM after ${verifyMaxTime/1000}s`)
+                  console.log(`[UPLOAD] Will attempt embedding with path: "${docName}"`)
+                } else {
+                  console.log(`[UPLOAD] Will embed document using verified path: "${docName}"`)
                 }
                 
                 // Save sidecar mapping

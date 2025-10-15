@@ -241,5 +241,202 @@ router.delete("/:customerId/file", (req, res) => {
   )
 })
 
+// POST /api/documents/:customerId/embed-generated — copy a generated document to uploads folder and embed in workspace
+router.post("/:customerId/embed-generated", (req, res) => {
+  const customerId = Number(req.params.customerId)
+  const fileName = (req.body as any)?.filename ? String((req.body as any).filename) : undefined
+  
+  if (!customerId || !fileName) {
+    return res.status(400).json({ error: "customerId and filename are required" })
+  }
+
+  const db = getDB()
+  db.get<{ id: number; name: string; createdAt: string; workspaceSlug?: string | null }>(
+    "SELECT id, name, createdAt, workspaceSlug FROM customers WHERE id = ?",
+    [customerId],
+    async (err, row) => {
+      if (err) return res.status(500).json({ error: err.message })
+      if (!row) return res.status(404).json({ error: "Customer not found" })
+
+      const { documentsDir } = customerPaths(row.id, row.name, new Date(row.createdAt))
+      const { uploadsDir } = resolveCustomerPaths(row.id, row.name, new Date(row.createdAt))
+      
+      const sourcePath = path.join(documentsDir, fileName)
+      const destPath = path.join(uploadsDir, fileName)
+
+      // Check if source file exists
+      if (!fs.existsSync(sourcePath)) {
+        return res.status(404).json({ error: "Generated document not found" })
+      }
+
+      // Check if destination already exists
+      if (fs.existsSync(destPath)) {
+        return res.status(400).json({ error: "A document with this name already exists in uploads" })
+      }
+
+      try {
+        // Ensure uploads directory exists
+        fs.mkdirSync(uploadsDir, { recursive: true })
+        
+        // Copy the file to uploads folder
+        console.log(`[EMBED-GEN] Copying "${sourcePath}" to "${destPath}"`)
+        fs.copyFileSync(sourcePath, destPath)
+        console.log(`[EMBED-GEN] File copied successfully`)
+
+        // If customer has a workspace, embed the document
+        const slug = row.workspaceSlug
+        if (slug) {
+          try {
+            // Import anythingllm functions
+            const { anythingllmRequest } = await import("../services/anythingllm")
+            const { folderNameForCustomer } = await import("../services/customerLibrary")
+            
+            // Step 1: Ensure the customer folder exists in AnythingLLM
+            const folderName = folderNameForCustomer(row.id, row.name, new Date(row.createdAt))
+            console.log(`[EMBED-GEN] Ensuring folder exists: "${folderName}"`)
+            
+            try {
+              await anythingllmRequest<{ success: boolean; message: string | null }>(
+                "/document/create-folder",
+                "POST",
+                { name: folderName }
+              )
+              console.log(`[EMBED-GEN] Folder created or already exists`)
+            } catch (folderErr) {
+              console.log(`[EMBED-GEN] Folder creation response:`, folderErr)
+            }
+            
+            // Step 2: Upload to AnythingLLM
+            const fd = new FormData()
+            const buf = fs.readFileSync(destPath)
+            const uint = new Uint8Array(buf)
+            // @ts-ignore File is available in Node 18+
+            const theFile = new File([uint], fileName)
+            fd.append("file", theFile)
+            
+            console.log(`[EMBED-GEN] Uploading file "${fileName}" to AnythingLLM...`)
+            const resp = await anythingllmRequest<any>(
+              `/document/upload`,
+              "POST",
+              fd
+            )
+            
+            console.log(`[EMBED-GEN] Upload response:`, JSON.stringify(resp, null, 2))
+            
+            // Extract uploaded document name from response
+            let uploadedDocName: string | undefined
+            try {
+              const docs = Array.isArray(resp?.documents) ? resp.documents : []
+              console.log(`[EMBED-GEN] Found ${docs.length} documents in upload response`)
+              const first = docs[0]
+              
+              if (first?.location) {
+                const fullPath = String(first.location).trim()
+                const match = fullPath.match(/[A-Z]:[/\\].*[/\\]documents[/\\](.+)$/i) || 
+                              fullPath.match(/^[/\\].*[/\\]documents[/\\](.+)$/i)
+                
+                if (match && match[1]) {
+                  uploadedDocName = match[1].replace(/\\/g, '/')
+                  console.log(`[EMBED-GEN] Extracted from filesystem path: "${uploadedDocName}"`)
+                } else {
+                  uploadedDocName = fullPath.replace(/\\/g, '/')
+                  console.log(`[EMBED-GEN] Using relative path from location: "${uploadedDocName}"`)
+                }
+              } else if (first?.name) {
+                const baseName = String(first.name).trim()
+                uploadedDocName = baseName.includes('/') ? baseName : `custom-documents/${baseName}`
+                console.log(`[EMBED-GEN] Constructed from name field: "${uploadedDocName}"`)
+              }
+            } catch (e) {
+              console.error(`[EMBED-GEN] Error parsing upload response:`, e)
+            }
+            
+            if (!uploadedDocName) {
+              throw new Error(`Failed to get document name from upload response`)
+            }
+
+            // Step 3: Try to move to customer folder
+            const sourceFilename = uploadedDocName.split('/').pop() || uploadedDocName
+            const targetPath = `${folderName}/${sourceFilename}`
+            console.log(`[EMBED-GEN] Attempting to organize document: "${uploadedDocName}" -> "${targetPath}"`)
+            
+            let docName = uploadedDocName // Default to original upload path
+            try {
+              const moveResp = await anythingllmRequest<{ success: boolean; message: string | null }>(
+                "/document/move-files",
+                "POST",
+                { files: [{ from: uploadedDocName, to: targetPath }] }
+              )
+              console.log(`[EMBED-GEN] Move response:`, JSON.stringify(moveResp, null, 2))
+              
+              if (moveResp?.success !== false) {
+                console.log(`[EMBED-GEN] ✓ Document successfully organized in customer folder`)
+                docName = targetPath // Update to moved path
+              }
+            } catch (moveErr) {
+              console.log(`[EMBED-GEN] Move failed, using original path:`, moveErr)
+            }
+
+            // Step 4: Embed the document into the workspace
+            console.log(`[EMBED-GEN] Embedding document "${docName}" into workspace "${slug}"`)
+            const embedResp = await anythingllmRequest<any>(
+              `/workspace/${encodeURIComponent(slug)}/update-embeddings`,
+              "POST",
+              { adds: [docName] }
+            )
+            console.log(`[EMBED-GEN] Embedding response:`, embedResp)
+            
+            // Step 5: Mark document as generated in metadata
+            console.log(`[EMBED-GEN] Marking document as generated in metadata`)
+            try {
+              const { saveDocumentMetadata } = await import("../services/documentMetadata")
+              await saveDocumentMetadata(customerId, {
+                customerId,
+                filename: fileName,
+                anythingllmPath: docName,
+                uploadedAt: new Date().toISOString(),
+                fileSize: fs.statSync(destPath).size,
+                extraFields: {
+                  isGenerated: true,
+                  originalLocation: 'documents',
+                  movedToWorkspaceAt: new Date().toISOString()
+                }
+              }, slug)
+              console.log(`[EMBED-GEN] ✓ Metadata saved with generated flag`)
+            } catch (metaErr) {
+              console.error(`[EMBED-GEN] Failed to save metadata:`, metaErr)
+              // Don't fail the request if metadata fails
+            }
+            
+            return res.status(200).json({ 
+              ok: true, 
+              filename: fileName,
+              message: 'Document copied and embedded successfully'
+            })
+          } catch (embedErr) {
+            console.error(`[EMBED-GEN] Embedding failed:`, embedErr)
+            // File was copied successfully, but embedding failed
+            return res.status(200).json({
+              ok: true,
+              filename: fileName,
+              embeddingWarning: `Document copied but embedding failed: ${(embedErr as Error).message}`
+            })
+          }
+        } else {
+          // No workspace, just copy the file
+          return res.status(200).json({ 
+            ok: true, 
+            filename: fileName,
+            message: 'Document copied successfully (no workspace to embed)'
+          })
+        }
+      } catch (error) {
+        console.error(`[EMBED-GEN] Failed to copy/embed document:`, error)
+        return res.status(500).json({ error: `Failed to copy document: ${(error as Error).message}` })
+      }
+    }
+  )
+})
+
 export default router
 

@@ -6,6 +6,9 @@ import { getDB } from './storage'
 import { logInfo, logError } from '../utils/logger'
 import { analyzeSpreadsheet, type SpreadsheetAnalysis } from './fileAnalyzer'
 
+// Track logged metadata loads to avoid spam
+const loggedTemplateMetadataLoads = new Set<string>()
+
 /**
  * Template metadata structure focusing on template characteristics and requirements
  * (HOW/WHY of the template, not the data content)
@@ -545,7 +548,11 @@ export function loadTemplateMetadata(templateSlug: string): Promise<TemplateMeta
           logError('[TEMPLATE-METADATA-DB] Failed to load:', err)
           reject(err)
         } else if (row) {
-          logInfo(`[TEMPLATE-METADATA-DB] Loaded metadata for ${templateSlug}`)
+          // Only log once per template to avoid spam
+          if (!loggedTemplateMetadataLoads.has(templateSlug)) {
+            logInfo(`[TEMPLATE-METADATA-DB] Loaded metadata for ${templateSlug}`)
+            loggedTemplateMetadataLoads.add(templateSlug)
+          }
           resolve(rowToMetadata(row))
         } else {
           logInfo(`[TEMPLATE-METADATA-DB] No metadata found for ${templateSlug}`)

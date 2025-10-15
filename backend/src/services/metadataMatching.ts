@@ -5,6 +5,9 @@ import { anythingllmRequest } from './anythingllm'
 import { getDB } from './storage'
 import { logInfo, logError } from '../utils/logger'
 
+// Track logged metadata matching to avoid spam
+const loggedMetadataMatching = new Set<string>()
+
 /**
  * Match result containing relevance score and reasoning
  */
@@ -353,7 +356,12 @@ export async function buildMetadataEnhancedContext(
     }
   }
 
-  logInfo(`[METADATA-MATCHING] Building context for ${documents.length} documents against template ${templateSlug}`)
+  // Only log once per template to avoid spam
+  const matchingLogKey = `${templateSlug}:${documents.length}`
+  if (!loggedMetadataMatching.has(matchingLogKey)) {
+    logInfo(`[METADATA-MATCHING] Building context for ${documents.length} documents against template ${templateSlug}`)
+    loggedMetadataMatching.add(matchingLogKey)
+  }
 
   // Use stored template relevance from document metadata if available
   const relevantDocuments: DocumentMatch[] = documents.map((doc: DocumentMetadata) => {
@@ -384,7 +392,10 @@ export async function buildMetadataEnhancedContext(
     }
   }).sort((a, b) => b.relevanceScore - a.relevanceScore)
 
-  logInfo(`[METADATA-MATCHING] Context built, top score: ${relevantDocuments[0]?.relevanceScore || 0}/10`)
+  // Only log score once per template
+  if (!loggedMetadataMatching.has(matchingLogKey)) {
+    logInfo(`[METADATA-MATCHING] Context built, top score: ${relevantDocuments[0]?.relevanceScore || 0}/10`)
+  }
 
   // Build prompt enhancement based on metadata
   let promptEnhancement = ''

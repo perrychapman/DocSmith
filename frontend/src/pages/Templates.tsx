@@ -9,7 +9,7 @@ import { Badge } from "../components/ui/badge";
 import { Icon } from "../components/icons";
 import { Progress } from "../components/ui/progress";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
-import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "../components/ui/tooltip";
 import { DocxPreview } from "../components/DocxPreview";
 import { TemplateMetadataModal, type TemplateMetadata } from "../components/TemplateMetadataModal";
 import { useTemplateMetadata } from "../contexts/TemplateMetadataContext";
@@ -509,7 +509,7 @@ export default function TemplatesPage() {
         </div>
         <div className="flex items-center gap-2">
           <Tooltip>
-            <TooltipTrigger>
+            <TooltipTrigger asChild>
               <Button 
                 variant="outline" 
                 size="sm"
@@ -528,7 +528,7 @@ export default function TemplatesPage() {
           </Tooltip>
           
           <Tooltip>
-            <TooltipTrigger>
+            <TooltipTrigger asChild>
               <Button 
                 variant="outline" 
                 size="sm"
@@ -791,7 +791,7 @@ export default function TemplatesPage() {
                                   {/* Compile button - always visible on desktop, hidden on mobile */}
                                   <div className="hidden xl:flex items-center gap-1 sm:gap-2 shrink-0">
                                     <Tooltip>
-                                      <TooltipTrigger>
+                                      <TooltipTrigger asChild>
                                       <Button
                                         size="icon"
                                         variant={hadError ? "outline" : "default"}
@@ -817,7 +817,7 @@ export default function TemplatesPage() {
                                     <TooltipContent>{compileTooltip}</TooltipContent>
                                   </Tooltip>
                                   <Tooltip>
-                                    <TooltipTrigger>
+                                    <TooltipTrigger asChild>
                                       <Button
                                         size="icon"
                                         variant="ghost"
@@ -838,7 +838,7 @@ export default function TemplatesPage() {
                                     <TooltipContent>Open Folder</TooltipContent>
                                   </Tooltip>
                                   <Tooltip>
-                                    <TooltipTrigger>
+                                    <TooltipTrigger asChild>
                                       <Button
                                         size="icon"
                                         variant="ghost"
@@ -869,7 +869,7 @@ export default function TemplatesPage() {
                                   </Tooltip>
                                   {t.hasFullGen && (
                                     <Tooltip>
-                                      <TooltipTrigger>
+                                      <TooltipTrigger asChild>
                                         <Button
                                           size="icon"
                                           variant="ghost"
@@ -884,7 +884,7 @@ export default function TemplatesPage() {
                                     </Tooltip>
                                   )}
                                   <Tooltip>
-                                    <TooltipTrigger>
+                                    <TooltipTrigger asChild>
                                       <Button
                                         size="icon"
                                         variant="destructive"
@@ -902,7 +902,7 @@ export default function TemplatesPage() {
                               {/* All buttons row - visible on mobile below text */}
                               <div className="flex xl:hidden items-center gap-1 border-t pt-2">
                                   <Tooltip>
-                                    <TooltipTrigger>
+                                    <TooltipTrigger asChild>
                                       <Button
                                         size="icon"
                                         variant={hadError ? "outline" : "default"}
@@ -928,7 +928,7 @@ export default function TemplatesPage() {
                                     <TooltipContent>{compileTooltip}</TooltipContent>
                                   </Tooltip>
                                   <Tooltip>
-                                    <TooltipTrigger>
+                                    <TooltipTrigger asChild>
                                       <Button
                                         size="icon"
                                         variant="ghost"
@@ -949,7 +949,7 @@ export default function TemplatesPage() {
                                     <TooltipContent>Open Folder</TooltipContent>
                                   </Tooltip>
                                   <Tooltip>
-                                    <TooltipTrigger>
+                                    <TooltipTrigger asChild>
                                       <Button
                                         size="icon"
                                         variant="ghost"
@@ -980,7 +980,7 @@ export default function TemplatesPage() {
                                   </Tooltip>
                                   {t.hasFullGen && (
                                     <Tooltip>
-                                      <TooltipTrigger>
+                                      <TooltipTrigger asChild>
                                         <Button
                                           size="icon"
                                           variant="ghost"
@@ -995,7 +995,7 @@ export default function TemplatesPage() {
                                     </Tooltip>
                                   )}
                                   <Tooltip>
-                                    <TooltipTrigger>
+                                    <TooltipTrigger asChild>
                                       <Button
                                         size="icon"
                                         variant="destructive"

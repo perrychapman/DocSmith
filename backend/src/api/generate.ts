@@ -109,7 +109,7 @@ router.post("/", async (req, res) => {
               try {
                 if (forceRefresh || !(logs.includes('ai-cache:hit'))) {
                 stepStartRec('analyzeTemplate')
-                logAndPush('Analyzing template structure and workspace data...')
+                logAndPush('[ANALYSIS] Analyzing template structure and workspace data...')
                 let documentAnalysis = ''
                 let metadataContext = ''
                 try {
@@ -122,6 +122,9 @@ router.post("/", async (req, res) => {
                   
                   if (enhancedCtx.templateMetadata) {
                     const meta = enhancedCtx.templateMetadata
+                    if (meta.templateType) {
+                      logAndPush(`[METADATA] Template type: ${meta.templateType}`)
+                    }
                     if (meta.purpose) {
                       logAndPush(`[METADATA] Template purpose: ${meta.purpose.substring(0, 100)}${meta.purpose.length > 100 ? '...' : ''}`)
                     }
@@ -137,7 +140,7 @@ router.post("/", async (req, res) => {
                     logAndPush(`[METADATA] Found ${enhancedCtx.relevantDocuments.length} relevant workspace document(s)`)
                     const top5 = enhancedCtx.relevantDocuments.slice(0, 5)
                     top5.forEach((doc, idx) => {
-                      logAndPush(`[METADATA]   ${idx + 1}. ${doc.filename} (relevance: ${doc.relevanceScore}/10)`)
+                      logAndPush(`[METADATA]   ${idx + 1}. ${doc.filename} (relevance: ${doc.relevanceScore}/10) - ${doc.reasoning.substring(0, 80)}${doc.reasoning.length > 80 ? '...' : ''}`)
                     })
                   } else {
                     logAndPush('[METADATA] No relevant documents found - using general workspace query')
@@ -147,15 +150,19 @@ router.post("/", async (req, res) => {
                   metadataContext = enhancedCtx.promptEnhancement + enhancedCtx.documentSummaries
                   
                   if ((tpl as any).templatePath && fs.existsSync((tpl as any).templatePath)) {
+                    logAndPush('[ANALYSIS] Analyzing template document structure...')
                     documentAnalysis = await analyzeDocumentIntelligently(
                       (tpl as any).templatePath,
                       String(slug),
                       wsForGen,
                       'generation'
                     )
+                    if (documentAnalysis) {
+                      logAndPush('[ANALYSIS] Template structure analysis complete')
+                    }
                   }
                 } catch (analysisErr) {
-                  logAndPush(`Analysis warning: ${(analysisErr as Error).message}`)
+                  logAndPush(`[ANALYSIS] Warning: ${(analysisErr as Error).message}`)
                 }
                 stepOkRec('analyzeTemplate')
                 
@@ -193,26 +200,26 @@ CURRENT GENERATOR CODE:
 ${tsCode}
 \`\`\``
                 stepStartRec('aiUpdate')
-                logAndPush(`Sending ${((tpl as any).kind === 'excel') ? 'Excel' : 'DOCX'} generation request to workspace: ${wsForGen}`)
-                logAndPush(`Prompt size: ${aiPrompt.length} chars (${documentAnalysis.length} analysis, ${metadataContext.length} metadata)`)
+                logAndPush(`[AI] Sending ${((tpl as any).kind === 'excel') ? 'Excel' : 'DOCX'} generation request to workspace: ${wsForGen}`)
+                logAndPush(`[AI] Prompt size: ${aiPrompt.length} chars (analysis: ${documentAnalysis.length}, metadata: ${metadataContext.length})`)
                 const r = await anythingllmRequest<any>(`/workspace/${encodeURIComponent(wsForGen)}/chat`, 'POST', { message: aiPrompt, mode: 'query' })
                 const t = String(r?.textResponse || r?.message || r || '')
-                logAndPush(`AI response received (${t.length} chars)`)
+                logAndPush(`[AI] Response received (${t.length} chars)`)
                 const m = t.match(/```[a-z]*\s*([\s\S]*?)```/i)
                 const codeOut = (m && m[1]) ? m[1] : t
                 if (m && m[1]) {
-                  logAndPush('Extracted code from markdown fence blocks')
+                  logAndPush('[AI] Extracted code from markdown fence blocks')
                 }
                 if (!codeOut || !/export\s+async\s+function\s+generate\s*\(/.test(codeOut)) throw new Error('AI did not return a valid generate function')
                 tsCode = codeOut.trim()
-                logAndPush(`AI-enhanced generator ready (${tsCode.length} chars)`)
+                logAndPush(`[AI] Enhanced generator ready (${tsCode.length} chars)`)
                 logs.push('ai-modified:ok')
-                logAndPush('ai-modified:ok')
+                logAndPush('[GENERATION] AI enhancement complete')
                 stepOkRec('aiUpdate')
                 try { fs.writeFileSync(cacheFile, tsCode, 'utf-8') } catch {}
                 } else {
                   logs.push('ai-cache:used')
-                  logAndPush('ai-cache:used')
+                  logAndPush('[GENERATION] Using cached AI-enhanced generator')
                 }
               } catch (e:any) {
                 const errMsg = `AI could not update generator: ${e?.message || e}`
@@ -221,7 +228,15 @@ ${tsCode}
                 return res.status(502).json({ error: errMsg, jobId: job.id })
               }
               if (isCancelled(job.id)) { logAndPush('cancelled'); return res.status(499).json({ error: 'cancelled', jobId: job.id }) }
+              
+              stepStartRec('transpile')
+              logAndPush('[TRANSPILE] Compiling TypeScript generator to JavaScript...')
               const jsOut = ts.transpileModule(tsCode, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2019 } })
+              logAndPush(`[TRANSPILE] Transpilation complete (${jsOut.outputText.length} chars JavaScript)`)
+              stepOkRec('transpile')
+              
+              stepStartRec('execute')
+              logAndPush('[EXECUTE] Loading generator module into sandbox...')
               const sandbox: any = { module: { exports: {} }, console }
               ;(sandbox as any).exports = (sandbox as any).module.exports
               vm.createContext(sandbox)
@@ -240,10 +255,12 @@ ${tsCode}
               }
               if (typeof generateFull !== 'function') {
                 try { logs.push(`exportsKeys:${Object.keys(mod||{}).join(',')}`) } catch {}
-                logAndPush('error:generate-missing')
+                logAndPush('[EXECUTE] Error: generate function not found in module')
                 markJobError(job.id, 'generate function missing')
                 return res.status(502).json({ error: 'generate function missing', jobId: job.id })
               }
+              logAndPush('[EXECUTE] Generator module loaded successfully')
+              
               if (typeof generateFull === 'function') {
                 if (isCancelled(job.id)) { logAndPush('cancelled'); return res.status(499).json({ error: 'cancelled', jobId: job.id }) }
                 
@@ -476,16 +493,26 @@ ${tsCode}
                   htmlToDocx: async (html: string) => { return await (htmlToDocx as any)(String(html || '')) }
                 }
                 if (isCancelled(job.id)) { logAndPush('cancelled'); return res.status(499).json({ error: 'cancelled', jobId: job.id }) }
+                
+                logAndPush('[EXECUTE] Running generator function with workspace toolkit...')
                 const result = await generateFull(toolkit, builder, context)
+                logAndPush('[EXECUTE] Generator execution complete')
+                stepOkRec('execute')
+                
                 if ((tpl as any).kind === 'docx') {
                   if (!result || (!('wml' in (result as any)) && !('bodyXml' in (result as any)))) {
-                    logAndPush('error:no-wml')
+                    logAndPush('[EXECUTE] Error: Generator did not return WML/bodyXml')
                     markJobError(job.id, 'Full generator did not return WML/bodyXml')
                     return res.status(502).json({ error: 'Full generator did not return WML/bodyXml', jobId: job.id })
                   }
                   const inner = String((result as any).wml || (result as any).bodyXml || '')
+                  logAndPush(`[MERGE] Merging generated content (${inner.length} chars) into template...`)
                   if (isCancelled(job.id)) { logAndPush('cancelled'); return res.status(499).json({ error: 'cancelled', jobId: job.id }) }
+                  
+                  stepStartRec('merge')
                   const merged = (await import('../services/docxCompose')).mergeWmlIntoDocxTemplate(fs.readFileSync((tpl as any).templatePath), inner)
+                  logAndPush(`[MERGE] Document merge complete (${merged.length} bytes)`)
+                  stepOkRec('merge')
                   
                   const dt = new Date()
                   const dtStr = `${dt.getFullYear()}${String(dt.getMonth()+1).padStart(2,'0')}${String(dt.getDate()).padStart(2,'0')}_${String(dt.getHours()).padStart(2,'0')}${String(dt.getMinutes()).padStart(2,'0')}${String(dt.getSeconds()).padStart(2,'0')}`
@@ -495,19 +522,28 @@ ${tsCode}
                   const baseName = filename || defaultBase
                   const fnameLocal = baseName
                   const outPathLocal = path.join(docsDir, fnameLocal + '.docx')
+                  logAndPush(`[OUTPUT] Writing document: ${path.basename(outPathLocal)}`)
                   try { jobLog(job.id, `outfile:${path.basename(outPathLocal)}`) } catch {}
                   fs.writeFileSync(outPathLocal, merged)
+                  logAndPush('[OUTPUT] Document generation complete!')
                   
                   markJobDone(job.id, { path: outPathLocal, name: path.basename(outPathLocal) }, { usedWorkspace })
                   return res.status(201).json({ ok: true, file: { path: outPathLocal, name: path.basename(outPathLocal) }, ...(usedWorkspace ? { usedWorkspace } : {}), logs: [...logs, 'fullgen:ok'], jobId: job.id })
                 } else if ((tpl as any).kind === 'excel') {
                   if (!result || !('sheets' in (result as any))) {
-                    logAndPush('error:no-sheets')
+                    logAndPush('[EXECUTE] Error: Generator did not return sheets for Excel')
                     markJobError(job.id, 'Full generator did not return sheets for Excel')
                     return res.status(502).json({ error: 'Full generator did not return sheets for Excel', jobId: job.id })
                   }
+                  const sheetCount = Array.isArray((result as any).sheets) ? (result as any).sheets.length : 0
+                  logAndPush(`[MERGE] Merging ${sheetCount} sheet(s) into Excel template...`)
                   if (isCancelled(job.id)) { logAndPush('cancelled'); return res.status(499).json({ error: 'cancelled', jobId: job.id }) }
-                  const mergedBuf = await (await import('../services/excelCompose')).mergeOpsIntoExcelTemplate(fs.readFileSync((tpl as any).templatePath), result)
+                  
+                  stepStartRec('merge')
+                  const mergedBuf = await (await import('../services/excelComposeSheetJS')).mergeOpsIntoExcelTemplate(fs.readFileSync((tpl as any).templatePath), result)
+                  logAndPush(`[MERGE] Excel merge complete (${mergedBuf.length} bytes)`)
+                  stepOkRec('merge')
+                  
                   const dt = new Date()
                   const dtStr = `${dt.getFullYear()}${String(dt.getMonth()+1).padStart(2,'0')}${String(dt.getDate()).padStart(2,'0')}_${String(dt.getHours()).padStart(2,'0')}${String(dt.getMinutes()).padStart(2,'0')}${String(dt.getSeconds()).padStart(2,'0')}`
                   const templateName = safeFileName(getTemplateDisplayName((tpl as any).dir, String(slug)))
@@ -516,8 +552,10 @@ ${tsCode}
                   const baseName = filename || defaultBase
                   const fnameLocal = baseName
                   const outPathLocal = path.join(docsDir, fnameLocal + '.xlsx')
+                  logAndPush(`[OUTPUT] Writing spreadsheet: ${path.basename(outPathLocal)}`)
                   try { jobLog(job.id, `outfile:${path.basename(outPathLocal)}`) } catch {}
                   fs.writeFileSync(outPathLocal, mergedBuf)
+                  logAndPush('[OUTPUT] Spreadsheet generation complete!')
                   
                   markJobDone(job.id, { path: outPathLocal, name: path.basename(outPathLocal) }, { usedWorkspace })
                   return res.status(201).json({ ok: true, file: { path: outPathLocal, name: path.basename(outPathLocal) }, ...(usedWorkspace ? { usedWorkspace } : {}), logs: [...logs, 'fullgen:ok'], jobId: job.id })
@@ -800,7 +838,7 @@ router.get("/stream", async (req, res) => {
         if (isCancelled(job.id)) { jobLog(job.id, 'cancelled'); send({ type: 'error', error: 'cancelled' }); return res.end() }
         logAndPush('merge:start')
         stepStartRec('mergeWrite')
-        const mergedBuf = await (await import('../services/excelCompose')).mergeOpsIntoExcelTemplate(fs.readFileSync((tpl as any).templatePath), result)
+        const mergedBuf = await (await import('../services/excelComposeSheetJS')).mergeOpsIntoExcelTemplate(fs.readFileSync((tpl as any).templatePath), result)
         logAndPush('merge:ok')
         const dt2 = new Date()
         const dtStr2 = `${dt2.getFullYear()}${String(dt2.getMonth()+1).padStart(2,'0')}${String(dt2.getDate()).padStart(2,'0')}_${String(dt2.getHours()).padStart(2,'0')}${String(dt2.getMinutes()).padStart(2,'0')}${String(dt2.getSeconds()).padStart(2,'0')}`

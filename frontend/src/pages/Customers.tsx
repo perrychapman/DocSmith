@@ -7,7 +7,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, DialogDescription, DialogClose } from "../components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Icon } from "../components/icons";
-import { Maximize2, Minimize2, Search, ExternalLink, Download, FileText, FileSpreadsheet, FileCode, FileQuestion, FileType, Info, Loader2, Pin, PinOff, RefreshCw, Eye, AlertCircle, Trash } from "lucide-react";
+import { Maximize2, Minimize2, Search, ExternalLink, Download, FileText, FileSpreadsheet, FileCode, FileQuestion, FileType, Info, Loader2, Pin, PinOff, RefreshCw, Eye, AlertCircle, Trash, Upload } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "../components/ui/tooltip";
 import { A, apiFetch, apiEventSource } from "../lib/api";
 import WorkspaceChat from "../components/WorkspaceChat";
@@ -77,7 +77,7 @@ export function CustomersPage() {
   // Metadata modal state
   const [metadataModal, setMetadataModal] = React.useState<DocumentMetadata | null>(null);
   const { metadataProcessing, startTracking, setRefreshCallback } = useMetadata();
-  const [uploadMetadataCache, setUploadMetadataCache] = React.useState<Map<string, boolean>>(new Map());
+  const [uploadMetadataCache, setUploadMetadataCache] = React.useState<Map<string, { hasMetadata: boolean; isGenerated?: boolean }>>(new Map());
 
   // Track workspace-level AI operations to disable concurrent operations
   const hasActiveAIOperation = generating || metadataProcessing.size > 0;
@@ -115,6 +115,7 @@ export function CustomersPage() {
   // Regenerate dialog state
   const [regenerateOpen, setRegenerateOpen] = React.useState(false);
   const [regenerateDoc, setRegenerateDoc] = React.useState<{ name: string; customerId: number } | null>(null);
+  const [regenerateDocJobInfo, setRegenerateDocJobInfo] = React.useState<{ template: string; instructions?: string; pinnedDocuments?: string[] } | null>(null);
   const [revisionInstructions, setRevisionInstructions] = React.useState('');
   const [regenerating, setRegenerating] = React.useState(false);
   
@@ -122,6 +123,13 @@ export function CustomersPage() {
   const [deleteGenDocOpen, setDeleteGenDocOpen] = React.useState(false);
   const [deleteGenDocName, setDeleteGenDocName] = React.useState<string | null>(null);
   const [deletingGenDoc, setDeletingGenDoc] = React.useState(false);
+  
+  // Upload/embed generated document state
+  const [uploadingGenDoc, setUploadingGenDoc] = React.useState(false);
+  const [uploadGenDocName, setUploadGenDocName] = React.useState<string | null>(null);
+  
+  // Track which generated documents have been uploaded to workspace
+  const [uploadedGenDocs, setUploadedGenDocs] = React.useState<Set<string>>(new Set());
   
   const rowsClass = panelMode === 'split'
     ? 'grid grid-rows-[minmax(0,2fr)_minmax(0,1fr)]'
@@ -385,6 +393,57 @@ export function CustomersPage() {
     else setGeneratedDocs([]);
     return () => { ignore = true };
   }, [selectedId]);
+
+  // Cross-reference generated docs with uploads to track which have been uploaded to workspace
+  React.useEffect(() => {
+    if (!uploads.length || !generatedDocs.length) {
+      setUploadedGenDocs(new Set());
+      return;
+    }
+    
+    // Create a set of upload filenames for quick lookup
+    const uploadFilenames = new Set(uploads.map(u => u.name));
+    
+    // Check which generated docs exist in uploads
+    const uploaded = new Set<string>();
+    generatedDocs.forEach(doc => {
+      if (uploadFilenames.has(doc.name)) {
+        uploaded.add(doc.name);
+      }
+    });
+    
+    setUploadedGenDocs(uploaded);
+  }, [uploads, generatedDocs]);
+
+  // Load metadata for uploaded documents to check if they're generated
+  React.useEffect(() => {
+    if (!selectedId || !uploads.length) return;
+    
+    let ignore = false;
+    async function loadUploadMetadata() {
+      for (const upload of uploads) {
+        // Skip if already cached
+        if (uploadMetadataCache.has(upload.name)) continue;
+        
+        try {
+          const r = await apiFetch(`/api/uploads/${selectedId}/metadata?name=${encodeURIComponent(upload.name)}`);
+          const data = await r.json();
+          
+          const hasMetadata = data.metadata && (data.metadata.documentType || data.metadata.purpose || (data.metadata.keyTopics && data.metadata.keyTopics.length > 0));
+          const isGenerated = data.metadata?.extraFields?.isGenerated === true;
+          
+          if (!ignore) {
+            setUploadMetadataCache(prev => new Map(prev).set(upload.name, { hasMetadata, isGenerated }));
+          }
+        } catch (err) {
+          console.error(`Failed to load metadata for ${upload.name}:`, err);
+        }
+      }
+    }
+    
+    loadUploadMetadata();
+    return () => { ignore = true };
+  }, [uploads, selectedId]);
 
   // Load existing gen_cards for the workspace
   React.useEffect(() => {
@@ -1124,101 +1183,234 @@ export function CustomersPage() {
     try {
       setRegenerating(true);
       
-      // Step 1: Find the original job to get template slug and pinned documents
-      let templateSlug = '';
-      let pinnedDocuments: string[] | undefined;
+      // Use cached job info if available, otherwise fetch it
+      let templateSlug = regenerateDocJobInfo?.template || '';
+      let originalInstructions = regenerateDocJobInfo?.instructions || '';
+      let pinnedDocuments = regenerateDocJobInfo?.pinnedDocuments;
       
-      try {
-        const jobsResponse = await apiFetch('/api/generate/jobs');
-        const jobsData = await jobsResponse.json();
-        const jobs = Array.isArray(jobsData?.jobs) ? jobsData.jobs : [];
-        
-        // Find the most recent completed job for this customer/filename
-        const matchingJob = jobs.find((j: any) => 
-          j.customerId === selectedId && 
-          j.file?.name === regenerateDoc.name &&
-          j.status === 'done'
-        );
-        
-        if (matchingJob) {
-          templateSlug = matchingJob.template;
-          pinnedDocuments = matchingJob.pinnedDocuments;
+      // If we don't have cached job info, fetch it
+      if (!regenerateDocJobInfo) {
+        try {
+          const jobsResponse = await apiFetch('/api/generate/jobs');
+          const jobsData = await jobsResponse.json();
+          const jobs = Array.isArray(jobsData?.jobs) ? jobsData.jobs : [];
           
-          // Step 2: Re-pin the original documents
-          if (pinnedDocuments && pinnedDocuments.length > 0 && wsSlug) {
-            toast.info(`Re-pinning ${pinnedDocuments.length} document(s)...`);
-            for (const docPath of pinnedDocuments) {
-              try {
-                await apiFetch(`/api/anythingllm/workspace/${encodeURIComponent(wsSlug)}/update-pin`, {
-                  method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
-                  body: JSON.stringify({ docPath, pinStatus: true })
-                });
-              } catch (err) {
-                console.error(`Failed to re-pin document ${docPath}:`, err);
-              }
-            }
+          const matchingJob = jobs.find((j: any) => 
+            j.customerId === selectedId && 
+            j.file?.name === regenerateDoc.name &&
+            j.status === 'done'
+          );
+          
+          if (matchingJob) {
+            templateSlug = matchingJob.template;
+            originalInstructions = matchingJob.instructions || '';
+            pinnedDocuments = matchingJob.pinnedDocuments;
+          } else {
+            toast.error('Unable to find original generation job for this document');
+            setRegenerating(false);
+            return;
           }
-        } else {
-          toast.error('Unable to find original generation job for this document');
+        } catch (err) {
+          console.error('Failed to retrieve original job:', err);
+          toast.error('Failed to retrieve original job information');
           setRegenerating(false);
           return;
         }
-      } catch (err) {
-        console.error('Failed to retrieve original job:', err);
-        toast.error('Failed to retrieve original job information');
-        setRegenerating(false);
-        return;
       }
-
-      // Step 3: Call generate API with revision instructions and pinned documents
-      const response = await apiFetch('/api/generate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          customerId: selectedId,
-          template: templateSlug,
-          filename: regenerateDoc.name,
-          instructions: revisionInstructions,
-          pinnedDocuments
-        })
-      });
-
-      if (!response.ok) {
-        const errorText = await response.text().catch(() => 'Unknown error');
-        throw new Error(`Failed to regenerate document: ${response.status} - ${errorText}`);
-      }
-
-      toast.success('Document regeneration started');
-      setRegenerateOpen(false);
-      setRevisionInstructions('');
       
-      // Refresh generated docs list (inline API call)
-      try {
-        const r = await apiFetch(`/api/documents/${selectedId}/files`);
-        if (r.ok) {
-          const data: UploadItem[] = await r.json();
-          const sorted = Array.isArray(data) ? data.sort((a, b) => 
-            new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime()
-          ) : [];
-          setGeneratedDocs(sorted);
+      // Step 1: Re-pin the original documents if needed
+      if (pinnedDocuments && pinnedDocuments.length > 0 && wsSlug) {
+        toast.info(`Re-pinning ${pinnedDocuments.length} document(s)...`);
+        
+        // Track which documents were pinned for later unpinning
+        const pinnedDocNames = new Set<string>();
+        
+        for (const docPath of pinnedDocuments) {
+          try {
+            await apiFetch(`/api/anythingllm/workspace/${encodeURIComponent(wsSlug)}/update-pin`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ docPath, pinStatus: true })
+            });
+            
+            // Extract filename from docPath and track it
+            // docPath format is typically "customerName/filename.ext-uuid.json"
+            const filename = docPath.split('/').pop()?.replace(/-[a-f0-9-]+\.json$/, '') || '';
+            if (filename) {
+              pinnedDocNames.add(filename);
+            }
+          } catch (err) {
+            console.error(`Failed to re-pin document ${docPath}:`, err);
+          }
         }
-      } catch (err) {
-        console.error('Failed to refresh generated docs:', err);
+        
+        // Update genPinnedDocs so unpinning logic can find them later
+        setGenPinnedDocs(pinnedDocNames);
+      } else {
+        // No documents to pin for regeneration
+        setGenPinnedDocs(new Set());
       }
+
+      // Step 2: Combine original instructions with revision instructions
+      const combinedInstructions = originalInstructions 
+        ? `${originalInstructions}\n\nREVISIONS:\n${revisionInstructions}`
+        : revisionInstructions;
+
+      // Step 4: Use streaming API for real-time updates and gen_cards (like regular generation)
+      setGenSteps({}); 
+      setGenProgress(0); 
+      setGenError(null);
+      setRegenerateOpen(false); // Close dialog before starting
+      setRevisionInstructions('');
+      setRegenerateDocJobInfo(null); // Clear cached job info
       
-      // Refresh chat cards (inline API call)
-      if (wsSlug) {
+      const instructionsParam = combinedInstructions ? `&instructions=${encodeURIComponent(combinedInstructions)}` : '';
+      const pinnedDocsParam = pinnedDocuments && pinnedDocuments.length > 0 
+        ? `&pinnedDocuments=${encodeURIComponent(JSON.stringify(pinnedDocuments))}` 
+        : '';
+      const url = `/api/generate/stream?customerId=${encodeURIComponent(String(selectedId))}&template=${encodeURIComponent(templateSlug)}${instructionsParam}${pinnedDocsParam}`;
+      const es = apiEventSource(url);
+      genEventRef.current = es;
+      let fileName: string | null = null;
+      
+      es.onmessage = (ev) => {
         try {
-          const response = await A.genCardsByWorkspace(wsSlug);
-          if (response?.cards) {
-            const validCards = Array.isArray(response.cards) ? response.cards.filter((c: any) => c.id) : [];
-            setChatCards(validCards.sort((a: any, b: any) => (a.timestamp || 0) - (b.timestamp || 0)));
+          const data = JSON.parse(ev.data || '{}');
+          if (data?.type === 'log') {
+            // suppress
+          } else if (data?.type === 'info') {
+            if (data.jobId) {
+              const jid = String(data.jobId);
+              setGenJobId(jid);
+              // Inject chat cards for regeneration job
+              setChatCards((prev) => {
+                const next = prev.filter((c) => c.id !== jid && c.id !== `${jid}-reply`);
+                const timestamp = Date.now();
+                
+                const userCard = {
+                  id: jid,
+                  side: 'user' as const,
+                  template: templateSlug || undefined,
+                  jobId: jid,
+                  jobStatus: 'running' as const,
+                  aiContext: combinedInstructions || undefined,
+                  timestamp
+                };
+                
+                const assistantCard = {
+                  id: `${jid}-reply`,
+                  side: 'assistant' as const,
+                  template: templateSlug || undefined,
+                  jobId: jid,
+                  jobStatus: 'running' as const,
+                  timestamp
+                };
+                
+                next.push(userCard, assistantCard);
+                
+                if (wsSlug) {
+                  A.upsertGenCard({ id: jid, workspaceSlug: wsSlug, side: 'user', template: templateSlug || undefined, jobId: jid, jobStatus: 'running' as const, aiContext: combinedInstructions || undefined, timestamp }).catch(() => {});
+                  A.upsertGenCard({ id: `${jid}-reply`, workspaceSlug: wsSlug, side: 'assistant', template: templateSlug || undefined, jobId: jid, jobStatus: 'running' as const, timestamp }).catch(() => {});
+                }
+                return next;
+              });
+            }
+          } else if (data?.type === 'step') {
+            const name = String(data.name || '');
+            const status = (String(data.status || 'start') as 'start' | 'ok');
+            const p = typeof data.progress === 'number' ? Math.max(0, Math.min(100, Math.floor(data.progress))) : null;
+            setGenSteps((prev) => ({ ...(prev || {}), [name]: status }));
+            if (p != null) setGenProgress(p);
+          } else if (data?.type === 'error') {
+            const errMsg = String(data.error || 'unknown');
+            setGenError(errMsg);
+            if (genJobId) {
+              const jid = genJobId;
+              const timestamp = Date.now();
+              setChatCards((prev) => prev.map((c) => 
+                c.id === `${jid}-reply` 
+                  ? { ...c, jobStatus: 'error' as const, timestamp } 
+                  : c
+              ));
+              if (wsSlug) {
+                A.upsertGenCard({ id: `${jid}-reply`, workspaceSlug: wsSlug, side: 'assistant', template: templateSlug || undefined, jobId: jid, jobStatus: 'error', timestamp }).catch(() => {});
+              }
+            }
+            toast.error(`Regeneration failed: ${errMsg}`);
+            if (es && typeof es.close === 'function') es.close();
+            genEventRef.current = null;
+            setRegenerating(false);
+            setGenJobId(null);
+          } else if (data?.type === 'done') {
+            if (data?.file?.name) fileName = String(data.file.name);
+            setGenProgress(100);
+            if (data?.jobId) {
+              const jid = String(data.jobId);
+              const now = Date.now();
+              setChatCards((prev) => {
+                const updated = prev.map((c) => 
+                  c.id === `${jid}-reply` 
+                    ? { ...c, jobStatus: 'done' as const, filename: fileName || c.filename, timestamp: now }
+                    : c
+                );
+                if (wsSlug) {
+                  A.upsertGenCard({ id: `${jid}-reply`, workspaceSlug: wsSlug, side: 'assistant', template: templateSlug || undefined, jobId: jid, jobStatus: 'done', filename: fileName || undefined, timestamp: now }).catch(() => {});
+                }
+                return updated;
+              });
+            }
+            toast.success('Document regenerated successfully');
+            
+            // Refresh generated docs
+            apiFetch(`/api/documents/${selectedId}/files`)
+              .then(r => r.json())
+              .then((data: UploadItem[]) => {
+                const sorted = Array.isArray(data) ? data.sort((a, b) => 
+                  new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime()
+                ) : [];
+                setGeneratedDocs(sorted);
+              })
+              .catch(() => {});
+            
+            if (es && typeof es.close === 'function') es.close();
+            genEventRef.current = null;
+            setRegenerating(false);
+            setGenJobId(null);
           }
         } catch (err) {
-          console.error('Failed to refresh gen cards:', err);
+          console.error('Stream parse error:', err);
         }
-      }
+      };
+      
+      es.onerror = (err) => {
+        console.error('Stream error:', err);
+        toast.error('Regeneration stream error');
+        if (genJobId) {
+          const jid = genJobId;
+          const now = Date.now();
+          setChatCards((prev) => prev.map((c) => 
+            c.id === `${jid}-reply` 
+              ? { ...c, jobStatus: 'error' as const, timestamp: now } 
+              : c
+          ));
+          if (wsSlug) { 
+            A.upsertGenCard({ 
+              id: `${jid}-reply`, 
+              workspaceSlug: wsSlug, 
+              side: 'assistant', 
+              template: templateSlug || undefined, 
+              jobId: jid, 
+              jobStatus: 'error', 
+              timestamp: now 
+            }).catch(() => { }); 
+          }
+        }
+        if (es && typeof es.close === 'function') es.close();
+        genEventRef.current = null;
+        setRegenerating(false);
+        setGenJobId(null);
+      };
+
     } catch (error) {
       console.error(error);
       const errorMsg = error instanceof Error ? error.message : 'Failed to regenerate document';
@@ -1264,6 +1456,67 @@ export function CustomersPage() {
       toast.error('Failed to delete document');
     } finally {
       setDeletingGenDoc(false);
+    }
+  }
+
+  async function embedGeneratedDoc(filename: string) {
+    if (!selectedId) {
+      toast.error('No customer selected');
+      return;
+    }
+
+    try {
+      setUploadingGenDoc(true);
+      setUploadGenDocName(filename);
+      
+      const toastId = (toast as any).loading ? (toast as any).loading("Uploading and embedding...") : undefined;
+
+      // Call backend endpoint to copy and embed the generated document
+      const response = await apiFetch(`/api/documents/${selectedId}/embed-generated`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error((errorData as any)?.error || 'Failed to embed document');
+      }
+
+      const json = await response.json().catch(() => ({}));
+      const uploadedFilename = (json as any)?.filename || filename;
+
+      // Start tracking metadata extraction
+      console.log('[EMBED-GEN] Starting metadata tracking for:', uploadedFilename);
+      startTracking(selectedId, uploadedFilename);
+
+      // Refresh uploads list
+      try {
+        const r2 = await apiFetch(`/api/uploads/${selectedId}`);
+        const d2: UploadItem[] = await r2.json();
+        setUploads(d2);
+      } catch (err) {
+        console.error('Failed to refresh uploads:', err);
+      }
+
+      if ((json as any)?.embeddingWarning) {
+        toast.warning?.((json as any).embeddingWarning) ?? toast.success("Uploaded; embedding may still be processing");
+      } else {
+        if (toastId) (toast as any).success("Embedding completed", { id: toastId });
+        else toast.success("Embedding completed");
+      }
+
+      // Add to uploaded set
+      setUploadedGenDocs(prev => new Set(prev).add(filename));
+
+      // Switch to uploaded tab to show the newly embedded document
+      setDocsTab('uploaded');
+    } catch (error) {
+      console.error('Failed to embed generated document:', error);
+      toast.error((error as Error).message || 'Failed to embed document');
+    } finally {
+      setUploadingGenDoc(false);
+      setUploadGenDocName(null);
     }
   }
 
@@ -1395,7 +1648,6 @@ export function CustomersPage() {
                           onKeyDown={(e) => {
                             if (e.key === "Enter" || e.key === " ") setSelectedId(c.id);
                           }}
-                          title={new Date(c.createdAt).toLocaleString()}
                         >
                           {/* Selection indicator */}
                           {selectedId === c.id && (
@@ -1427,7 +1679,7 @@ export function CustomersPage() {
                             {/* Right: actions (delete) */}
                             <div className="opacity-60 group-hover:opacity-100 transition-opacity duration-200 ml-2 flex items-center gap-1">
                               <Tooltip>
-                                <TooltipTrigger>
+                                <TooltipTrigger asChild>
                                   <Button
                                     size="icon"
                                     variant="destructive"
@@ -1438,12 +1690,12 @@ export function CustomersPage() {
                                       startDelete(c);
                                     }}
                                     aria-label={`Delete ${c.name}`}
-                                    title={`Delete ${c.name}`}
                                     className="h-7 w-7 sm:h-9 sm:w-9"
                                   >
                                     {deleting === c.name ? "." : <Icon.Trash className="h-3 w-3 sm:h-4 sm:w-4" />}
                                   </Button>
                                 </TooltipTrigger>
+                                <TooltipContent>Delete Customer</TooltipContent>
                               </Tooltip>
                             </div>
                           </div>
@@ -1491,13 +1743,14 @@ export function CustomersPage() {
                     <>
                       <Dialog>
                         <Tooltip>
-                          <TooltipTrigger>
+                          <TooltipTrigger asChild>
                             <DialogTrigger asChild>
-                              <Button size="icon" variant="ghost" aria-label="Recent jobs" title="Recent jobs">
+                              <Button size="icon" variant="ghost" aria-label="Recent jobs">
                                 <Icon.History className="h-4 w-4" />
                               </Button>
                             </DialogTrigger>
                           </TooltipTrigger>
+                          <TooltipContent>Recent Jobs</TooltipContent>
                         </Tooltip>
                         <DialogContent className="w-[95vw] sm:!max-w-6xl">
                           <DialogHeader>
@@ -1515,11 +1768,12 @@ export function CustomersPage() {
                         </DialogContent>
                       </Dialog>
                       <Tooltip>
-                        <TooltipTrigger>
+                        <TooltipTrigger asChild>
                           <Button size="icon" variant="ghost" onClick={() => setPanelMode(panelMode === 'chat' ? 'split' : 'chat')} aria-label={panelMode === 'chat' ? 'Collapse chat' : 'Expand chat'}>
                             {panelMode === 'chat' ? (<Minimize2 className="h-4 w-4" />) : (<Maximize2 className="h-4 w-4" />)}
                           </Button>
                         </TooltipTrigger>
+                        <TooltipContent>{panelMode === 'chat' ? 'Collapse' : 'Expand'} Chat</TooltipContent>
                       </Tooltip>
                     </>
                   )}
@@ -1553,13 +1807,14 @@ export function CustomersPage() {
                       <>
                         <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
                           <Tooltip>
-                            <TooltipTrigger>
+                            <TooltipTrigger asChild>
                               <DialogTrigger asChild>
                                 <Button disabled={!selectedId} size="icon" variant="ghost" aria-label="Upload document">
                                   <Icon.Upload className="h-4 w-4" />
                                 </Button>
                               </DialogTrigger>
                             </TooltipTrigger>
+                            <TooltipContent>Upload Document</TooltipContent>
                           </Tooltip>
                         <DialogContent>
                           <DialogHeader>
@@ -1655,7 +1910,7 @@ export function CustomersPage() {
                       </Dialog>
                       {/* Open uploads folder */}
                       <Tooltip>
-                        <TooltipTrigger>
+                        <TooltipTrigger asChild>
                           <Button
                             size="icon"
                             variant="ghost"
@@ -1675,6 +1930,7 @@ export function CustomersPage() {
                             <Icon.Folder className="h-4 w-4" />
                           </Button>
                         </TooltipTrigger>
+                        <TooltipContent>Open Uploads Folder</TooltipContent>
                       </Tooltip>
                     </>
                   )}
@@ -1682,7 +1938,7 @@ export function CustomersPage() {
                   {docsTab === 'generated' && (
                     <>
                       <Tooltip>
-                        <TooltipTrigger>
+                        <TooltipTrigger asChild>
                           <Button disabled={!selectedId || hasActiveAIOperation} size="icon" variant="ghost" aria-label="Generate document" onClick={() => setGenerateOpen(true)}>
                             <Icon.FileText className="h-4 w-4" />
                           </Button>
@@ -1693,7 +1949,7 @@ export function CustomersPage() {
                       </Tooltip>
                       {/* Open documents folder for generated docs */}
                       <Tooltip>
-                        <TooltipTrigger>
+                        <TooltipTrigger asChild>
                           <Button
                             size="icon"
                             variant="ghost"
@@ -1713,17 +1969,19 @@ export function CustomersPage() {
                             <Icon.Folder className="h-4 w-4" />
                           </Button>
                         </TooltipTrigger>
+                        <TooltipContent>Open Documents Folder</TooltipContent>
                       </Tooltip>
                     </>
                   )}
                   
                   {/* Expand/Collapse Documents - right most */}
                   <Tooltip>
-                    <TooltipTrigger>
+                    <TooltipTrigger asChild>
                       <Button size="icon" variant="ghost" onClick={() => setPanelMode(panelMode === 'docs' ? 'split' : 'docs')} aria-label={panelMode === 'docs' ? 'Collapse documents' : 'Expand documents'}>
                         {panelMode === 'docs' ? (<Minimize2 className="h-4 w-4" />) : (<Maximize2 className="h-4 w-4" />)}
                       </Button>
                     </TooltipTrigger>
+                    <TooltipContent>{panelMode === 'docs' ? 'Collapse' : 'Expand'} Documents</TooltipContent>
                   </Tooltip>
                   </div>
                 </div>
@@ -1760,6 +2018,11 @@ export function CustomersPage() {
                                     >
                                       {u.name}
                                     </button>
+                                    {uploadMetadataCache.get(u.name)?.isGenerated && (
+                                      <Badge variant="secondary" className="mt-1">
+                                        Generated
+                                      </Badge>
+                                    )}
                                     <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                                       <span>{formatBytes(u.size)}</span>
                                       <span title={new Date(u.modifiedAt).toLocaleString()}>{formatRelativeTime(u.modifiedAt)}</span>
@@ -1768,7 +2031,7 @@ export function CustomersPage() {
                                   <div className="flex items-center gap-1 sm:gap-2 shrink-0">
                                     {/* Metadata Button */}
                                     <Tooltip>
-                                      <TooltipTrigger>
+                                      <TooltipTrigger asChild>
                                         <Button 
                                           size="icon" 
                                           variant="ghost" 
@@ -1783,7 +2046,8 @@ export function CustomersPage() {
                                               
                                               // Check if metadata exists
                                               const hasMetadata = data.metadata && (data.metadata.documentType || data.metadata.purpose || (data.metadata.keyTopics && data.metadata.keyTopics.length > 0));
-                                              setUploadMetadataCache(prev => new Map(prev).set(u.name, hasMetadata));
+                                              const isGenerated = data.metadata?.extraFields?.isGenerated === true;
+                                              setUploadMetadataCache(prev => new Map(prev).set(u.name, { hasMetadata, isGenerated }));
                                               
                                               if (!hasMetadata) {
                                                 // No metadata - trigger extraction (only if not generating)
@@ -1804,14 +2068,14 @@ export function CustomersPage() {
                                           }}
                                           style={
                                             // Hide button if generating AND no metadata
-                                            generating && uploadMetadataCache.get(u.name) === false
+                                            generating && uploadMetadataCache.get(u.name)?.hasMetadata === false
                                               ? { display: 'none' }
                                               : undefined
                                           }
                                         >
                                           {metadataProcessing.has(u.name) ? (
                                             <Loader2 className="h-4 w-4 animate-spin" />
-                                          ) : uploadMetadataCache.get(u.name) === false ? (
+                                          ) : uploadMetadataCache.get(u.name)?.hasMetadata === false ? (
                                             <RefreshCw className="h-4 w-4" />
                                           ) : (
                                             <Info className="h-4 w-4" />
@@ -1821,13 +2085,13 @@ export function CustomersPage() {
                                       <TooltipContent>
                                         {metadataProcessing.has(u.name) 
                                           ? 'Extracting metadata...' 
-                                          : uploadMetadataCache.get(u.name) === false 
+                                          : uploadMetadataCache.get(u.name)?.hasMetadata === false 
                                             ? 'Extract Metadata' 
                                             : 'View Metadata'}
                                       </TooltipContent>
                                     </Tooltip>
                                     <Tooltip>
-                                      <TooltipTrigger>
+                                      <TooltipTrigger asChild>
                                         <Button size="icon" variant="ghost" className="h-9 w-9" aria-label={`Download ${u.name}`} onClick={() => { const a = document.createElement('a'); a.href = `/api/uploads/${selectedId}/file?name=${encodeURIComponent(u.name)}`; a.download = u.name; document.body.appendChild(a); a.click(); a.remove(); }}>
                                           <Download className="h-4 w-4" />
                                         </Button>
@@ -1835,7 +2099,7 @@ export function CustomersPage() {
                                       <TooltipContent>Download</TooltipContent>
                                     </Tooltip>
                                     <Tooltip>
-                                      <TooltipTrigger>
+                                      <TooltipTrigger asChild>
                                         <Button 
                                           size="icon" 
                                           variant={pinnedDocs.has(u.name) ? "default" : "outline"}
@@ -1854,7 +2118,7 @@ export function CustomersPage() {
                                       <TooltipContent>{pinnedDocs.has(u.name) ? 'Unpin' : 'Pin'} Document</TooltipContent>
                                     </Tooltip>
                                     <Tooltip>
-                                      <TooltipTrigger>
+                                      <TooltipTrigger asChild>
                                         <Button size="icon" variant="destructive" className="h-9 w-9" disabled={uploading || deleting === u.name} onClick={() => deleteUpload(u.name)} aria-label={`Delete ${u.name}`}>
                                           {deleting === u.name ? '.' : <Icon.Trash className="h-4 w-4" />}
                                         </Button>
@@ -1940,6 +2204,11 @@ export function CustomersPage() {
                                       >
                                         {d.name}
                                       </button>
+                                      {uploadedGenDocs.has(d.name) && (
+                                        <Badge variant="default" className="mt-1">
+                                          In Workspace
+                                        </Badge>
+                                      )}
                                       <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                                         <span>{formatBytes(d.size)}</span>
                                         <span title={new Date(d.modifiedAt).toLocaleString()}>{formatRelativeTime(d.modifiedAt)}</span>
@@ -1947,15 +2216,59 @@ export function CustomersPage() {
                                     </div>
                                     <div className="flex items-center gap-1 sm:gap-2 shrink-0">
                                       <Tooltip>
-                                        <TooltipTrigger>
-                                          <Button size="icon" variant="ghost" className="h-9 w-9" aria-label="Regenerate with Revisions" onClick={() => { setRegenerateDoc({ name: d.name, customerId: selectedId }); setRegenerateOpen(true); }}>
+                                        <TooltipTrigger asChild>
+                                          <Button 
+                                            size="icon" 
+                                            variant="ghost" 
+                                            className="h-9 w-9" 
+                                            aria-label="Upload to Workspace" 
+                                            disabled={uploadingGenDoc && uploadGenDocName === d.name || uploadedGenDocs.has(d.name)}
+                                            onClick={() => embedGeneratedDoc(d.name)}
+                                          >
+                                            {uploadingGenDoc && uploadGenDocName === d.name ? (
+                                              <Loader2 className="h-4 w-4 animate-spin" />
+                                            ) : (
+                                              <Upload className="h-4 w-4" />
+                                            )}
+                                          </Button>
+                                        </TooltipTrigger>
+                                        <TooltipContent>
+                                          {uploadedGenDocs.has(d.name) ? 'Already in Workspace' : 'Upload to Workspace'}
+                                        </TooltipContent>
+                                      </Tooltip>
+                                      <Tooltip>
+                                        <TooltipTrigger asChild>
+                                          <Button size="icon" variant="ghost" className="h-9 w-9" aria-label="Regenerate with Revisions" onClick={async () => { 
+                                            setRegenerateDoc({ name: d.name, customerId: selectedId });
+                                            // Fetch job info
+                                            try {
+                                              const jobsResponse = await apiFetch('/api/generate/jobs');
+                                              const jobsData = await jobsResponse.json();
+                                              const jobs = Array.isArray(jobsData?.jobs) ? jobsData.jobs : [];
+                                              const matchingJob = jobs.find((j: any) => 
+                                                j.customerId === selectedId && 
+                                                j.file?.name === d.name &&
+                                                j.status === 'done'
+                                              );
+                                              if (matchingJob) {
+                                                setRegenerateDocJobInfo({
+                                                  template: matchingJob.template,
+                                                  instructions: matchingJob.instructions,
+                                                  pinnedDocuments: matchingJob.pinnedDocuments
+                                                });
+                                              }
+                                            } catch (err) {
+                                              console.error('Failed to fetch job info:', err);
+                                            }
+                                            setRegenerateOpen(true); 
+                                          }}>
                                             <RefreshCw className="h-4 w-4" />
                                           </Button>
                                         </TooltipTrigger>
                                         <TooltipContent>Regenerate with Revisions</TooltipContent>
                                       </Tooltip>
                                       <Tooltip>
-                                        <TooltipTrigger>
+                                        <TooltipTrigger asChild>
                                           <Button size="icon" variant="ghost" className="h-9 w-9" aria-label={`Download ${d.name}`} onClick={() => { const a = document.createElement('a'); a.href = `/api/documents/${selectedId}/file?name=${encodeURIComponent(d.name)}`; a.download = d.name; document.body.appendChild(a); a.click(); a.remove(); }}>
                                             <Download className="h-4 w-4" />
                                           </Button>
@@ -1963,7 +2276,7 @@ export function CustomersPage() {
                                         <TooltipContent>Download</TooltipContent>
                                       </Tooltip>
                                       <Tooltip>
-                                        <TooltipTrigger>
+                                        <TooltipTrigger asChild>
                                           <Button size="icon" variant="destructive" className="h-9 w-9" disabled={deletingGenDoc && deleteGenDocName === d.name} onClick={() => { setDeleteGenDocName(d.name); setDeleteGenDocOpen(true); }} aria-label={`Delete ${d.name}`}>
                                             {deletingGenDoc && deleteGenDocName === d.name ? '...' : <Icon.Trash className="h-4 w-4" />}
                                           </Button>
@@ -2058,7 +2371,7 @@ export function CustomersPage() {
                               {!t.hasFullGen && (
                                 <TooltipProvider>
                                   <Tooltip>
-                                    <TooltipTrigger>
+                                    <TooltipTrigger asChild>
                                       <AlertCircle className="h-4 w-4 text-amber-500" />
                                     </TooltipTrigger>
                                     <TooltipContent>
@@ -2092,7 +2405,7 @@ export function CustomersPage() {
                                 {!t.hasFullGen && (
                                   <TooltipProvider>
                                     <Tooltip>
-                                      <TooltipTrigger>
+                                      <TooltipTrigger asChild>
                                         <AlertCircle className="h-4 w-4 text-amber-500" />
                                       </TooltipTrigger>
                                       <TooltipContent>
@@ -2214,7 +2527,7 @@ export function CustomersPage() {
                               <div key={doc.name} className="p-3 hover:bg-muted/50 transition" style={{ boxSizing: 'border-box', width: '100%', maxWidth: '100%' }}>
                                 <div className="flex items-start gap-3" style={{ width: '100%', maxWidth: '100%', boxSizing: 'border-box', minWidth: 0 }}>
                                   <Tooltip>
-                                    <TooltipTrigger>
+                                    <TooltipTrigger asChild>
                                       <Button
                                         size="icon"
                                         variant={isPinned ? "default" : "outline"}
@@ -2447,20 +2760,36 @@ export function CustomersPage() {
             <div className="space-y-4">
               {/* Document Details */}
               <div className="space-y-2 text-sm">
-                <div className="flex items-center gap-2">
-                  <span className="text-muted-foreground">Document:</span>
-                  <code className="px-2 py-0.5 bg-muted rounded text-xs">{regenerateDoc.name}</code>
-                </div>
+                {regenerateDocJobInfo?.template && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-muted-foreground">Template:</span>
+                    <code className="px-2 py-0.5 bg-muted rounded">{regenerateDocJobInfo.template}</code>
+                  </div>
+                )}
                 <div className="flex items-center gap-2">
                   <span className="text-muted-foreground">Customer:</span>
                   <span>{customers.find(c => c.id === selectedId)?.name || `Customer ${selectedId}`}</span>
                 </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground">Document:</span>
+                  <code className="px-2 py-0.5 bg-muted rounded text-xs">{regenerateDoc.name}</code>
+                </div>
               </div>
+
+              {/* Original Instructions (if any) */}
+              {regenerateDocJobInfo?.instructions && (
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Original Instructions</label>
+                  <div className="p-3 bg-muted rounded-md text-sm whitespace-pre-wrap max-h-60 overflow-y-auto">
+                    {regenerateDocJobInfo.instructions}
+                  </div>
+                </div>
+              )}
 
               {/* Revision Instructions Input */}
               <div className="space-y-2">
                 <label htmlFor="revision-instructions" className="text-sm font-medium">
-                  Revision Instructions <span className="text-muted-foreground">(required)</span>
+                  Revision Instructions {!regenerateDocJobInfo?.instructions && <span className="text-muted-foreground">(required)</span>}
                 </label>
                 <Textarea
                   id="revision-instructions"
@@ -2478,7 +2807,7 @@ export function CustomersPage() {
           )}
 
           <DialogFooter>
-            <Button variant="outline" onClick={() => { setRegenerateOpen(false); setRevisionInstructions(''); }} disabled={regenerating}>
+            <Button variant="outline" onClick={() => { setRegenerateOpen(false); setRevisionInstructions(''); setRegenerateDocJobInfo(null); }} disabled={regenerating}>
               Cancel
             </Button>
             <Button onClick={handleRegenerate} disabled={regenerating || !revisionInstructions.trim()}>

@@ -19,10 +19,32 @@ export async function analyzeDocumentIntelligently(
       return ''
     }
     
-    const mammoth = require('mammoth')
-    const buffer = fs.readFileSync(templatePath)
-    const result = await mammoth.extractRawText({ buffer })
-    const rawText = String(result?.value || '').trim()
+    // Check file extension - only use mammoth for .docx files
+    const ext = templatePath.toLowerCase().split('.').pop() || ''
+    let rawText = ''
+    
+    if (ext === 'docx') {
+      // Use mammoth for DOCX files
+      try {
+        const mammoth = require('mammoth')
+        const buffer = fs.readFileSync(templatePath)
+        const result = await mammoth.extractRawText({ buffer })
+        rawText = String(result?.value || '').trim()
+      } catch (mammothErr) {
+        console.error('Mammoth extraction failed for DOCX, trying plain text fallback:', mammothErr)
+        // Fall back to plain text read
+        rawText = fs.readFileSync(templatePath, 'utf-8').trim()
+      }
+    } else if (['md', 'txt', 'html', 'htm', 'csv', 'json', 'xml'].includes(ext)) {
+      // Read text-based files directly
+      rawText = fs.readFileSync(templatePath, 'utf-8').trim()
+    } else if (ext === 'pdf') {
+      // Skip PDF analysis for now (would need pdf-parse or similar)
+      return ''
+    } else {
+      // Unsupported file type for analysis
+      return ''
+    }
     
     if (!rawText) {
       return ''

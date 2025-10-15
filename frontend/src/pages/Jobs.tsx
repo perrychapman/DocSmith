@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from ".
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "../components/ui/breadcrumb";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
 import { Icon } from "../components/icons";
 import { Search, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
@@ -170,29 +171,57 @@ export default function JobsPage() {
     const label = statusLabel(s)
     if (s === 'running') {
       return (
-        <Badge variant="outline" aria-label={label} title={label} className="shrink-0 h-6 w-6 p-0 grid place-items-center border-warning text-warning bg-warning/10">
-          <Icon.Refresh className="h-3.5 w-3.5 animate-spin" />
-        </Badge>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="inline-flex">
+              <Badge variant="outline" aria-label={label} className="shrink-0 h-6 w-6 p-0 grid place-items-center border-warning text-warning bg-warning/10">
+                <Icon.Refresh className="h-3.5 w-3.5 animate-spin" />
+              </Badge>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>{label}</TooltipContent>
+        </Tooltip>
       )
     }
     if (s === 'done') {
       return (
-        <Badge variant="outline" aria-label={label} title={label} className="shrink-0 h-6 w-6 p-0 grid place-items-center border-success text-success bg-success/10">
-          <Icon.Check className="h-3.5 w-3.5" />
-        </Badge>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="inline-flex">
+              <Badge variant="outline" aria-label={label} className="shrink-0 h-6 w-6 p-0 grid place-items-center border-success text-success bg-success/10">
+                <Icon.Check className="h-3.5 w-3.5" />
+              </Badge>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>{label}</TooltipContent>
+        </Tooltip>
       )
     }
     if (s === 'cancelled') {
       return (
-        <Badge variant="outline" aria-label={label} title={label} className="shrink-0 h-6 w-6 p-0 grid place-items-center border-muted-foreground text-muted-foreground bg-muted/10">
-          <Icon.Stop className="h-3.5 w-3.5" />
-        </Badge>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <span className="inline-flex">
+              <Badge variant="outline" aria-label={label} className="shrink-0 h-6 w-6 p-0 grid place-items-center border-muted-foreground text-muted-foreground bg-muted/10">
+                <Icon.Stop className="h-3.5 w-3.5" />
+              </Badge>
+            </span>
+          </TooltipTrigger>
+          <TooltipContent>{label}</TooltipContent>
+        </Tooltip>
       )
     }
     return (
-      <Badge variant="outline" aria-label={label} title={label} className="shrink-0 h-6 w-6 p-0 grid place-items-center border-destructive text-destructive bg-destructive/10">
-        <Icon.X className="h-3.5 w-3.5" />
-      </Badge>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="inline-flex">
+            <Badge variant="outline" aria-label={label} className="shrink-0 h-6 w-6 p-0 grid place-items-center border-destructive text-destructive bg-destructive/10">
+              <Icon.X className="h-3.5 w-3.5" />
+            </Badge>
+          </span>
+        </TooltipTrigger>
+        <TooltipContent>{label}</TooltipContent>
+      </Tooltip>
     )
   }
 
@@ -285,7 +314,7 @@ export default function JobsPage() {
         : revisionInstructions
 
       // Step 3: Call generate API with combined instructions and pinned documents
-      const response = await fetch('/api/generate', {
+      const response = await apiFetch('/api/generate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -469,24 +498,44 @@ export default function JobsPage() {
                     </div>
                     <div className="flex items-center gap-1">
                       {active.status==='running' ? (
-                        <Button size="icon" variant="ghost" aria-label="Cancel" title="Cancel" onClick={(e)=>{ e.preventDefault(); cancelActive(); }}>
-                          <Icon.Stop className="h-4 w-4" />
-                        </Button>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button size="icon" variant="ghost" aria-label="Cancel" onClick={(e)=>{ e.preventDefault(); cancelActive(); }}>
+                              <Icon.Stop className="h-4 w-4" />
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>Cancel</TooltipContent>
+                        </Tooltip>
                       ) : null}
                       {!isCompileJob(active) && active.file ? (
                         <>
-                          <Button asChild size="icon" variant="ghost" aria-label="Open Folder" title="Open Folder">
-                            <a href="#" onClick={async (e)=>{ e.preventDefault(); try { await apiFetch(`/api/generate/jobs/${encodeURIComponent(active.id)}/reveal`) } catch {} }}>
-                              <Icon.Folder className="h-4 w-4" />
-                            </a>
-                          </Button>
-                          <Button size="icon" variant="ghost" aria-label="Open file" title="Open file" onClick={(e) => { e.preventDefault(); openJobFile(active); }}>
-                            <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
-                          </Button>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button asChild size="icon" variant="ghost" aria-label="Open Folder">
+                                <a href="#" onClick={async (e)=>{ e.preventDefault(); try { await apiFetch(`/api/generate/jobs/${encodeURIComponent(active.id)}/reveal`) } catch {} }}>
+                                  <Icon.Folder className="h-4 w-4" />
+                                </a>
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Open Folder</TooltipContent>
+                          </Tooltip>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button size="icon" variant="ghost" aria-label="Open file" onClick={(e) => { e.preventDefault(); openJobFile(active); }}>
+                                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>Open file</TooltipContent>
+                          </Tooltip>
                           {active.status === 'done' && (
-                            <Button size="icon" variant="ghost" aria-label="Regenerate with Revisions" title="Regenerate with Revisions" onClick={(e) => { e.preventDefault(); setRegenerateJob(active); setRegenerateOpen(true); }}>
-                              <RefreshCw className="h-4 w-4" />
-                            </Button>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button size="icon" variant="ghost" aria-label="Regenerate with Revisions" onClick={(e) => { e.preventDefault(); setRegenerateJob(active); setRegenerateOpen(true); }}>
+                                  <RefreshCw className="h-4 w-4" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent>Regenerate with Revisions</TooltipContent>
+                            </Tooltip>
                           )}
                         </>
                       ) : null}
@@ -495,20 +544,43 @@ export default function JobsPage() {
 
                   {/* Meta chips */}
                   <div className="flex flex-wrap items-center gap-2">
-                    <Badge asChild variant="outline">
-                      <a href="#" title="Reveal Template Folder" onClick={(e)=>{ e.preventDefault(); revealTemplateFolder(active.template) }}>
-                        Template: {active.template}
-                      </a>
-                    </Badge>
+                    <Tooltip>
+                      <TooltipTrigger asChild>
+                        <span className="inline-flex">
+                          <Badge asChild variant="outline">
+                            <a href="#" onClick={(e)=>{ e.preventDefault(); revealTemplateFolder(active.template) }}>
+                              Template: {active.template}
+                            </a>
+                          </Badge>
+                        </span>
+                      </TooltipTrigger>
+                      <TooltipContent>Reveal Template Folder</TooltipContent>
+                    </Tooltip>
                     {!isCompileJob(active) ? (
-                      <Badge asChild variant="outline"><a href="#customers" title="View Customers">Customer: {active.customerName || active.customerId}</a></Badge>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className="inline-flex">
+                            <Badge asChild variant="outline">
+                              <a href="#customers">Customer: {active.customerName || active.customerId}</a>
+                            </Badge>
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent>View Customers</TooltipContent>
+                      </Tooltip>
                     ) : null}
                     {active.file?.name ? (
-                      <Badge asChild variant="outline">
-                        <button type="button" onClick={(e) => { e.preventDefault(); openJobFile(active); }} title="Open file" className="hover:underline">
-                          File: {active.file.name}
-                        </button>
-                      </Badge>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span className="inline-flex">
+                            <Badge asChild variant="outline">
+                              <button type="button" onClick={(e) => { e.preventDefault(); openJobFile(active); }} className="hover:underline">
+                                File: {active.file.name}
+                              </button>
+                            </Badge>
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent>Open file</TooltipContent>
+                      </Tooltip>
                     ) : (
                       <Badge variant="outline">File: -</Badge>
                     )}

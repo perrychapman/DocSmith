@@ -8,6 +8,7 @@ import { ensureCustomerLibrary, resolveCustomerPaths, folderNameForCustomer } fr
 import { anythingllmRequest } from "../services/anythingllm"
 import { listFlattenedDocs, documentExists, qualifiedNamesForShort } from "../services/anythingllmDocs"
 import { removeUploadAndAnythingLLM } from "../services/anythingllmDelete"
+import { getWorkspaceName } from "../utils/config"
 
 const router = Router()
 
@@ -119,10 +120,11 @@ router.post("/", (req, res) => {
 
       // Also create AnythingLLM workspace titled the same as the folder name
       try {
+        const workspaceName = getWorkspaceName(folderName)
         const resp = await anythingllmRequest<{ workspace: { id: number; name: string; slug: string }; message: string }>(
           "/workspace/new",
           "POST",
-          { name: folderName }
+          { name: workspaceName }
         )
         workspace = { name: resp?.workspace?.name, slug: resp?.workspace?.slug }
         // Persist slug on the customer row
@@ -243,23 +245,89 @@ router.delete("/:id", (req, res) => {
                         // Delete uploaded documents one by one using the same logic as per-file deletion
                         if (fs.existsSync(uploadsDir)) {
                           const entries = fs.readdirSync(uploadsDir, { withFileTypes: true })
+                          console.log(`[DELETE-CUSTOMER] Found ${entries.length} items in uploads folder`)
+                          let deletedCount = 0
+                          let failedCount = 0
                           for (const ent of entries) {
                             if (!ent.isFile()) continue
                             const fname = ent.name
                             if (fname.toLowerCase().endsWith('.allm.json')) continue // skip sidecars
+                            console.log(`[DELETE-CUSTOMER] Attempting to delete document: ${fname}`)
                             try {
-                              await removeUploadAndAnythingLLM({ id, name: row.name, createdAt: row.createdAt, workspaceSlug: resolvedSlug }, fname)
-                            } catch {}
+                              const result = await removeUploadAndAnythingLLM({ id, name: row.name, createdAt: row.createdAt, workspaceSlug: resolvedSlug }, fname)
+                              console.log(`[DELETE-CUSTOMER] Delete result for ${fname}:`, result)
+                              if (result.removedNames && result.removedNames.length > 0) {
+                                deletedCount++
+                              } else {
+                                failedCount++
+                              }
+                            } catch (e) {
+                              console.error(`[DELETE-CUSTOMER] Error deleting ${fname}:`, e)
+                              failedCount++
+                            }
+                          }
+                          console.log(`[DELETE-CUSTOMER] Deletion summary: ${deletedCount} succeeded, ${failedCount} failed`)
+                        } else {
+                          console.log(`[DELETE-CUSTOMER] Uploads directory does not exist: ${uploadsDir}`)
+                        }
+                      } catch (e) {
+                        console.error(`[DELETE-CUSTOMER] Error in document deletion loop:`, e)
+                        documentsWarning = `Failed to remove AnythingLLM documents: ${(e as Error).message}`
+                      }
+                      
+                      // Also delete workspace index documents
+                      try {
+                        console.log(`[DELETE-CUSTOMER] Searching for workspace index documents...`)
+                        const data = await anythingllmRequest<any>('/documents', 'GET')
+                        const items = (data?.localFiles?.items ?? []) as any[]
+                        
+                        // Flatten the document tree
+                        const allDocs: any[] = []
+                        function flatten(nodes: any[], output: any[]) {
+                          for (const node of nodes) {
+                            if (node.type === 'file') output.push(node)
+                            if (node.items && Array.isArray(node.items)) flatten(node.items, output)
+                          }
+                        }
+                        flatten(items, allDocs)
+                        
+                        // Find workspace index documents for this workspace
+                        const indexMatches = allDocs.filter((doc: any) => {
+                          const title = String(doc?.title || "").trim()
+                          const name = String(doc?.name || "").trim()
+                          return title.includes(`workspace-document-index-${resolvedSlug}`) || 
+                                 name.includes(`workspace-document-index-${resolvedSlug}`)
+                        })
+                        
+                        console.log(`[DELETE-CUSTOMER] Found ${indexMatches.length} workspace index document(s)`)
+                        
+                        for (const doc of indexMatches) {
+                          const name = String(doc?.name || "")
+                          const qualifiedName = String(doc?.qualifiedName || "")
+                          const docPath = qualifiedName || (name.startsWith('raw-') ? `custom-documents/${name}` : name)
+                          console.log(`[DELETE-CUSTOMER] Deleting workspace index: ${docPath}`)
+                          
+                          try {
+                            const wsPath = `/workspace/${encodeURIComponent(resolvedSlug)}/update-embeddings`
+                            const sysPath = `/system/remove-documents`
+                            await anythingllmRequest(wsPath, "POST", { deletes: [docPath] })
+                            await anythingllmRequest(sysPath, "DELETE", { names: [docPath] })
+                            console.log(`[DELETE-CUSTOMER] Deleted workspace index: ${docPath}`)
+                          } catch (e) {
+                            console.error(`[DELETE-CUSTOMER] Failed to delete workspace index ${docPath}:`, e)
                           }
                         }
                       } catch (e) {
-                        documentsWarning = `Failed to remove AnythingLLM documents: ${(e as Error).message}`
+                        console.error(`[DELETE-CUSTOMER] Error deleting workspace indexes:`, e)
                       }
 
                       if (shouldDeleteWorkspace) {
+                        console.log(`[DELETE-CUSTOMER] Deleting workspace: ${resolvedSlug}`)
                         try {
                           await anythingllmRequest(`/workspace/${encodeURIComponent(resolvedSlug)}`, "DELETE")
+                          console.log(`[DELETE-CUSTOMER] Workspace deleted successfully`)
                         } catch (e) {
+                          console.error(`[DELETE-CUSTOMER] Failed to delete workspace:`, e)
                           workspaceWarning = `Failed to delete AnythingLLM workspace: ${(e as Error).message}`
                         }
                       }
@@ -268,13 +336,16 @@ router.delete("/:id", (req, res) => {
                     }
 
                     // Remove AnythingLLM document folder for this customer
+                    console.log(`[DELETE-CUSTOMER] Removing AnythingLLM folder: ${folderName}`)
                     try {
-                      await anythingllmRequest<{ success: boolean; message: string }>(
+                      const result = await anythingllmRequest<{ success: boolean; message: string }>(
                         "/document/remove-folder",
                         "DELETE",
                         { name: folderName }
                       )
+                      console.log(`[DELETE-CUSTOMER] Folder removal result:`, result)
                     } catch (e) {
+                      console.error(`[DELETE-CUSTOMER] Failed to remove folder:`, e)
                       anythingLLMFolderWarning = `Failed to remove AnythingLLM folder: ${(e as Error).message}`
                     }
                   } catch (e) {

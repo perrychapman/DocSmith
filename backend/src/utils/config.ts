@@ -11,3 +11,11 @@ export const APP_CONFIG = {
   // Example: LIBRARY_ROOT=C:/Projects/DocSmith/data maps to ANYTHINGLLM_INGEST_ROOT=/data in the AnythingLLM container
   anythingLLMIngestRoot: process.env.ANYTHINGLLM_INGEST_ROOT || ""
 }
+
+/**
+ * Adds "dev-" prefix to workspace names in development mode to keep environments separate
+ */
+export function getWorkspaceName(baseName: string): string {
+  const isDev = process.env.NODE_ENV !== 'production'
+  return isDev ? `dev-${baseName}` : baseName
+}

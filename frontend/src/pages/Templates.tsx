@@ -2,6 +2,7 @@ import * as React from "react";
 import { Card, CardHeader, CardContent, CardFooter, CardTitle, CardDescription } from "../components/ui/card";
 import { Button } from "../components/ui/Button";
 import { Input } from "../components/ui/input";
+import { Textarea } from "../components/ui/textarea";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, DialogDescription, DialogClose } from "../components/ui/dialog";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "../components/ui/breadcrumb";
@@ -35,6 +36,11 @@ export default function TemplatesPage() {
   const [compiling, setCompiling] = React.useState<string | null>(null);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
   const [deleteSlug, setDeleteSlug] = React.useState<string | null>(null);
+  
+  // Compile dialog state
+  const [compileDialogOpen, setCompileDialogOpen] = React.useState(false);
+  const [compileSlug, setCompileSlug] = React.useState<string | null>(null);
+  const [compileInstructions, setCompileInstructions] = React.useState("");
 
   // cleaned: no separate code state; use modal
   const [codeModal, setCodeModal] = React.useState<{ title: string; code: string } | null>(null);
@@ -351,7 +357,7 @@ export default function TemplatesPage() {
 
 
 
-  async function compile(sl: string) {
+  async function compile(sl: string, instructions?: string) {
     try {
       if (compEsRef.current) { compEsRef.current.close(); compEsRef.current = null }
       setCompiling(sl)
@@ -360,7 +366,23 @@ export default function TemplatesPage() {
       setCompSteps({})
       setCompProgress(0)
       setCompJobId(null)
-      const es = apiEventSource(`/api/templates/${encodeURIComponent(sl)}/compile/stream`)
+      
+      // Check if template has been compiled before to determine if this is a revision
+      const template = items.find(t => t.slug === sl);
+      const hasExistingGenerator = template?.hasFullGen;
+      
+      // Build query params for instructions
+      const params = new URLSearchParams();
+      if (instructions && instructions.trim()) {
+        if (hasExistingGenerator) {
+          params.set('revisionInstructions', instructions.trim());
+        } else {
+          params.set('instructions', instructions.trim());
+        }
+      }
+      const queryString = params.toString() ? `?${params.toString()}` : '';
+      
+      const es = apiEventSource(`/api/templates/${encodeURIComponent(sl)}/compile/stream${queryString}`)
       compEsRef.current = es
       es.onmessage = (ev) => {
         try {
@@ -799,7 +821,12 @@ export default function TemplatesPage() {
                                           hadError ? 'border-amber-500 text-amber-700 hover:bg-amber-50' : ''
                                         } ${isCompiling ? 'opacity-80' : ''}`}
                                         aria-label={compileActionLabel}
-                                        onClick={(e) => { e.stopPropagation(); compile(t.slug); }}
+                                        onClick={(e) => { 
+                                          e.stopPropagation(); 
+                                          setCompileSlug(t.slug);
+                                          setCompileInstructions('');
+                                          setCompileDialogOpen(true);
+                                        }}
                                         disabled={disableCompileButton}
                                         aria-busy={isCompiling}
                                       >
@@ -910,7 +937,12 @@ export default function TemplatesPage() {
                                           hadError ? 'border-amber-500 text-amber-700 hover:bg-amber-50' : ''
                                         } ${isCompiling ? 'opacity-80' : ''}`}
                                         aria-label={compileActionLabel}
-                                        onClick={(e) => { e.stopPropagation(); compile(t.slug); }}
+                                        onClick={(e) => { 
+                                          e.stopPropagation(); 
+                                          setCompileSlug(t.slug);
+                                          setCompileInstructions('');
+                                          setCompileDialogOpen(true);
+                                        }}
                                         disabled={disableCompileButton}
                                         aria-busy={isCompiling}
                                       >
@@ -1096,6 +1128,78 @@ export default function TemplatesPage() {
         </div>
       </div>
       )}
+
+      {/* Compile Template Dialog */}
+      <Dialog open={compileDialogOpen} onOpenChange={setCompileDialogOpen}>
+        <DialogContent className="sm:max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>
+              {(() => {
+                const template = items.find(t => t.slug === compileSlug);
+                return template?.hasFullGen ? 'Re-compile Template' : 'Compile Template';
+              })()}
+            </DialogTitle>
+            <DialogDescription>
+              {(() => {
+                const template = items.find(t => t.slug === compileSlug);
+                return template?.hasFullGen 
+                  ? 'Provide revision instructions to refine the template generator code.'
+                  : 'Optionally provide additional instructions to guide the AI in generating the template code.';
+              })()}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <label className="text-sm font-medium">
+                {(() => {
+                  const template = items.find(t => t.slug === compileSlug);
+                  return template?.hasFullGen ? 'Revision Instructions (optional)' : 'Additional Instructions (optional)';
+                })()}
+              </label>
+              <Textarea
+                className="mt-1 w-full"
+                rows={4}
+                placeholder={(() => {
+                  const template = items.find(t => t.slug === compileSlug);
+                  return template?.hasFullGen 
+                    ? 'e.g., Add support for multiple addresses per customer, improve formatting of the summary table, etc.'
+                    : 'e.g., Focus on extracting customer contact information, format dates as MM/DD/YYYY, etc.';
+                })()}
+                value={compileInstructions}
+                onChange={(e) => setCompileInstructions(e.target.value)}
+                disabled={compiling === compileSlug}
+              />
+            </div>
+            {compiling === compileSlug && (
+              <div className="pt-2"><Progress indeterminate /></div>
+            )}
+          </div>
+          <DialogFooter>
+            <Button 
+              variant="secondary" 
+              onClick={() => {
+                setCompileDialogOpen(false);
+                setCompileSlug(null);
+                setCompileInstructions('');
+              }} 
+              disabled={compiling === compileSlug}
+            >
+              Cancel
+            </Button>
+            <Button 
+              onClick={() => {
+                if (compileSlug) {
+                  compile(compileSlug, compileInstructions);
+                  setCompileDialogOpen(false);
+                }
+              }} 
+              disabled={!compileSlug || compiling === compileSlug}
+            >
+              {compiling === compileSlug ? 'Compiling...' : 'Compile'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Delete Template Confirm */}
       <AlertDialog open={deleteOpen} onOpenChange={setDeleteOpen}>

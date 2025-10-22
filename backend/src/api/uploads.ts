@@ -75,22 +75,16 @@ async function extractMetadataInBackground(
   
   try {
     const targetDoc = documentName || filename
-    console.log(`[METADATA] Starting background extraction for ${filename}`)
-    console.log(`[METADATA] Workspace: ${workspaceSlug}`)
-    console.log(`[METADATA] Target document name: "${targetDoc}"`)
+    console.log(`[METADATA] Extracting metadata for ${filename}`)
     
-    // Wait for AnythingLLM to finish indexing the document with retries
-    // Production builds may take longer than dev mode
+    // Wait for AnythingLLM to finish indexing the document
     const maxWaitTime = 30000 // 30 seconds max
     const checkInterval = 2000 // Check every 2 seconds
     const startTime = Date.now()
     let isIndexed = false
     
-    console.log(`[METADATA] Waiting for document to be indexed (max ${maxWaitTime/1000}s)...`)
-    
     while (!isIndexed && (Date.now() - startTime) < maxWaitTime) {
       try {
-        // Check if document exists in workspace embeddings
         const workspaceInfo = await anythingllmRequest<any>(
           `/workspace/${encodeURIComponent(workspaceSlug)}`,
           'GET'
@@ -104,51 +98,35 @@ async function extractMetadataInBackground(
         )
         
         if (foundDoc) {
-          console.log(`[METADATA] Document indexed successfully after ${((Date.now() - startTime)/1000).toFixed(1)}s`)
           isIndexed = true
           break
         }
         
-        console.log(`[METADATA] Document not yet indexed, waiting ${checkInterval/1000}s... (${((Date.now() - startTime)/1000).toFixed(1)}s elapsed)`)
         await new Promise(resolve => setTimeout(resolve, checkInterval))
       } catch (err) {
-        console.error(`[METADATA] Error checking indexing status:`, err)
-        // Continue waiting - might just be a transient error
+        // Continue waiting - might be a transient error
         await new Promise(resolve => setTimeout(resolve, checkInterval))
       }
     }
     
-    if (!isIndexed) {
-      console.log(`[METADATA] Document not indexed after ${maxWaitTime/1000}s, proceeding anyway (might be slow indexing)`)
-      // Proceed anyway - the document might still be queryable even if not showing in workspace.documents yet
-    }
-    
     // Retry logic for metadata analysis (sometimes first attempt fails if document still indexing)
-    console.log(`[METADATA] Sending AI analysis request for "${targetDoc}"`)
     let metadata: any = null
     let lastError: Error | null = null
     const maxRetries = 3
     
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        console.log(`[METADATA] Analysis attempt ${attempt}/${maxRetries}`)
         metadata = await analyzeDocumentMetadata(filePath, filename, workspaceSlug, documentName, documentName)
         
         // Check if we got meaningful metadata (not just fallback)
         if (metadata.documentType || metadata.purpose || (metadata.keyTopics && metadata.keyTopics.length > 0)) {
-          console.log(`[METADATA] Analysis successful on attempt ${attempt}`)
           break
-        } else {
-          console.log(`[METADATA] Got fallback metadata on attempt ${attempt}, retrying...`)
-          if (attempt < maxRetries) {
-            await new Promise(resolve => setTimeout(resolve, 3000)) // Wait 3s before retry
-          }
+        } else if (attempt < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, 3000))
         }
       } catch (err) {
         lastError = err as Error
-        console.error(`[METADATA] Analysis attempt ${attempt} failed:`, err)
         if (attempt < maxRetries) {
-          console.log(`[METADATA] Retrying in 3s...`)
           await new Promise(resolve => setTimeout(resolve, 3000))
         }
       }
@@ -158,19 +136,10 @@ async function extractMetadataInBackground(
       throw new Error(`Failed to extract metadata after ${maxRetries} attempts: ${lastError?.message || 'Unknown error'}`)
     }
     
-    console.log(`[METADATA] Analysis complete for ${filename}:`, {
-      type: metadata.documentType,
-      topics: metadata.keyTopics?.length,
-      stakeholders: metadata.stakeholders?.length
-    })
-    
     metadata.customerId = customerId
     await saveDocumentMetadata(customerId, metadata, workspaceSlug)
     
-    console.log(`[METADATA] Metadata saved to database for ${filename}`)
-    
     // Refresh workspace index with new document metadata
-    console.log(`[METADATA] Refreshing workspace index...`)
     await refreshWorkspaceIndex(customerId, workspaceSlug)
     
     // Give SQLite a moment to commit the transaction before notifying frontend
@@ -788,32 +757,54 @@ router.post("/:customerId", (req, res, next) => {
                 const verifyInterval = 2000 // Check every 2 seconds
                 const verifyStartTime = Date.now()
                 let actualDocPath: string | undefined
+                let allDocPaths: string[] = [] // Track all document paths (for Excel sheets)
                 let documentExists = false
                 
                 while (!documentExists && (Date.now() - verifyStartTime) < verifyMaxTime) {
                   try {
                     const docsListResp = await anythingllmRequest<any>('/documents', 'GET')
                     // localFiles might be an object with items array, or items might be at root, or it might be an array itself
-                    let allDocs: any[] = []
+                    let items: any[] = []
                     if (Array.isArray(docsListResp?.localFiles)) {
-                      allDocs = docsListResp.localFiles
+                      items = docsListResp.localFiles
                     } else if (Array.isArray(docsListResp?.localFiles?.items)) {
-                      allDocs = docsListResp.localFiles.items
+                      items = docsListResp.localFiles.items
                     } else if (Array.isArray(docsListResp)) {
-                      allDocs = docsListResp
+                      items = docsListResp
                     }
                     
-                    // Find our uploaded document by matching the source filename
-                    const foundDoc = allDocs.find((d: any) => 
+                    // Flatten the tree structure to find all documents (including Excel sheets)
+                    function flattenDocs(nodes: any[]): any[] {
+                      const result: any[] = []
+                      for (const node of nodes) {
+                        if (node.type === 'file') {
+                          result.push(node)
+                        }
+                        if (node.type === 'folder' && Array.isArray(node.items)) {
+                          result.push(...flattenDocs(node.items))
+                        }
+                      }
+                      return result
+                    }
+                    
+                    const allDocs = flattenDocs(items)
+                    
+                    // Find ALL documents related to the uploaded file (for Excel, this includes all sheets)
+                    // Excel files create a folder with the filename, so we need to match by the base name
+                    const baseFilename = sourceFilename.replace(/\.[^.]+$/, '') // Remove extension
+                    const matchingDocs = allDocs.filter((d: any) => 
                       d.name?.includes(sourceFilename) ||
-                      d.location?.includes(sourceFilename)
+                      d.location?.includes(sourceFilename) ||
+                      d.name?.includes(baseFilename) ||
+                      d.location?.includes(baseFilename)
                     )
                     
-                    if (foundDoc) {
-                      // Use AnythingLLM's reported path - this is the SOURCE OF TRUTH!
-                      actualDocPath = foundDoc.name || foundDoc.location
-                      console.log(`[UPLOAD] ✓ Document found in AnythingLLM after ${((Date.now() - verifyStartTime)/1000).toFixed(1)}s`)
-                      console.log(`[UPLOAD] AnythingLLM reports document path: "${actualDocPath}"`)
+                    if (matchingDocs.length > 0) {
+                      console.log(`[UPLOAD] ✓ Found ${matchingDocs.length} document(s) in AnythingLLM after ${((Date.now() - verifyStartTime)/1000).toFixed(1)}s`)
+                      // For Excel files with multiple sheets, we'll embed all of them
+                      allDocPaths = matchingDocs.map((d: any) => d.name || d.location).filter(Boolean)
+                      actualDocPath = allDocPaths[0] // Store first for backward compatibility
+                      console.log(`[UPLOAD] AnythingLLM document paths:`, allDocPaths)
                       documentExists = true
                       break
                     }
@@ -828,12 +819,13 @@ router.post("/:customerId", (req, res, next) => {
                 
                 // Use the actual path from AnythingLLM, or fall back to our best guess
                 const docName = actualDocPath || (moveSucceeded ? targetPath : uploadedDocName)
+                const docsToEmbed = allDocPaths.length > 0 ? allDocPaths : [docName]
                 
                 if (!documentExists) {
                   console.log(`[UPLOAD] ⚠ Document not found in AnythingLLM after ${verifyMaxTime/1000}s`)
                   console.log(`[UPLOAD] Will attempt embedding with path: "${docName}"`)
                 } else {
-                  console.log(`[UPLOAD] Will embed document using verified path: "${docName}"`)
+                  console.log(`[UPLOAD] Will embed ${docsToEmbed.length} document(s) using verified paths`)
                 }
                 
                 // Save sidecar mapping
@@ -848,25 +840,29 @@ router.post("/:customerId", (req, res, next) => {
                   writeSidecar(uploadsDir, file.filename, { docName, docId, workspaceSlug: slug, uploadedAt: new Date().toISOString() })
                 } catch {}
                 
-                // Step 5: Embed the uploaded document into the workspace with retry logic
-                console.log(`[UPLOAD] Embedding document "${docName}" into workspace "${slug}"`)
+                // Step 5: Embed the uploaded document(s) into the workspace with retry logic
+                console.log(`[UPLOAD] Embedding ${docsToEmbed.length} document(s) into workspace "${slug}"`)
+                console.log(`[UPLOAD] Documents to embed:`, JSON.stringify(docsToEmbed, null, 2))
                 let embedSucceeded = false
                 const maxEmbedRetries = 3
                 
                 for (let attempt = 1; attempt <= maxEmbedRetries; attempt++) {
                   try {
                     console.log(`[UPLOAD] Embedding attempt ${attempt}/${maxEmbedRetries}`)
+                    const embedPayload = { adds: docsToEmbed }
+                    console.log(`[UPLOAD] Embedding payload:`, JSON.stringify(embedPayload, null, 2))
+                    
                     const embedResp = await anythingllmRequest<any>(
                       `/workspace/${encodeURIComponent(slug)}/update-embeddings`,
                       "POST",
-                      { adds: [docName] }
+                      embedPayload // Embed all documents (all sheets for Excel files)
                     )
-                    console.log(`[UPLOAD] Embedding response:`, embedResp)
+                    console.log(`[UPLOAD] Embedding response:`, JSON.stringify(embedResp, null, 2))
                     
                     // Check if embedding succeeded
                     const msg = embedResp?.message || ''
                     if (embedResp && !msg.toLowerCase().includes('error') && !msg.toLowerCase().includes('failed')) {
-                      console.log(`[UPLOAD] Successfully embedded document into workspace on attempt ${attempt}`)
+                      console.log(`[UPLOAD] ✓ Successfully embedded ${docsToEmbed.length} document(s) into workspace on attempt ${attempt}`)
                       embedSucceeded = true
                       break
                     } else {
@@ -877,7 +873,7 @@ router.post("/:customerId", (req, res, next) => {
                     }
                   } catch (embedErr) {
                     console.error(`[UPLOAD] Embedding attempt ${attempt} failed:`, embedErr)
-                    console.error(`[UPLOAD] Attempted to embed document path: "${docName}"`)
+                    console.error(`[UPLOAD] Attempted to embed documents:`, docsToEmbed)
                     console.error(`[UPLOAD] Workspace slug: "${slug}"`)
                     if (attempt < maxEmbedRetries) {
                       console.log(`[UPLOAD] Retrying embedding in 3s...`)

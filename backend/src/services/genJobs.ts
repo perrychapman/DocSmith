@@ -125,7 +125,8 @@ export function markJobDone(jobId: string, file?: GenJobFile, meta?: { usedWorks
   job.completedAt = job.updatedAt
   
   // Calculate generation time and record it for the template
-  if (job.template && job.startedAt && job.completedAt) {
+  // Only record for actual document generation jobs, not template compilation (customerName='template')
+  if (job.template && job.customerName !== 'template' && job.startedAt && job.completedAt) {
     const startTime = new Date(job.startedAt).getTime()
     const endTime = new Date(job.completedAt).getTime()
     const durationSeconds = Math.round((endTime - startTime) / 1000)

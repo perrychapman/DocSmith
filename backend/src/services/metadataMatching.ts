@@ -636,10 +636,10 @@ async function aiCalculateTemplateSimilarity(
 
 DOCUMENT METADATA:
 Filename: ${docMetadata.filename}
-Type: ${docMetadata.documentType || 'Unknown'}
 Purpose: ${docMetadata.purpose || 'Not specified'}
-Data Categories: ${docMetadata.dataCategories?.join(', ') || 'None'}
 Key Topics: ${docMetadata.keyTopics?.join(', ') || 'None'}
+Data Categories: ${docMetadata.dataCategories?.join(', ') || 'None'}
+Document Type Label: ${docMetadata.documentType || 'Unknown'} (note: this is just a label, focus on actual content)
 Has Tables: ${docMetadata.hasTables ? 'Yes' : 'No'}
 Has Metrics: ${(docMetadata.extraFields?.metrics as string[] | undefined)?.length || 0}
 Date Range: ${docMetadata.dateRange || docMetadata.meetingDate || 'None'}
@@ -649,19 +649,21 @@ TEMPLATES TO MATCH AGAINST:
 ${templates.map((t, idx) => `
 ${idx + 1}. ${t.templateName} (${t.templateSlug})
    Purpose: ${t.purpose || 'Not specified'}
-   Required Data Types: ${t.requiredDataTypes?.join(', ') || 'None'}
    Expected Entities: ${t.expectedEntities?.join(', ') || 'None'}
-   Compatible Doc Types: ${t.compatibleDocumentTypes?.join(', ') || 'Any'}
+   Required Data Types: ${t.requiredDataTypes?.join(', ') || 'None'}
    Needs Aggregation: ${t.requiresAggregation ? 'Yes' : 'No'}
    Needs Time-Series: ${t.requiresTimeSeries ? 'Yes' : 'No'}
    Has Tables: ${t.hasTables ? 'Yes' : 'No'}
+   Compatible Doc Type Hints: ${t.compatibleDocumentTypes?.join(', ') || 'Any'} (not restrictive)
 `).join('\n')}
 
 Score each template 0-10 based on:
-- Data type match (most important)
-- Document type compatibility
-- Entity/topic overlap
+- Content and data match (most important) - Does the document contain the information the template needs?
+- Purpose alignment - Would this document's content help fulfill the template's purpose?
+- Entity/topic overlap - Do the key topics and entities align?
 - Structural alignment (tables, metrics, dates)
+
+NOTE: Document type labels are hints, not restrictions. Focus on whether the document's actual content can satisfy the template's needs, regardless of how the document is labeled.
 
 Return ONLY a JSON array:
 [

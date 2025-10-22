@@ -8,8 +8,9 @@ import { createJob, appendLog as jobLog, markJobDone, markJobError, listJobs, ge
 import { libraryRoot } from "../services/fs"
 import { readSettings, writeSettings } from "../services/settings"
 import { analyzeDocumentIntelligently } from "../services/documentIntelligence"
-import { analyzeTemplateMetadata, saveTemplateMetadata, loadTemplateMetadata, loadAllTemplateMetadata, deleteTemplateMetadata } from "../services/templateMetadata"
+import { analyzeTemplateMetadata, saveTemplateMetadata, loadTemplateMetadata, loadAllTemplateMetadata, deleteTemplateMetadata, recordCompileInstructions } from "../services/templateMetadata"
 import { buildMetadataEnhancedContext } from "../services/metadataMatching"
+import { getWorkspaceName } from "../utils/config"
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const Handlebars = require('handlebars')
 // Placeholder-based DOCX engines removed
@@ -560,7 +561,7 @@ router.post("/upload", (req, res) => {
       // Ensure AnythingLLM workspace and upload template file to it
       let wsSlug: string | undefined = meta?.workspaceSlug
       try {
-        const wsName = `Template_${name}` || `Template_${providedSlug}`
+        const wsName = getWorkspaceName(`Template_${name}` || `Template_${providedSlug}`)
         const list = await anythingllmRequest<any>("/workspaces", "GET")
         const arr: Array<{ name?: string; slug?: string }> = Array.isArray((list as any)?.workspaces) ? (list as any).workspaces : (Array.isArray(list) ? (list as any) : [])
         wsSlug = wsSlug || arr.find((w) => (w.name || "") === wsName)?.slug
@@ -604,6 +605,8 @@ router.post("/upload", (req, res) => {
 // POST /api/templates/:slug/compile
 router.post("/:slug/compile", async (req, res) => {
   const slug = String(req.params.slug)
+  const { instructions, revisionInstructions } = (req.body || {}) as { instructions?: string; revisionInstructions?: string }
+  
   try {
     const dir = path.join(TEMPLATES_ROOT, slug)
     if (!fs.existsSync(dir)) return res.status(404).json({ error: 'Template not found' })
@@ -688,6 +691,14 @@ router.post("/:slug/compile", async (req, res) => {
     // Template compilation is agnostic - no customer data needed
     // The generator code will query customer workspaces at generation time
 
+    // Build user instructions addendum
+    const hasExistingGenerator = fs.existsSync(path.join(dir, 'generator.full.ts'))
+    const userInstructionsAddendum = (hasExistingGenerator && revisionInstructions && String(revisionInstructions).trim().length)
+      ? `\n\nUSER REVISION INSTRUCTIONS (prioritize these changes to the existing generator):\n${String(revisionInstructions).trim()}\n`
+      : (instructions && String(instructions).trim().length)
+      ? `\n\nUSER ADDITIONAL INSTRUCTIONS (prioritize when generating the template code):\n${String(instructions).trim()}\n`
+      : ''
+
     const prompt = `You are a senior TypeScript engineer. Analyze this TEMPLATE and generate generator code that preserves ALL formatting/structure while enabling dynamic data replacement.
 
 **CRITICAL: You are analyzing a TEMPLATE only. Do NOT assume what data will be available. Write GENERIC code that can query ANY customer workspace.**
@@ -744,7 +755,7 @@ STRICT RULES:
 - Do NOT hardcode data values
 - Do NOT invent content not in template
 - If something could be data OR structure, keep as structure
-
+${userInstructionsAddendum}
 ${documentAnalysis}
 
 TEMPLATE ARTIFACTS (HTML skeleton + XML excerpts):
@@ -758,6 +769,18 @@ ${skeleton}`
     code = code.trim()
     if (!code) return res.status(502).json({ error: 'No code returned' })
     fs.writeFileSync(path.join(dir,'generator.full.ts'), code, 'utf-8')
+    
+    // Record compile instructions asynchronously (don't block response)
+    // Check if template had existing generator by checking if file existed before
+    const instructionsToRecord = (revisionInstructions && revisionInstructions.trim()) 
+      ? revisionInstructions 
+      : instructions;
+    if (instructionsToRecord && instructionsToRecord.trim()) {
+      recordCompileInstructions(slug, instructionsToRecord).catch(err => {
+        console.error(`[COMPILE] Failed to record compile instructions for ${slug}:`, err)
+      })
+    }
+    
     return res.json({ ok: true, slug, usedWorkspace: wsSlug, generated: 'generator.full.ts' })
   } catch (e) {
     return res.status(500).json({ error: (e as Error).message })
@@ -767,6 +790,9 @@ ${skeleton}`
 // Live compile (SSE) with logs, steps, cancel
 router.get("/:slug/compile/stream", async (req, res) => {
   const slug = String(req.params.slug)
+  const instructions = req.query.instructions ? String(req.query.instructions) : undefined
+  const revisionInstructions = req.query.revisionInstructions ? String(req.query.revisionInstructions) : undefined
+  
   try {
     const dir = path.join(TEMPLATES_ROOT, slug)
     if (!fs.existsSync(dir)) {
@@ -1044,6 +1070,15 @@ router.get("/:slug/compile/stream", async (req, res) => {
     // Build prompt
     stepStart('buildPrompt')
     logPush(`Building ${isExcel ? 'Excel' : 'DOCX'} compilation prompt...`)
+    
+    // Build user instructions addendum
+    const hasExistingGenerator = fs.existsSync(path.join(dir, 'generator.full.ts'))
+    const userInstructionsAddendum = (hasExistingGenerator && revisionInstructions && String(revisionInstructions).trim().length)
+      ? `\n\nUSER REVISION INSTRUCTIONS (prioritize these changes to the existing generator):\n${String(revisionInstructions).trim()}\n`
+      : (instructions && String(instructions).trim().length)
+      ? `\n\nUSER ADDITIONAL INSTRUCTIONS (prioritize when generating the template code):\n${String(instructions).trim()}\n`
+      : ''
+    
     const prompt = isExcel
         ? `You are a senior TypeScript engineer. Analyze this Excel TEMPLATE and generate code that preserves ALL formatting while enabling dynamic data population.
 
@@ -1108,7 +1143,7 @@ STRICT RULES:
 - Do NOT assume specific data exists
 - Do NOT hardcode data values
 - CREATE new sheets when data logically groups into categories
-
+${userInstructionsAddendum}
 EXCEL TEMPLATE ARTIFACTS (merges, widths, alignment):
 ${skeleton}`
         : `You are a senior TypeScript engineer and document automation specialist. Analyze this template and generate INTELLIGENT generator code that separates STRUCTURE from DATA.
@@ -1173,7 +1208,7 @@ STRICT CONSTRAINTS:
 - If unsure whether something is data or structure, treat as structure
 - For tables: preserve header row formatting, replicate data rows
 - For lists: preserve numbering format, populate items from data
-
+${userInstructionsAddendum}
 ${documentStructure}
 
 ${metadataContext}
@@ -1212,6 +1247,15 @@ ${skeleton}`
       fs.writeFileSync(genPath, code, 'utf-8')
       logPush(`Generator written to: generator.full.ts`)
       stepOk('writeGenerator')
+      
+      // Record compile instructions asynchronously (don't block completion)
+      const instructionsToRecord = (hasExistingGenerator && revisionInstructions) ? revisionInstructions : instructions;
+      if (instructionsToRecord && instructionsToRecord.trim()) {
+        recordCompileInstructions(slug, instructionsToRecord).catch(err => {
+          console.error(`[COMPILE] Failed to record compile instructions for ${slug}:`, err)
+        })
+      }
+      
       markJobDone(job.id, { path: genPath, name: 'generator.full.ts' }, { usedWorkspace: wsSlug })
       logPush('Compilation complete')
       return send({ type: 'done', file: { path: genPath, name: 'generator.full.ts' }, usedWorkspace: wsSlug, jobId: job.id })

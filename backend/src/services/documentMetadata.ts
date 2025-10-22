@@ -10,6 +10,10 @@ import { calculateDocumentTemplateRelevance, type DocumentMatch } from './metada
 // Track logged metadata loads to avoid spam
 const loggedMetadataLoads = new Set<string>()
 
+// Track when we last uploaded an index to prevent duplicates
+const lastIndexUpload = new Map<string, number>()
+const MIN_UPLOAD_INTERVAL_MS = 5000 // Don't upload more than once per 5 seconds
+
 /**
  * Document metadata structure for enhanced RAG and intelligent analysis
  */
@@ -884,6 +888,15 @@ export async function uploadWorkspaceIndex(
   workspaceSlug: string
 ): Promise<boolean> {
   try {
+    // Check if we uploaded very recently - prevent rapid duplicate uploads
+    const lastUpload = lastIndexUpload.get(workspaceSlug) || 0
+    const timeSinceLastUpload = Date.now() - lastUpload
+    
+    if (timeSinceLastUpload < MIN_UPLOAD_INTERVAL_MS) {
+      logInfo(`[WORKSPACE-INDEX] Skipping upload - too soon since last upload (${timeSinceLastUpload}ms ago, minimum ${MIN_UPLOAD_INTERVAL_MS}ms)`)
+      return false
+    }
+    
     logInfo(`[WORKSPACE-INDEX] Generating index for customer ${customerId}...`)
     const index = await generateWorkspaceIndex(customerId)
     
@@ -894,101 +907,106 @@ export async function uploadWorkspaceIndex(
     
     logInfo(`[WORKSPACE-INDEX] Uploading index to workspace ${workspaceSlug}...`)
     
-    // First, try to remove old workspace index documents using robust deletion
+    // First, remove ALL old workspace index documents using the proven deletion logic
     try {
-      const workspaceData = await anythingllmRequest<any>(
-        `/workspace/${encodeURIComponent(workspaceSlug)}`,
-        'GET'
-      )
+      // Import the proven document utilities
+      const { documentExists } = await import('./anythingllmDocs')
       
-      if (workspaceData?.workspace?.documents) {
-        const oldIndexDocs = workspaceData.workspace.documents.filter((doc: any) => {
-          // Match indexes for THIS workspace only (by checking filename pattern)
-          const indexPattern = `workspace-document-index-${workspaceSlug}`
-          return (
-            doc.docSource === `workspace-index-${workspaceSlug}` ||
-            (doc.title && doc.title.includes(indexPattern)) ||
-            (doc.location && doc.location.includes(indexPattern))
-          )
-        })
+      // Use the exact same deleteDocByName logic from anythingllmDelete.ts
+      async function deleteDocByName(doc: string, slug: string): Promise<boolean> {
+        const wsPath = `/workspace/${encodeURIComponent(slug)}/update-embeddings`
+        const sysPath = `/system/remove-documents`
+        const qualified = doc
+        const short = doc.includes('/') ? (doc.split('/').pop() as string) : doc
+        const variants = Array.from(new Set([qualified, short]))
+        let ok = false
+        // attempt both variants
+        for (const d of variants) { try { await anythingllmRequest(wsPath, "POST", { deletes: [d] }) } catch {} }
+        for (const n of variants) { try { await anythingllmRequest(sysPath, "DELETE", { names: [n] }) ; ok = true } catch {} }
+        const gone = !(await documentExists(doc))
+        if (gone) return true
+        // retry reverse order
+        for (const n of variants) { try { await anythingllmRequest(sysPath, "DELETE", { names: [n] }) } catch {} }
+        for (const d of variants) { try { await anythingllmRequest(wsPath, "POST", { deletes: [d] }) } catch {} }
+        return !(await documentExists(doc))
+      }
+      
+      // Find and delete old index documents using the /documents endpoint
+      let names: string[] = []
+      
+      try {
+        const indexFilename = `workspace-document-index-${workspaceSlug}.txt`
         
-        if (oldIndexDocs.length > 0) {
-          logInfo(`[WORKSPACE-INDEX] Found ${oldIndexDocs.length} old index document(s), removing...`)
-          
-          // Import document deletion utilities
-          const { documentExists } = await import('./anythingllmDocs')
-          
-          async function verifyGone(doc: string) {
-            try { 
-              await anythingllmRequest<any>(`/document/${encodeURIComponent(doc)}`, "GET")
-              return false 
-            } catch { 
-              return true 
+        // Get all documents from AnythingLLM
+        const data = await anythingllmRequest<any>('/documents', 'GET')
+        const items = (data?.localFiles?.items ?? []) as any[]
+        
+        // Flatten the document tree to search all documents
+        const allDocs: any[] = []
+        function flatten(nodes: any[], output: any[]) {
+          for (const node of nodes) {
+            if (node.type === 'file') {
+              output.push(node)
             }
-          }
-
-          async function deleteDoc(doc: string) {
-            const wsPath = `/workspace/${encodeURIComponent(workspaceSlug)}/update-embeddings`
-            const sysPath = `/system/remove-documents`
-            let ok = false
-            const qualified = doc
-            const short = doc.includes('/') ? (doc.split('/').pop() as string) : doc
-            const candidatesDeletes = Array.from(new Set([qualified, short]))
-            const candidatesNames = candidatesDeletes
-
-            // Attempt with both qualified and short
-            for (const d of candidatesDeletes) { 
-              try { 
-                await anythingllmRequest(wsPath, "POST", { deletes: [d] }) 
-              } catch (err) {
-                logInfo(`[WORKSPACE-INDEX] Delete attempt failed for ${d}: ${err}`)
-              }
-            }
-            for (const n of candidatesNames) { 
-              try { 
-                await anythingllmRequest(sysPath, "DELETE", { names: [n] })
-                ok = true 
-              } catch (err) {
-                logInfo(`[WORKSPACE-INDEX] System delete failed for ${n}: ${err}`)
-              }
-            }
-            
-            if (!await verifyGone(doc)) {
-              // Retry in reverse order
-              for (const n of candidatesNames) { 
-                try { 
-                  await anythingllmRequest(sysPath, "DELETE", { names: [n] }) 
-                } catch {} 
-              }
-              for (const d of candidatesDeletes) { 
-                try { 
-                  await anythingllmRequest(wsPath, "POST", { deletes: [d] }) 
-                } catch {} 
-              }
-              ok = await verifyGone(doc)
-            }
-            return ok
-          }
-          
-          for (const doc of oldIndexDocs) {
-            try {
-              const docLocation = doc.location || doc.name
-              if (docLocation) {
-                const deleted = await deleteDoc(docLocation)
-                if (deleted) {
-                  logInfo(`[WORKSPACE-INDEX] Successfully removed old index: ${docLocation}`)
-                } else {
-                  logError(`[WORKSPACE-INDEX] Failed to verify deletion of: ${docLocation}`)
-                }
-              }
-            } catch (err) {
-              logError(`[WORKSPACE-INDEX] Failed to remove old index ${doc.location}:`, err)
+            if (node.items && Array.isArray(node.items)) {
+              flatten(node.items, output)
             }
           }
         }
+        flatten(items, allDocs)
+        
+        // Find documents matching our index filename
+        const matches = allDocs.filter((doc: any) => {
+          const title = String(doc?.title || "").trim()
+          const name = String(doc?.name || "").trim()
+          
+          return title === indexFilename || name.includes('workspace-document-index')
+        })
+        
+        // Extract document paths for deletion
+        names = matches.map((doc: any) => {
+          const name = String(doc?.name || "")
+          const qualifiedName = String(doc?.qualifiedName || "")
+          
+          // Use qualifiedName if available, otherwise construct full path
+          if (qualifiedName) {
+            return qualifiedName
+          }
+          
+          if (name && name.startsWith('raw-workspace-document-index')) {
+            return `custom-documents/${name}`
+          }
+          
+          return name
+        }).filter(Boolean)
+        
+        if (names.length > 0) {
+          logInfo(`[WORKSPACE-INDEX] Found ${names.length} old index document(s), removing...`)
+        }
+      } catch (e) {
+        logError(`[WORKSPACE-INDEX] Error searching for old indexes: ${e}`)
+      }
+      
+      // Verify documents exist before attempting deletion
+      if (names.length) {
+        const verified: string[] = []
+        for (const n of names) { 
+          if (await documentExists(n)) verified.push(n) 
+        }
+        names = verified
+      }
+      
+      // Delete each verified document
+      if (names.length) {
+        for (const doc of names) {
+          await deleteDocByName(doc, workspaceSlug)
+        }
+        
+        // Wait for deletions to propagate before creating new index
+        await new Promise(resolve => setTimeout(resolve, 2000))
       }
     } catch (err) {
-      logInfo(`[WORKSPACE-INDEX] Could not check for old indexes (continuing anyway): ${err}`)
+      logError(`[WORKSPACE-INDEX] Error during old index cleanup: ${err}`)
     }
     
     // Upload as raw text document with metadata (unique filename per workspace)
@@ -1009,17 +1027,19 @@ export async function uploadWorkspaceIndex(
     })
     
     if (result.success) {
-      logInfo(`[WORKSPACE-INDEX] Successfully uploaded index to ${workspaceSlug}`)
+      // Track upload time to prevent duplicates
+      lastIndexUpload.set(workspaceSlug, Date.now())
       
       // Update workspace embeddings to include the new index
       if (result.documents && result.documents.length > 0) {
         const docPath = result.documents[0].location
+        
         await anythingllmRequest(
           `/workspace/${encodeURIComponent(workspaceSlug)}/update-embeddings`,
           'POST',
           { adds: [docPath] }
         )
-        logInfo(`[WORKSPACE-INDEX] Embeddings updated for ${workspaceSlug}`)
+        logInfo(`[WORKSPACE-INDEX] Index updated for ${workspaceSlug}`)
       }
       
       return true
@@ -1042,14 +1062,10 @@ export async function refreshWorkspaceIndex(
   workspaceSlug: string
 ): Promise<void> {
   try {
-    logInfo(`[WORKSPACE-INDEX] Refreshing index for customer ${customerId}...`)
-    
     // Small delay to ensure database has committed recent changes
     await new Promise(resolve => setTimeout(resolve, 500))
     
     await uploadWorkspaceIndex(customerId, workspaceSlug)
-    
-    logInfo(`[WORKSPACE-INDEX] Index refresh complete`)
   } catch (err) {
     logError('[WORKSPACE-INDEX] Error refreshing index:', err)
   }

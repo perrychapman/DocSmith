@@ -360,7 +360,7 @@ router.post("/:customerId/embed-generated", (req, res) => {
             const targetPath = `${folderName}/${sourceFilename}`
             console.log(`[EMBED-GEN] Attempting to organize document: "${uploadedDocName}" -> "${targetPath}"`)
             
-            let docName = uploadedDocName // Default to original upload path
+            let moveSucceeded = false
             try {
               const moveResp = await anythingllmRequest<{ success: boolean; message: string | null }>(
                 "/document/move-files",
@@ -371,29 +371,96 @@ router.post("/:customerId/embed-generated", (req, res) => {
               
               if (moveResp?.success !== false) {
                 console.log(`[EMBED-GEN] ✓ Document successfully organized in customer folder`)
-                docName = targetPath // Update to moved path
+                moveSucceeded = true
               }
             } catch (moveErr) {
               console.log(`[EMBED-GEN] Move failed, using original path:`, moveErr)
             }
+            
+            // Step 4: Verify document exists and get ALL paths (for Excel sheets)
+            console.log(`[EMBED-GEN] Querying AnythingLLM to find uploaded document(s)...`)
+            const verifyMaxTime = 20000
+            const verifyInterval = 2000
+            const verifyStartTime = Date.now()
+            let allDocPaths: string[] = []
+            let documentExists = false
+            
+            while (!documentExists && (Date.now() - verifyStartTime) < verifyMaxTime) {
+              try {
+                const docsListResp = await anythingllmRequest<any>('/documents', 'GET')
+                let items: any[] = []
+                if (Array.isArray(docsListResp?.localFiles)) {
+                  items = docsListResp.localFiles
+                } else if (Array.isArray(docsListResp?.localFiles?.items)) {
+                  items = docsListResp.localFiles.items
+                } else if (Array.isArray(docsListResp)) {
+                  items = docsListResp
+                }
+                
+                // Flatten the tree structure to find all documents (including Excel sheets)
+                function flattenDocs(nodes: any[]): any[] {
+                  const result: any[] = []
+                  for (const node of nodes) {
+                    if (node.type === 'file') {
+                      result.push(node)
+                    }
+                    if (node.type === 'folder' && Array.isArray(node.items)) {
+                      result.push(...flattenDocs(node.items))
+                    }
+                  }
+                  return result
+                }
+                
+                const allDocs = flattenDocs(items)
+                
+                // Find ALL documents related to the uploaded file (for Excel, this includes all sheets)
+                const baseFilename = sourceFilename.replace(/\.[^.]+$/, '') // Remove extension
+                const matchingDocs = allDocs.filter((d: any) => 
+                  d.name?.includes(sourceFilename) ||
+                  d.location?.includes(sourceFilename) ||
+                  d.name?.includes(baseFilename) ||
+                  d.location?.includes(baseFilename)
+                )
+                
+                if (matchingDocs.length > 0) {
+                  console.log(`[EMBED-GEN] ✓ Found ${matchingDocs.length} document(s) in AnythingLLM`)
+                  allDocPaths = matchingDocs.map((d: any) => d.name || d.location).filter(Boolean)
+                  console.log(`[EMBED-GEN] Document paths:`, allDocPaths)
+                  documentExists = true
+                  break
+                }
+                
+                await new Promise(resolve => setTimeout(resolve, verifyInterval))
+              } catch (err) {
+                console.error(`[EMBED-GEN] Error verifying document:`, err)
+                await new Promise(resolve => setTimeout(resolve, verifyInterval))
+              }
+            }
+            
+            const docsToEmbed = allDocPaths.length > 0 ? allDocPaths : [moveSucceeded ? targetPath : uploadedDocName]
 
-            // Step 4: Embed the document into the workspace
-            console.log(`[EMBED-GEN] Embedding document "${docName}" into workspace "${slug}"`)
+            // Step 5: Embed all documents into the workspace
+            console.log(`[EMBED-GEN] Embedding ${docsToEmbed.length} document(s) into workspace "${slug}"`)
+            console.log(`[EMBED-GEN] Documents to embed:`, JSON.stringify(docsToEmbed, null, 2))
+            
+            const embedPayload = { adds: docsToEmbed }
+            console.log(`[EMBED-GEN] Embedding payload:`, JSON.stringify(embedPayload, null, 2))
+            
             const embedResp = await anythingllmRequest<any>(
               `/workspace/${encodeURIComponent(slug)}/update-embeddings`,
               "POST",
-              { adds: [docName] }
+              embedPayload
             )
-            console.log(`[EMBED-GEN] Embedding response:`, embedResp)
+            console.log(`[EMBED-GEN] Embedding response:`, JSON.stringify(embedResp, null, 2))
             
-            // Step 5: Mark document as generated in metadata
+            // Step 6: Mark document as generated in metadata
             console.log(`[EMBED-GEN] Marking document as generated in metadata`)
             try {
               const { saveDocumentMetadata } = await import("../services/documentMetadata")
               await saveDocumentMetadata(customerId, {
                 customerId,
                 filename: fileName,
-                anythingllmPath: docName,
+                anythingllmPath: docsToEmbed[0], // Use first document path for metadata
                 uploadedAt: new Date().toISOString(),
                 fileSize: fs.statSync(destPath).size,
                 extraFields: {

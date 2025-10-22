@@ -7,7 +7,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, DialogDescription, DialogClose } from "../components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Icon } from "../components/icons";
-import { Maximize2, Minimize2, Search, ExternalLink, Download, FileText, FileSpreadsheet, FileCode, FileQuestion, FileType, Info, Loader2, Pin, PinOff, RefreshCw, Eye, AlertCircle, Trash, Upload } from "lucide-react";
+import { Maximize2, Minimize2, Search, ExternalLink, Download, FileText, FileSpreadsheet, FileCode, FileQuestion, FileType, Info, Loader2, Pin, PinOff, RefreshCw, Eye, AlertCircle, Trash, Upload, Zap } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "../components/ui/tooltip";
 import { A, apiFetch, apiEventSource } from "../lib/api";
 import WorkspaceChat from "../components/WorkspaceChat";
@@ -53,7 +53,7 @@ export function CustomersPage() {
   const [pinnedDocs, setPinnedDocs] = React.useState<Set<string>>(new Set());
   const [countsLoading, setCountsLoading] = React.useState(false);
   const [generateOpen, setGenerateOpen] = React.useState(false);
-  const [templates, setTemplates] = React.useState<Array<{ slug: string; name: string; hasFullGen?: boolean }>>([]);
+  const [templates, setTemplates] = React.useState<Array<{ slug: string; name: string; hasFullGen?: boolean; avgGenerationTimeFormatted?: string }>>([]);
   const [loadingTemplates, setLoadingTemplates] = React.useState(false);
   const [selectedTemplate, setSelectedTemplate] = React.useState<string>("");
   const [genInstructions, setGenInstructions] = React.useState<string>("");
@@ -528,8 +528,28 @@ export function CustomersPage() {
         const r = await apiFetch(`/api/templates`);
         const data = await r.json().catch(() => ({}));
         const list: Array<{ slug: string; name: string; hasFullGen?: boolean }> = Array.isArray(data?.templates) ? data.templates : [];
-        if (!ignore) setTemplates(list);
-        if (!ignore && list.length && !selectedTemplate) setSelectedTemplate(list[0].slug);
+        
+        // Load metadata for each template to get avgGenerationTimeFormatted
+        const templatesWithMetadata = await Promise.all(
+          list.map(async (tmpl) => {
+            try {
+              const metaRes = await apiFetch(`/api/templates/${encodeURIComponent(tmpl.slug)}/metadata`);
+              if (metaRes.ok) {
+                const metaData = await metaRes.json();
+                return {
+                  ...tmpl,
+                  avgGenerationTimeFormatted: metaData?.metadata?.avgGenerationTimeFormatted
+                };
+              }
+            } catch {
+              // Silently fail, just don't include metadata
+            }
+            return tmpl;
+          })
+        );
+        
+        if (!ignore) setTemplates(templatesWithMetadata);
+        if (!ignore && templatesWithMetadata.length && !selectedTemplate) setSelectedTemplate(templatesWithMetadata[0].slug);
       } catch {
       } finally { if (!ignore) setLoadingTemplates(false) }
     })();
@@ -2327,79 +2347,49 @@ export function CustomersPage() {
 
       {/* Generate Document Dialog */}
       <Dialog open={generateOpen} onOpenChange={setGenerateOpen}>
-        <DialogContent className="sm:max-w-3xl overflow-x-hidden">
+        <DialogContent className="w-[95vw] sm:!max-w-6xl overflow-x-hidden">
           <DialogHeader>
             <DialogTitle>Generate Document</DialogTitle>
             <DialogDescription>
               Select template and documents to include in generation.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4" style={{ maxWidth: '100%', overflow: 'hidden' }}>
-            {/* Template Selection */}
-            <div>
-              <label className="text-sm font-medium mb-2 block">Template</label>
-              {loadingTemplates ? (
-                <div className="border rounded-md h-9 px-3 flex items-center text-sm text-muted-foreground">
-                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Loading templates...
-                </div>
-              ) : templates.length === 0 ? (
-                <div className="border rounded-md h-9 px-3 flex items-center text-sm text-muted-foreground">
-                  No templates found
-                </div>
-              ) : (
-                <>
-                  <div className="relative mb-2">
-                    <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                    <Input
-                      type="text"
-                      placeholder="Search templates..."
-                      className="pl-8 h-9"
-                      value={genTemplateQuery}
-                      onChange={(e) => setGenTemplateQuery(e.target.value)}
-                      disabled={generating}
-                    />
+          
+          {/* Two-column layout: 1/3 left, 2/3 right */}
+          <div className="grid grid-cols-[1fr,2fr] gap-6">
+            {/* Left column - Template selection and instructions */}
+            <div className="space-y-4">
+              {/* Template Selection */}
+              <div>
+                <label className="text-sm font-medium mb-2 block">Template</label>
+                {loadingTemplates ? (
+                  <div className="border rounded-md h-9 px-3 flex items-center text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Loading templates...
                   </div>
-                  <Select value={selectedTemplate} onValueChange={setSelectedTemplate} disabled={generating}>
-                    <SelectTrigger className="w-full">
-                      <SelectValue placeholder="Select a template">
-                        {selectedTemplate && (() => {
-                          const t = templates.find(tmpl => tmpl.slug === selectedTemplate);
-                          return t ? (
-                            <div className="flex items-center gap-2">
-                              <span>{t.name || t.slug}</span>
-                              {!t.hasFullGen && (
-                                <TooltipProvider>
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <AlertCircle className="h-4 w-4 text-amber-500" />
-                                    </TooltipTrigger>
-                                    <TooltipContent>
-                                      <p>Template not compiled yet</p>
-                                    </TooltipContent>
-                                  </Tooltip>
-                                </TooltipProvider>
-                              )}
-                            </div>
-                          ) : null;
-                        })()}
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectContent className="max-h-[300px]">
-                      {(() => {
-                        const filteredTemplates = genTemplateQuery.trim()
-                          ? templates.filter(t => 
-                              (t.name || t.slug).toLowerCase().includes(genTemplateQuery.toLowerCase())
-                            )
-                          : templates;
-                        
-                        return filteredTemplates.length === 0 ? (
-                          <div className="p-2 text-sm text-muted-foreground text-center">
-                            No templates match your search
-                          </div>
-                        ) : (
-                          filteredTemplates.map((t) => (
-                            <SelectItem key={t.slug} value={t.slug}>
+                ) : templates.length === 0 ? (
+                  <div className="border rounded-md h-9 px-3 flex items-center text-sm text-muted-foreground">
+                    No templates found
+                  </div>
+                ) : (
+                  <>
+                    <div className="relative mb-2">
+                      <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                      <Input
+                        type="text"
+                        placeholder="Search templates..."
+                        className="pl-8 h-9"
+                        value={genTemplateQuery}
+                        onChange={(e) => setGenTemplateQuery(e.target.value)}
+                        disabled={generating}
+                      />
+                    </div>
+                    <Select value={selectedTemplate} onValueChange={setSelectedTemplate} disabled={generating}>
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder="Select a template">
+                          {selectedTemplate && (() => {
+                            const t = templates.find(tmpl => tmpl.slug === selectedTemplate);
+                            return t ? (
                               <div className="flex items-center gap-2">
                                 <span>{t.name || t.slug}</span>
                                 {!t.hasFullGen && (
@@ -2415,94 +2405,169 @@ export function CustomersPage() {
                                   </TooltipProvider>
                                 )}
                               </div>
-                            </SelectItem>
-                          ))
-                        );
-                      })()}
-                    </SelectContent>
-                  </Select>
-                  
-                  {/* Warning for uncompiled templates */}
-                  {selectedTemplate && (() => {
-                    const t = templates.find(tmpl => tmpl.slug === selectedTemplate);
-                    return t && !t.hasFullGen ? (
-                      <div className="mt-2 flex items-start gap-2 p-3 rounded-md bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900">
-                        <AlertCircle className="h-4 w-4 text-amber-600 dark:text-amber-500 mt-0.5 shrink-0" />
-                        <div className="text-sm text-amber-800 dark:text-amber-400">
-                          This template has not been compiled yet. Please compile it in the Templates page before generating documents.
+                            ) : null;
+                          })()}
+                        </SelectValue>
+                      </SelectTrigger>
+                      <SelectContent className="max-h-[300px]">
+                        {(() => {
+                          const filteredTemplates = genTemplateQuery.trim()
+                            ? templates.filter(t => 
+                                (t.name || t.slug).toLowerCase().includes(genTemplateQuery.toLowerCase())
+                              )
+                            : templates;
+                          
+                          return filteredTemplates.length === 0 ? (
+                            <div className="p-2 text-sm text-muted-foreground text-center">
+                              No templates match your search
+                            </div>
+                          ) : (
+                            filteredTemplates.map((t) => (
+                              <SelectItem key={t.slug} value={t.slug}>
+                                <div className="flex items-center gap-2">
+                                  <span>{t.name || t.slug}</span>
+                                  {!t.hasFullGen && (
+                                    <TooltipProvider>
+                                      <Tooltip>
+                                        <TooltipTrigger asChild>
+                                          <AlertCircle className="h-4 w-4 text-amber-500" />
+                                        </TooltipTrigger>
+                                        <TooltipContent>
+                                          <p>Template not compiled yet</p>
+                                        </TooltipContent>
+                                      </Tooltip>
+                                    </TooltipProvider>
+                                  )}
+                                </div>
+                              </SelectItem>
+                            ))
+                          );
+                        })()}
+                      </SelectContent>
+                    </Select>
+                    
+                    {/* Warning for uncompiled templates */}
+                    {selectedTemplate && (() => {
+                      const t = templates.find(tmpl => tmpl.slug === selectedTemplate);
+                      return t && !t.hasFullGen ? (
+                        <div className="mt-2 flex items-start gap-2 p-3 rounded-md bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900">
+                          <AlertCircle className="h-4 w-4 text-amber-600 dark:text-amber-500 mt-0.5 shrink-0" />
+                          <div className="text-sm text-amber-800 dark:text-amber-400">
+                            This template has not been compiled yet. Please compile it in the Templates page before generating documents.
+                          </div>
                         </div>
-                      </div>
-                    ) : null;
-                  })()}
-                </>
+                      ) : null;
+                    })()}
+                    
+                    {/* Estimated generation time */}
+                    {selectedTemplate && (() => {
+                      const t = templates.find(tmpl => tmpl.slug === selectedTemplate);
+                      return t?.avgGenerationTimeFormatted && t.hasFullGen ? (
+                        <div className="mt-2 flex items-center gap-2 p-2 rounded-md bg-muted/50 border border-muted">
+                          <Zap className="h-4 w-4 text-muted-foreground shrink-0" />
+                          <div className="text-sm text-muted-foreground">
+                            <span className="font-medium">Estimated time:</span> {t.avgGenerationTimeFormatted}
+                          </div>
+                        </div>
+                      ) : null;
+                    })()}
+                  </>
+                )}
+              </div>
+              
+              {/* Additional Instructions */}
+              <div>
+                <label className="text-sm font-medium mb-1 block">Additional Instructions (optional)</label>
+                <Textarea
+                  className="w-full min-h-[400px]"
+                  placeholder="e.g., focus on Q3 data, keep it concise, etc."
+                  value={genInstructions}
+                  onChange={(e) => setGenInstructions(e.target.value)}
+                  disabled={generating}
+                />
+              </div>
+              
+              {generating && (
+                <div className="pt-2"><Progress indeterminate /></div>
               )}
             </div>
             
-            {/* Document selection with relevance scores */}
+            {/* Right column - Document selection */}
             {selectedTemplate && (
-              <div>
+              <div className="border-l pl-6 flex flex-col min-h-[400px]">
                 <div className="flex items-center justify-between mb-2">
                   <label className="text-sm font-medium">
-                    Documents to Include ({genPinnedDocs.size}/3 selected)
+                    Documents ({genPinnedDocs.size}/3)
                   </label>
                   {genDocuments.length > 0 && (
-                    <div className="flex gap-2">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 text-xs"
-                        onClick={() => {
-                          // Sort by relevance descending and take top 3 (or fewer if less than 3 available)
-                          const topDocs = genDocuments
-                            .sort((a, b) => b.relevance - a.relevance)
-                            .slice(0, 3)
-                            .map(d => d.name);
-                          setGenPinnedDocs(new Set(topDocs));
-                        }}
-                        disabled={generating}
-                      >
-                        Select Top 3
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-7 text-xs"
-                        onClick={() => setGenPinnedDocs(new Set())}
-                        disabled={generating || genPinnedDocs.size === 0}
-                      >
-                        Clear All
-                      </Button>
+                    <div className="flex gap-1">
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 px-2"
+                            onClick={() => {
+                              const topDocs = genDocuments
+                                .sort((a, b) => b.relevance - a.relevance)
+                                .slice(0, 3)
+                                .map(d => d.name);
+                              setGenPinnedDocs(new Set(topDocs));
+                            }}
+                            disabled={generating}
+                          >
+                            <span className="text-xs">Top 3</span>
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Select top 3 most relevant</TooltipContent>
+                      </Tooltip>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-7 px-2"
+                            onClick={() => setGenPinnedDocs(new Set())}
+                            disabled={generating || genPinnedDocs.size === 0}
+                          >
+                            <span className="text-xs">Clear</span>
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>Clear all selections</TooltipContent>
+                      </Tooltip>
                     </div>
                   )}
                 </div>
+                
                 {genPinnedDocs.size >= 3 && (
-                  <div className="mb-2 text-xs text-muted-foreground bg-muted/50 border border-border rounded-md px-3 py-2">
-                    <Info className="h-3.5 w-3.5 inline mr-1" />
-                    Maximum of 3 documents reached. Unpin a document to select another.
+                  <div className="mb-2 text-xs text-muted-foreground bg-muted/50 border border-border rounded-md px-2 py-1.5 flex items-center gap-1">
+                    <Info className="h-3.5 w-3.5 shrink-0" />
+                    <span>Max 3 documents</span>
                   </div>
                 )}
+                
                 {/* Search field */}
                 <div className="relative mb-2">
-                  <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                   <Input
                     type="text"
-                    placeholder="Search documents..."
-                    className="pl-8 h-9"
+                    placeholder="Search..."
+                    className="pl-7 h-8 text-sm"
                     value={genDocQuery}
                     onChange={(e) => setGenDocQuery(e.target.value)}
                     disabled={generating}
                   />
                 </div>
-                <div className="border rounded-md max-h-[320px] overflow-hidden">
-                  <ScrollArea className="h-[320px]" style={{ width: '100%' }}>
-                    <div style={{ width: '100%', maxWidth: '100%', overflow: 'hidden' }}>
+                
+                <div className="border rounded-md overflow-hidden flex-1">
+                  <ScrollArea className="h-full">
                     {loadingGenDocs ? (
                       <div className="p-4 text-sm text-muted-foreground text-center">
-                        Loading document relevance scores...
+                        Loading relevance scores...
                       </div>
                     ) : genDocuments.length === 0 ? (
                       <div className="p-4 text-sm text-muted-foreground text-center">
-                        No documents with metadata found for this template
+                        No documents with metadata found
                       </div>
                     ) : (() => {
                       const filteredDocs = genDocQuery.trim()
@@ -2514,24 +2579,24 @@ export function CustomersPage() {
                       
                       return filteredDocs.length === 0 ? (
                         <div className="p-4 text-sm text-muted-foreground text-center">
-                          No documents match your search
+                          No matches
                         </div>
                       ) : (
-                        <div className="divide-y pr-3" style={{ width: '100%', maxWidth: '100%', boxSizing: 'border-box' }}>
+                        <div className="divide-y">
                           {filteredDocs.map((doc) => {
                             const isPinned = genPinnedDocs.has(doc.name);
                             const scoreColor = doc.relevance >= 8 ? 'text-green-600' : doc.relevance >= 6 ? 'text-yellow-600' : 'text-gray-500';
                             const canPin = isPinned || genPinnedDocs.size < 3;
                             
                             return (
-                              <div key={doc.name} className="p-3 hover:bg-muted/50 transition" style={{ boxSizing: 'border-box', width: '100%', maxWidth: '100%' }}>
-                                <div className="flex items-start gap-3" style={{ width: '100%', maxWidth: '100%', boxSizing: 'border-box', minWidth: 0 }}>
+                              <div key={doc.name} className="p-2.5 hover:bg-muted/50 transition">
+                                <div className="flex items-start gap-2">
                                   <Tooltip>
                                     <TooltipTrigger asChild>
                                       <Button
                                         size="icon"
                                         variant={isPinned ? "default" : "outline"}
-                                        className="h-8 w-8 shrink-0 mt-0.5"
+                                        className="h-7 w-7 shrink-0"
                                         onClick={() => {
                                           setGenPinnedDocs(prev => {
                                             const next = new Set(prev);
@@ -2545,23 +2610,21 @@ export function CustomersPage() {
                                         }}
                                         disabled={generating || (!isPinned && !canPin)}
                                       >
-                                        <Pin className={`h-3.5 w-3.5 ${isPinned ? 'fill-current' : ''}`} />
+                                        <Pin className={`h-3 w-3 ${isPinned ? 'fill-current' : ''}`} />
                                       </Button>
                                     </TooltipTrigger>
                                     {!canPin && (
-                                      <TooltipContent>
-                                        Maximum 3 documents allowed
-                                      </TooltipContent>
+                                      <TooltipContent>Maximum 3 documents</TooltipContent>
                                     )}
                                   </Tooltip>
-                                  <div className="flex-1" style={{ minWidth: 0, width: 0, boxSizing: 'border-box', overflow: 'hidden' }}>
-                                    <div className="flex items-center gap-2" style={{ width: '100%', overflow: 'hidden', minWidth: 0 }}>
-                                      <span className="text-sm font-medium truncate" style={{ flex: 1, minWidth: 0 }}>{doc.name}</span>
+                                  <div className="flex-1 min-w-0">
+                                    <div className="flex items-center gap-1.5 mb-0.5">
+                                      <span className="text-sm font-medium truncate">{doc.name}</span>
                                       <Badge variant="outline" className={`text-xs shrink-0 ${scoreColor}`}>
-                                        {doc.relevance.toFixed(1)}/10
+                                        {doc.relevance.toFixed(1)}
                                       </Badge>
                                     </div>
-                                    <p className="text-xs text-muted-foreground mt-1" style={{ wordBreak: 'break-word', whiteSpace: 'normal', overflowWrap: 'break-word' }}>
+                                    <p className="text-xs text-muted-foreground line-clamp-2">
                                       {doc.reasoning}
                                     </p>
                                   </div>
@@ -2572,27 +2635,12 @@ export function CustomersPage() {
                         </div>
                       );
                     })()}
-                    </div>
                   </ScrollArea>
                 </div>
               </div>
             )}
-            
-            <div>
-              <label className="text-sm font-medium">Additional Instructions (optional)</label>
-              <Textarea
-                className="mt-1 w-full"
-                rows={3}
-                placeholder="e.g., focus on Q3 data, keep it concise, etc."
-                value={genInstructions}
-                onChange={(e) => setGenInstructions(e.target.value)}
-                disabled={generating}
-              />
-            </div>
-            {generating ? (
-              <div className="pt-2"><Progress indeterminate /></div>
-            ) : null}
           </div>
+          
           <DialogFooter>
             <Button variant="secondary" onClick={() => setGenerateOpen(false)} disabled={generating}>Cancel</Button>
             <Button 

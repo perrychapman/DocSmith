@@ -4,6 +4,7 @@ import { ScrollArea } from "./ui/scroll-area";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/Button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "./ui/tabs";
+import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
 import { RefreshCw, FileText, FileSpreadsheet, Zap, Target, Users, Layers } from "lucide-react";
 
 export type TemplateMetadata = {
@@ -46,12 +47,17 @@ export type TemplateMetadata = {
   // Metadata about the template itself
   complexity?: string;
   estimatedGenerationTime?: string;
+  avgGenerationTimeFormatted?: string;
+  avgGenerationTime?: number;
+  generationCount?: number;
   targetAudience?: string;
   useCases?: string[];
   
   // Relationships and compatibility
   compatibleDocumentTypes?: string[];
-  recommendedWorkspaceSize?: string;
+  
+  // Compilation metadata
+  lastCompileInstructions?: string;
   
   // System metadata
   lastAnalyzed?: string;
@@ -145,6 +151,19 @@ export function TemplateMetadataModal({ metadata, open, onOpenChange, onRetry }:
                   </div>
                 )}
 
+                {/* Last Compile Instructions */}
+                {metadata.lastCompileInstructions && (
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium flex items-center gap-2">
+                      <FileText className="h-4 w-4" />
+                      Last Compilation Instructions
+                    </label>
+                    <div className="rounded-md border bg-blue-50 dark:bg-blue-950/20 border-blue-200 dark:border-blue-900 p-3 text-sm text-muted-foreground leading-relaxed">
+                      {metadata.lastCompileInstructions}
+                    </div>
+                  </div>
+                )}
+
                 {/* Target Audience & Use Cases */}
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   {metadata.targetAudience && (
@@ -159,15 +178,41 @@ export function TemplateMetadataModal({ metadata, open, onOpenChange, onRetry }:
                     </div>
                   )}
 
-                  {metadata.estimatedGenerationTime && (
+                  {(metadata.avgGenerationTimeFormatted || metadata.estimatedGenerationTime) && (
                     <div className="space-y-2">
                       <label className="text-sm font-medium flex items-center gap-2">
                         <Zap className="h-4 w-4" />
                         Generation Time
                       </label>
-                      <div className="rounded-md border bg-muted/30 p-3 text-sm">
-                        {metadata.estimatedGenerationTime}
-                      </div>
+                      {metadata.avgGenerationTimeFormatted ? (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <div className="rounded-md border bg-primary/10 p-3 text-sm font-mono font-semibold">
+                              {metadata.avgGenerationTimeFormatted}
+                            </div>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <div className="text-xs space-y-1">
+                              <div>Average: {metadata.avgGenerationTimeFormatted}</div>
+                              <div>Based on: {metadata.generationCount || 0} generation{(metadata.generationCount || 0) !== 1 ? 's' : ''}</div>
+                              <div>Raw: {metadata.avgGenerationTime?.toFixed(1)}s</div>
+                            </div>
+                          </TooltipContent>
+                        </Tooltip>
+                      ) : metadata.estimatedGenerationTime ? (
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <div className="rounded-md border bg-muted/30 p-3 text-sm">
+                              {metadata.estimatedGenerationTime}
+                            </div>
+                          </TooltipTrigger>
+                          <TooltipContent>
+                            <div className="text-xs">
+                              AI-estimated time (no actual generations yet)
+                            </div>
+                          </TooltipContent>
+                        </Tooltip>
+                      ) : null}
                     </div>
                   )}
                 </div>
@@ -200,16 +245,6 @@ export function TemplateMetadataModal({ metadata, open, onOpenChange, onRetry }:
                     <p className="text-xs text-muted-foreground mt-1">
                       This template works best with these document types in your workspace
                     </p>
-                  </div>
-                )}
-
-                {/* Workspace Size Recommendation */}
-                {metadata.recommendedWorkspaceSize && (
-                  <div className="space-y-2">
-                    <label className="text-sm font-medium">Recommended Workspace Size</label>
-                    <div className="rounded-md border bg-muted/30 p-3 text-sm">
-                      {metadata.recommendedWorkspaceSize}
-                    </div>
                   </div>
                 )}
               </TabsContent>

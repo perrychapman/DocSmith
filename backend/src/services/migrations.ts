@@ -105,6 +105,20 @@ const migrations: Migration[] = [
         })
       })
     }
+  },
+  {
+    version: 5,
+    name: "add-last-compile-instructions-to-template-metadata",
+    up: async (db: sqlite3.Database) => {
+      return new Promise((resolve, reject) => {
+        db.run("ALTER TABLE template_metadata ADD COLUMN lastCompileInstructions TEXT", (err) => {
+          if (err && !err.message.includes("duplicate column")) {
+            return reject(err)
+          }
+          resolve()
+        })
+      })
+    }
   }
 ]
 

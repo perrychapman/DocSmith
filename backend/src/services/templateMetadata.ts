@@ -10,6 +10,17 @@ import { analyzeSpreadsheet, type SpreadsheetAnalysis } from './fileAnalyzer'
 const loggedTemplateMetadataLoads = new Set<string>()
 
 /**
+ * Format seconds as mm:ss
+ */
+function formatGenerationTime(seconds: number | undefined): string | undefined {
+  if (seconds === undefined || seconds === null) return undefined
+  
+  const mins = Math.floor(seconds / 60)
+  const secs = Math.floor(seconds % 60)
+  return `${mins}:${secs.toString().padStart(2, '0')}`
+}
+
+/**
  * Template metadata structure focusing on template characteristics and requirements
  * (HOW/WHY of the template, not the data content)
  */
@@ -59,12 +70,15 @@ export interface TemplateMetadata {
   
   // Relationships and compatibility
   compatibleDocumentTypes?: string[] // Document types that work well
-  recommendedWorkspaceSize?: string
+  
+  // Compilation metadata
+  lastCompileInstructions?: string   // Last instructions used when compiling template
   
   // Generation statistics (actual performance data)
-  actualGenerationTimes?: number[]  // Last 20 actual generation times in seconds
+  actualGenerationTimes?: number[]  // Last 5 actual generation times in seconds
   generationCount?: number          // Total number of times template has been used
-  avgGenerationTime?: number        // Average generation time in seconds
+  avgGenerationTime?: number        // Average generation time in seconds (of last 5)
+  avgGenerationTimeFormatted?: string // Formatted as mm:ss for display
   lastGeneratedAt?: string          // Last time this template was used
   
   // System metadata
@@ -107,7 +121,7 @@ interface TemplateMetadataRow {
   targetAudience: string | null
   useCases: string | null
   compatibleDocumentTypes: string | null
-  recommendedWorkspaceSize: string | null
+  lastCompileInstructions: string | null
   lastAnalyzed: string | null
   analysisVersion: number
   workspaceSlug: string | null
@@ -152,10 +166,11 @@ function rowToMetadata(row: TemplateMetadataRow): TemplateMetadata {
     targetAudience: row.targetAudience ?? undefined,
     useCases: row.useCases ? JSON.parse(row.useCases) : undefined,
     compatibleDocumentTypes: row.compatibleDocumentTypes ? JSON.parse(row.compatibleDocumentTypes) : undefined,
-    recommendedWorkspaceSize: row.recommendedWorkspaceSize ?? undefined,
+    lastCompileInstructions: row.lastCompileInstructions ?? undefined,
     actualGenerationTimes: row.actualGenerationTimes ? JSON.parse(row.actualGenerationTimes) : undefined,
     generationCount: row.generationCount ?? undefined,
     avgGenerationTime: row.avgGenerationTime ?? undefined,
+    avgGenerationTimeFormatted: formatGenerationTime(row.avgGenerationTime ?? undefined),
     lastGeneratedAt: row.lastGeneratedAt ?? undefined,
     lastAnalyzed: row.lastAnalyzed ?? undefined,
     analysisVersion: row.analysisVersion,
@@ -276,11 +291,7 @@ Return ONLY this JSON structure:
     - Slow: >5 sheets, >15 tables, complex formulas/charts, requires heavy data processing or multiple AI calls,
   "targetAudience": "Executives" or "Technical Teams" or "Customers" or "Internal Staff" or "Finance Team" or "Operations Team",
   "useCases": ["Monthly reporting", "Budget planning", "Inventory audit", "Sales review"],
-  "compatibleDocumentTypes": ["Financial Reports", "Inventory Lists", "Meeting Notes", "Sales Data", "Customer Records"],
-  "recommendedWorkspaceSize": "Small (<10 docs)" or "Medium (10-50)" or "Large (>50)" - CALCULATE BASED ON:
-    - Small: Template needs 1-2 specific document types, simple lookups, minimal context
-    - Medium: Template needs 3-5 document types, moderate cross-referencing, some aggregation
-    - Large: Template needs >5 document types, complex cross-referencing, heavy aggregation, historical comparisons
+  "compatibleDocumentTypes": ["Financial Reports", "Inventory Lists", "Meeting Notes", "Sales Data", "Customer Records"]
 }`
   } else if (isDocx) {
     analysisPrompt += `This is a WORD DOCUMENT TEMPLATE (DOCX). Analyze what DATA this template NEEDS to generate its output.
@@ -335,11 +346,7 @@ Return ONLY this JSON structure:
     - Slow: >10 pages, >8 tables, complex layouts/charts, heavy data processing, multiple AI calls, aggregations,
   "targetAudience": "Executives" or "Customers" or "Technical Teams" or "Internal Staff" or "Legal/Compliance" or "Partners",
   "useCases": ["Quarterly reporting", "Client proposals", "Project documentation", "Vendor communications"],
-  "compatibleDocumentTypes": ["Financial Reports", "Meeting Notes", "Technical Specs", "Inventory Data", "Customer Records", "Project Plans"],
-  "recommendedWorkspaceSize": "Small (<10 docs)" or "Medium (10-50)" or "Large (>50)" - CALCULATE BASED ON:
-    - Small: Template needs 1-2 specific document types, simple data extraction, minimal cross-referencing
-    - Medium: Template needs 3-5 document types, moderate cross-referencing, some data aggregation
-    - Large: Template needs >5 document types, complex cross-referencing, heavy aggregation, historical data, trend analysis
+  "compatibleDocumentTypes": ["Financial Reports", "Meeting Notes", "Technical Specs", "Inventory Data", "Customer Records", "Project Plans"]
 }`
   } else {
     // Generic template
@@ -480,9 +487,9 @@ export function saveTemplateMetadata(metadata: TemplateMetadata): Promise<void> 
         styleTheme, colorScheme, fontFamily, pageOrientation,
         requiresAggregation, requiresTimeSeries, requiresComparisons, requiresFiltering,
         complexity, estimatedGenerationTime, targetAudience, useCases,
-        compatibleDocumentTypes, recommendedWorkspaceSize,
+        compatibleDocumentTypes,
         lastAnalyzed, analysisVersion, workspaceSlug
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `
     
     const params = [
@@ -515,7 +522,6 @@ export function saveTemplateMetadata(metadata: TemplateMetadata): Promise<void> 
       metadata.targetAudience ?? null,
       metadata.useCases ? JSON.stringify(metadata.useCases) : null,
       metadata.compatibleDocumentTypes ? JSON.stringify(metadata.compatibleDocumentTypes) : null,
-      metadata.recommendedWorkspaceSize ?? null,
       metadata.lastAnalyzed || new Date().toISOString(),
       metadata.analysisVersion ?? 1,
       metadata.workspaceSlug ?? null
@@ -631,7 +637,7 @@ export function recordGenerationTime(templateSlug: string, generationTimeSeconds
           return resolve()
         }
         
-        // Parse existing times (keep last 20 for moving average)
+        // Parse existing times (keep last 5 for recent average)
         let times: number[] = []
         try {
           if (row.actualGenerationTimes) {
@@ -641,43 +647,83 @@ export function recordGenerationTime(templateSlug: string, generationTimeSeconds
           times = []
         }
         
-        // Add new time and keep last 20
+        // Add new time and keep last 5
         times.push(generationTimeSeconds)
-        if (times.length > 20) {
-          times = times.slice(-20)
+        if (times.length > 5) {
+          times = times.slice(-5)
         }
         
-        // Calculate new average
+        // Calculate average from available times (1-5 generations)
         const newAvg = times.reduce((sum, t) => sum + t, 0) / times.length
         const newCount = (row.generationCount || 0) + 1
         
-        // Determine new estimated category based on actual average
-        let newEstimate: string
-        if (newAvg < 5) {
-          newEstimate = 'Fast (<5s)'
-        } else if (newAvg < 15) {
-          newEstimate = 'Moderate (5-15s)'
-        } else {
-          newEstimate = 'Slow (>15s)'
-        }
-        
-        // Update database
+        // Update database (no longer updating estimatedGenerationTime - that stays as AI's estimate)
         db.run(
           `UPDATE template_metadata 
            SET actualGenerationTimes = ?,
                generationCount = ?,
                avgGenerationTime = ?,
-               estimatedGenerationTime = ?,
                lastGeneratedAt = CURRENT_TIMESTAMP
            WHERE templateSlug = ?`,
-          [JSON.stringify(times), newCount, newAvg, newEstimate, templateSlug],
+          [JSON.stringify(times), newCount, newAvg, templateSlug],
           (updateErr) => {
             if (updateErr) {
               logError(`[TEMPLATE-METADATA] Failed to update stats for ${templateSlug}:`, updateErr)
               return reject(updateErr)
             }
             
-            logInfo(`[TEMPLATE-METADATA] Updated ${templateSlug}: ${newCount} generations, avg ${newAvg.toFixed(1)}s, category: ${newEstimate}`)
+            logInfo(`[TEMPLATE-METADATA] Updated ${templateSlug}: ${newCount} generations, avg ${newAvg.toFixed(1)}s (${formatGenerationTime(newAvg)})`)
+            resolve()
+          }
+        )
+      }
+    )
+  })
+}
+
+/**
+ * Record the instructions used for template compilation
+ */
+export async function recordCompileInstructions(
+  templateSlug: string,
+  instructions: string | undefined
+): Promise<void> {
+  if (!instructions || !instructions.trim()) {
+    return Promise.resolve()
+  }
+  
+  return new Promise((resolve, reject) => {
+    const db = getDB()
+    
+    // Check if metadata exists for this template
+    db.get(
+      'SELECT id FROM template_metadata WHERE templateSlug = ?',
+      [templateSlug],
+      (err, row) => {
+        if (err) {
+          logError(`[TEMPLATE-METADATA] Failed to check metadata for ${templateSlug}:`, err)
+          return reject(err)
+        }
+        
+        if (!row) {
+          // Template metadata doesn't exist yet, skip recording
+          logInfo(`[TEMPLATE-METADATA] No metadata for ${templateSlug}, skipping compile instructions recording`)
+          return resolve()
+        }
+        
+        // Update database with last compile instructions
+        db.run(
+          `UPDATE template_metadata 
+           SET lastCompileInstructions = ?
+           WHERE templateSlug = ?`,
+          [instructions.trim(), templateSlug],
+          (updateErr) => {
+            if (updateErr) {
+              logError(`[TEMPLATE-METADATA] Failed to update compile instructions for ${templateSlug}:`, updateErr)
+              return reject(updateErr)
+            }
+            
+            logInfo(`[TEMPLATE-METADATA] Updated compile instructions for ${templateSlug}`)
             resolve()
           }
         )

@@ -9,6 +9,7 @@ import HelpPage from "./pages/Help";
 import Setup from "./components/Setup";
 import UpdateNotification from "./components/UpdateNotification";
 import { Separator } from "./components/ui/separator";
+import { TooltipProvider } from "./components/ui/tooltip";
 import { Icon } from "./components/icons";
 import { MetadataProvider } from "./contexts/MetadataContext";
 import { TemplateMetadataProvider } from "./contexts/TemplateMetadataContext";
@@ -78,15 +79,16 @@ export default function App() {
   const isElectron = typeof window !== 'undefined' && window.electronAPI;
 
   return (
-    <MetadataProvider>
-      <TemplateMetadataProvider>
-      <div className="h-screen bg-background flex flex-col">
-      {/* Custom title bar for Electron - Fixed at top */}
-      {isElectron && (
-        <div className="fixed top-0 left-0 right-0 z-50 flex justify-between items-center h-8 bg-background border-b border-border/50 drag-region">
-          <div className="flex items-center px-2 sm:px-4 text-xs sm:text-sm text-muted-foreground">
-            DocSmith
-          </div>
+    <TooltipProvider>
+      <MetadataProvider>
+        <TemplateMetadataProvider>
+        <div className="h-screen bg-background flex flex-col">
+        {/* Custom title bar for Electron - Fixed at top */}
+        {isElectron && (
+          <div className="fixed top-0 left-0 right-0 z-50 flex justify-between items-center h-8 bg-background border-b border-border/50 drag-region">
+            <div className="flex items-center px-2 sm:px-4 text-xs sm:text-sm text-muted-foreground">
+              DocSmith
+            </div>
           <div className="flex items-center space-x-0.5 sm:space-x-1 pr-1 sm:pr-2 no-drag">
             <button
               onClick={() => window.electronAPI?.minimizeApp()}
@@ -305,5 +307,6 @@ export default function App() {
       </div>
       </TemplateMetadataProvider>
     </MetadataProvider>
+    </TooltipProvider>
   );
 }

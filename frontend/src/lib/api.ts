@@ -97,4 +97,67 @@ export const A = {
   deleteGenCardsByJob: (jobId: string) => jdel(`/api/generate/cards/by-job/${encodeURIComponent(jobId)}`),
 };
 
+// Template Matching Jobs API
+export const TemplateMatching = {
+  // Start a new matching job
+  startJob: (options: {
+    templateSlugs?: string[]
+    customerIds?: number[]
+    forceRecalculate?: boolean
+    createdBy?: string
+  }) => jpost<{ success: boolean; jobId: string; message: string }>(`/api/template-matching/jobs`, options),
+  
+  // Get job status
+  getJob: (jobId: string) => jget<{
+    success: boolean
+    job: {
+      id: string
+      status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
+      templateSlugs?: string[]
+      customerIds?: number[]
+      forceRecalculate?: boolean
+      totalDocuments: number
+      processedDocuments: number
+      matchedDocuments: number
+      skippedDocuments: number
+      startedAt?: string
+      completedAt?: string
+      error?: string
+      createdBy?: string
+    }
+  }>(`/api/template-matching/jobs/${encodeURIComponent(jobId)}`),
+  
+  // List all jobs
+  listJobs: () => jget<{
+    success: boolean
+    jobs: Array<{
+      id: string
+      status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
+      totalDocuments: number
+      processedDocuments: number
+      matchedDocuments: number
+      skippedDocuments: number
+      startedAt?: string
+      completedAt?: string
+    }>
+  }>(`/api/template-matching/jobs`),
+  
+  // Cancel a job
+  cancelJob: (jobId: string) => jdel<{ success: boolean; message: string }>(`/api/template-matching/jobs/${encodeURIComponent(jobId)}`),
+  
+  // Clear all jobs
+  clearAllJobs: () => jdel<{ success: boolean; message: string; count: number }>(`/api/template-matching/jobs`),
+  
+  // Convenience: Match specific template
+  matchTemplate: (templateSlug: string, createdBy?: string) => jpost<{ success: boolean; jobId: string; message: string }>(
+    `/api/template-matching/match-template`,
+    { templateSlug, createdBy }
+  ),
+  
+  // Convenience: Recalculate all
+  recalculateAll: (createdBy?: string) => jpost<{ success: boolean; jobId: string; message: string; warning: string }>(
+    `/api/template-matching/recalculate-all`,
+    { createdBy }
+  ),
+};
 

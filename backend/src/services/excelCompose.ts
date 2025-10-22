@@ -82,21 +82,42 @@ export async function mergeOpsIntoExcelTemplate(templateBuffer: ArrayBuffer | Ui
       let ws = workbook.getWorksheet(String(s.name))
       if (!ws) ws = workbook.addWorksheet(String(s.name))
 
-      // Clear any autofilters that might cause issues with filterButton property
+      // Capture and manage Excel tables to preserve them through data insertion
+      let preservedTables: any[] = []
       try {
+        // Capture existing table definitions before clearing
+        if ((ws as any).tables && Array.isArray((ws as any).tables)) {
+          preservedTables = (ws as any).tables.map((table: any) => ({
+            name: table.name,
+            displayName: table.displayName,
+            ref: table.ref,
+            headerRow: table.headerRow !== false, // default to true
+            totalsRow: table.totalsRow === true,
+            style: table.style || { theme: 'TableStyleMedium2', showRowStripes: true },
+            columns: table.columns ? [...table.columns] : [],
+            // Store original range info for adjustment
+            _originalRef: table.ref
+          }))
+          
+          if (preservedTables.length > 0) {
+            console.log(`[EXCEL] Preserved ${preservedTables.length} table definition(s) from worksheet "${s.name}"`)
+          }
+        }
+        
+        // Remove autoFilter and tables temporarily to prevent conflicts during data insertion
         if ((ws as any).autoFilter) {
           (ws as any).autoFilter = undefined
         }
-        // Also clear any table references that might have filter buttons
+        
         if ((ws as any).tables) {
-          for (const table of (ws as any).tables) {
-            if (table && table.filterButton !== undefined) {
-              table.filterButton = false
-            }
-          }
+          (ws as any).tables = []
+        }
+        
+        if ((ws as any)._tables) {
+          (ws as any)._tables = []
         }
       } catch (autoFilterError) {
-        console.warn('Warning: Failed to clear autoFilter/tables:', autoFilterError)
+        console.warn('Warning: Failed to preserve/clear autoFilter/tables:', autoFilterError)
       }
 
     // Row insertions (with optional style copy)
@@ -174,28 +195,120 @@ export async function mergeOpsIntoExcelTemplate(templateBuffer: ArrayBuffer | Ui
         }
       }
     }
-  }
 
-  // Write the modified workbook with error handling for filterButton issues
+      // Recreate tables after data insertion to preserve table functionality
+      if (preservedTables.length > 0) {
+        try {
+          console.log(`[EXCEL] Recreating ${preservedTables.length} table(s) in worksheet "${s.name}"`)
+          
+          for (const tableInfo of preservedTables) {
+            try {
+              // Adjust table range if rows were inserted
+              let adjustedRef = tableInfo.ref
+              
+              if (Array.isArray(s.insertRows) && s.insertRows.length) {
+                // Calculate total rows inserted before the table
+                const tableStartRow = parseInt(tableInfo.ref.match(/(\d+)/)?.[1] || '1', 10)
+                let rowsInsertedBefore = 0
+                
+                for (const ins of s.insertRows) {
+                  if (ins && isFinite(ins.at) && isFinite(ins.count)) {
+                    const insertAt = Math.floor(Number(ins.at))
+                    const insertCount = Math.floor(Number(ins.count))
+                    // If rows were inserted before or at the table start, adjust the range
+                    if (insertAt <= tableStartRow) {
+                      rowsInsertedBefore += insertCount
+                    }
+                  }
+                }
+                
+                // Adjust the table reference if needed
+                if (rowsInsertedBefore > 0) {
+                  // Parse the range (e.g., "A1:D10")
+                  const rangeMatch = tableInfo.ref.match(/([A-Z]+)(\d+):([A-Z]+)(\d+)/)
+                  if (rangeMatch) {
+                    const [, startCol, startRow, endCol, endRow] = rangeMatch
+                    const newStartRow = parseInt(startRow, 10) + rowsInsertedBefore
+                    const newEndRow = parseInt(endRow, 10) + rowsInsertedBefore
+                    adjustedRef = `${startCol}${newStartRow}:${endCol}${newEndRow}`
+                    console.log(`[EXCEL] Adjusted table "${tableInfo.name}" range from ${tableInfo.ref} to ${adjustedRef}`)
+                  }
+                }
+              }
+              
+              // Create the table with adjusted range
+              // ExcelJS addTable requires reading data from the worksheet
+              // IMPORTANT: Disable filterButton to prevent AutoFilter corruption issues
+              const tableData: any = {
+                name: tableInfo.name,
+                ref: adjustedRef,
+                headerRow: tableInfo.headerRow,
+                totalsRow: tableInfo.totalsRow,
+                style: tableInfo.style,
+                columns: tableInfo.columns.map((col: any) => ({
+                  name: col.name || 'Column',
+                  filterButton: false, // DISABLE filter buttons to prevent AutoFilter errors in Excel
+                  ...(col.totalsRowLabel && { totalsRowLabel: col.totalsRowLabel }),
+                  ...(col.totalsRowFunction && { totalsRowFunction: col.totalsRowFunction })
+                }))
+              }
+              
+              // Try to add the table - ExcelJS will read rows from the worksheet
+              try {
+                (ws as any).addTable(tableData)
+              } catch (addErr) {
+                // If addTable fails, try alternative approach without rows property
+                console.warn(`[EXCEL] Standard addTable failed for "${tableInfo.name}", trying alternative:`, addErr)
+                // Directly manipulate the tables array
+                if (!(ws as any).tables) {
+                  (ws as any).tables = []
+                }
+                (ws as any).tables.push(tableData)
+              }
+              
+              console.log(`[EXCEL] Successfully recreated table "${tableInfo.name}" at ${adjustedRef} (AutoFilter disabled)`)
+            } catch (tableError) {
+              console.error(`[EXCEL] Failed to recreate table "${tableInfo.name}":`, tableError)
+            }
+          }
+        } catch (recreateError) {
+          console.error('[EXCEL] Error recreating tables:', recreateError)
+        }
+      }
+    }
+
+  // Write the modified workbook with error handling for AutoFilter/Table issues
   try {
     const out = await workbook.xlsx.writeBuffer()
     return Buffer.isBuffer(out) ? out : Buffer.from(out as ArrayBuffer)
   } catch (writeError) {
-    // If writing fails due to filterButton or similar issues, try to fix and retry
+    // If writing fails due to AutoFilter/Table issues, try to fix and retry
     console.warn('First writeBuffer attempt failed, trying to fix worksheet properties:', writeError)
     
     // Try to clear all problematic properties from all worksheets
     workbook.worksheets.forEach(ws => {
       try {
+        // Remove autoFilter
         if ((ws as any).autoFilter) {
           (ws as any).autoFilter = undefined
         }
+        
+        // Remove all tables (both public and internal properties)
         if ((ws as any).tables) {
           (ws as any).tables = []
         }
-        // Clear any filter buttons that might be undefined
+        if ((ws as any)._tables) {
+          (ws as any)._tables = []
+        }
+        
+        // Clear any filter buttons
         if ((ws as any).filterButton !== undefined) {
           delete (ws as any).filterButton
+        }
+        
+        // Clear any table refs in the model
+        if ((ws as any).model && (ws as any).model.tables) {
+          (ws as any).model.tables = []
         }
       } catch (cleanupError) {
         console.warn('Failed to clean worksheet properties:', cleanupError)

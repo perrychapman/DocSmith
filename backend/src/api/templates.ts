@@ -1088,16 +1088,26 @@ YOUR JOB: Separate TEMPLATE STRUCTURE from PLACEHOLDER DATA
    - Start data population below headers
 
 EXCEL REQUIREMENTS:
-- Mirror sheet names/order exactly
+- If template has one sheet: Use that sheet as the structure template
+- If data naturally groups by category/type: CREATE additional sheets dynamically
+- Each sheet should follow the structure/formatting of the template sheet
 - Use A1 references for individual cells
 - Use ranges for bulk data population
-- Do NOT remove or reorder sheets
+- Preserve formatting from template for all sheets
+
+MULTI-SHEET INTELLIGENCE:
+- Analyze the data requirements and user instructions
+- If instructions mention "separate sheets", "by category", "by type", etc., create multiple sheets
+- If data has natural groupings (e.g., different applications, departments, products), create separate sheets
+- Name new sheets descriptively based on the data grouping
+- Each new sheet should replicate the template's header row and formatting
+- Example: Template has "Test Cases" sheet → Generate sheets if data groups by application
 
 STRICT RULES:
 - NO external imports or file I/O
 - Do NOT assume specific data exists
 - Do NOT hardcode data values
-- Do NOT add sheets not in template
+- CREATE new sheets when data logically groups into categories
 
 EXCEL TEMPLATE ARTIFACTS (merges, widths, alignment):
 ${skeleton}`

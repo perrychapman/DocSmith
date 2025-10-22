@@ -6,7 +6,7 @@ import { Badge } from "../components/ui/badge";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "../components/ui/dialog";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "../components/ui/breadcrumb";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
-import { Tooltip, TooltipContent, TooltipTrigger } from "../components/ui/tooltip";
+import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "../components/ui/tooltip";
 import { Icon } from "../components/icons";
 import { Search } from "lucide-react";
 import { A } from "../lib/api";
@@ -275,7 +275,7 @@ export default function WorkspaceDetailPage({ slug }: { slug: string }) {
                             <Icon.Pencil className="h-4 w-4"/>
                           </Button>
                           <Tooltip>
-                            <TooltipTrigger>
+                            <TooltipTrigger asChild>
                               <Button 
                                 size="icon"
                                 variant="destructive"
@@ -285,12 +285,12 @@ export default function WorkspaceDetailPage({ slug }: { slug: string }) {
                                   startDeleteThread(t);
                                 }}
                                 aria-label={`Delete ${getThreadName(t)}`}
-                                title={`Delete ${getThreadName(t)}`}
                                 className="h-9 w-9"
                               >
                                 <Icon.Trash className="h-4 w-4"/>
                               </Button>
                             </TooltipTrigger>
+                            <TooltipContent>Delete {getThreadName(t)}</TooltipContent>
                           </Tooltip>
                         </div>
                       </div>

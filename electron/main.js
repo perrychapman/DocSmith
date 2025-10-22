@@ -23,6 +23,7 @@ if (autoUpdater.requestHeaders) {
 let mainWindow = null;
 let updateCheckInProgress = false;
 let updateCheckTimeout = null;
+let vitePort = 5173; // Track the actual Vite port
 // Wait for backend to be ready by polling health endpoint
 async function waitForBackend(port, maxAttempts = 30, delayMs = 500) {
     logToFile(`Waiting for backend on port ${port} (max ${maxAttempts} attempts)...`);
@@ -50,6 +51,39 @@ async function waitForBackend(port, maxAttempts = 30, delayMs = 500) {
     }
     logToFile(`Backend failed to start after ${maxAttempts} attempts`);
     return false;
+}
+// Wait for Vite dev server to be ready, trying multiple ports
+async function waitForVite(startPort = 5173, maxAttempts = 60, delayMs = 500) {
+    // Try ports in range (e.g., 5173-5180)
+    const portsToTry = Array.from({ length: 8 }, (_, i) => startPort + i);
+    logToFile(`Waiting for Vite dev server on ports ${portsToTry[0]}-${portsToTry[portsToTry.length - 1]} (max ${maxAttempts} attempts)...`);
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        // Try each port
+        for (const port of portsToTry) {
+            try {
+                const response = await fetch(`http://localhost:${port}`, {
+                    method: 'GET',
+                    signal: AbortSignal.timeout(1000)
+                });
+                if (response.ok) {
+                    logToFile(`Vite dev server ready on port ${port} after ${attempt} attempt(s)`);
+                    return port; // Return the port that worked
+                }
+            }
+            catch (error) {
+                // This port didn't work, try next one
+            }
+        }
+        // Log progress periodically
+        if (attempt === 1 || attempt % 5 === 0) {
+            logToFile(`Vite server check attempt ${attempt}/${maxAttempts} - not ready yet on any port`);
+        }
+        if (attempt < maxAttempts) {
+            await new Promise(resolve => setTimeout(resolve, delayMs));
+        }
+    }
+    logToFile(`Vite dev server failed to start after ${maxAttempts} attempts`);
+    return null; // Return null if no port worked
 }
 // Log configuration
 const LOG_PATH = path.join(os.tmpdir(), 'docsmith-electron.log');
@@ -250,23 +284,38 @@ async function createWindow() {
             await mainWindow.loadURL('data:text/html,<h1>DocSmith</h1><p style="color:red;">Backend server failed to start.</p><p>Please check the logs and ensure the backend is running on port ' + backendPort + '.</p>');
             return;
         }
-        logToFile('Backend ready, loading Vite dev server at http://localhost:5173');
-        // Try to load Vite dev server, with fallback to static build if it fails
+        logToFile('Backend ready, waiting for Vite dev server...');
+        // Wait for Vite dev server to be ready and detect which port it's on
+        const detectedPort = await waitForVite(5173);
+        if (!detectedPort) {
+            logToFile('Vite dev server not ready, falling back to static build');
+            if (!mainWindow)
+                return;
+            if (fs.existsSync(distPath)) {
+                await mainWindow.loadFile(distPath);
+                logToFile('Loaded static build as fallback');
+            }
+            else {
+                logToFile('No static build available, loading error page');
+                await mainWindow.loadURL('data:text/html,<h1>DocSmith</h1><p>Development server not running and no static build found.</p><p>Run <code>npm run dev</code> to start the development server.</p>');
+            }
+            return;
+        }
+        // Store the detected port
+        vitePort = detectedPort;
+        logToFile(`Using Vite dev server on detected port ${vitePort}`);
+        // Try to load Vite dev server
         const loadDevServer = async () => {
             if (!mainWindow) {
                 logToFile('mainWindow is null, cannot load content');
                 return;
             }
             try {
-                // Use Promise.race to implement timeout
-                await Promise.race([
-                    mainWindow.loadURL('http://localhost:5173'),
-                    new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 5000))
-                ]);
-                logToFile('Successfully loaded Vite dev server');
+                await mainWindow.loadURL(`http://localhost:${vitePort}`);
+                logToFile(`Successfully loaded Vite dev server on port ${vitePort}`);
             }
             catch (error) {
-                logToFile('Failed to load Vite dev server, falling back to static build');
+                logToFile('Failed to load Vite dev server after it was ready: ' + error);
                 if (!mainWindow)
                     return;
                 if (fs.existsSync(distPath)) {
@@ -331,8 +380,17 @@ async function createWindow() {
             await mainWindow.loadFile(distPath);
         }
         else {
-            logToFile('Static build not found, loading Vite dev server at http://localhost:5173');
-            await mainWindow.loadURL('http://localhost:5173');
+            logToFile('Static build not found, detecting Vite dev server port...');
+            const detectedPort = await waitForVite(5173);
+            if (detectedPort) {
+                vitePort = detectedPort;
+                logToFile(`Loading Vite dev server on detected port ${vitePort}`);
+                await mainWindow.loadURL(`http://localhost:${vitePort}`);
+            }
+            else {
+                logToFile('No Vite dev server found');
+                await mainWindow.loadURL('data:text/html,<h1>DocSmith</h1><p style="color:red;">No static build or dev server found.</p>');
+            }
         }
     }
     // Store reference to backend process for cleanup

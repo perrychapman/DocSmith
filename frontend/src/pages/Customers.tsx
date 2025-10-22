@@ -5,8 +5,9 @@ import { Input } from "../components/ui/input";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbLink, BreadcrumbList, BreadcrumbPage, BreadcrumbSeparator } from "../components/ui/breadcrumb";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../components/ui/alert-dialog";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, DialogDescription, DialogClose } from "../components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Icon } from "../components/icons";
-import { Maximize2, Minimize2, Search, ExternalLink, Download, FileText, FileSpreadsheet, FileCode, FileQuestion, FileType, Info, Loader2, Pin, PinOff, RefreshCw } from "lucide-react";
+import { Maximize2, Minimize2, Search, ExternalLink, Download, FileText, FileSpreadsheet, FileCode, FileQuestion, FileType, Info, Loader2, Pin, PinOff, RefreshCw, Eye, AlertCircle, Trash, Upload } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "../components/ui/tooltip";
 import { A, apiFetch, apiEventSource } from "../lib/api";
 import WorkspaceChat from "../components/WorkspaceChat";
@@ -52,7 +53,7 @@ export function CustomersPage() {
   const [pinnedDocs, setPinnedDocs] = React.useState<Set<string>>(new Set());
   const [countsLoading, setCountsLoading] = React.useState(false);
   const [generateOpen, setGenerateOpen] = React.useState(false);
-  const [templates, setTemplates] = React.useState<Array<{ slug: string; name: string }>>([]);
+  const [templates, setTemplates] = React.useState<Array<{ slug: string; name: string; hasFullGen?: boolean }>>([]);
   const [loadingTemplates, setLoadingTemplates] = React.useState(false);
   const [selectedTemplate, setSelectedTemplate] = React.useState<string>("");
   const [genInstructions, setGenInstructions] = React.useState<string>("");
@@ -66,13 +67,20 @@ export function CustomersPage() {
   const [genDocuments, setGenDocuments] = React.useState<Array<{ name: string; relevance: number; reasoning: string; anythingllmPath?: string }>>([]);
   const [genPinnedDocs, setGenPinnedDocs] = React.useState<Set<string>>(new Set());
   const [loadingGenDocs, setLoadingGenDocs] = React.useState(false);
+  const [genDocQuery, setGenDocQuery] = React.useState<string>("");
+  const [genTemplateQuery, setGenTemplateQuery] = React.useState<string>("");
+  const [showNoDocsWarning, setShowNoDocsWarning] = React.useState(false);
   // External chat cards to display generation metadata in chat
   const [chatCards, setChatCards] = React.useState<Array<{ id: string; template?: string; jobId?: string; jobStatus?: 'running' | 'done' | 'error' | 'cancelled'; filename?: string; aiContext?: string; timestamp?: number; side?: 'user' | 'assistant' }>>([]);
+  const pollingIntervalRef = React.useRef<NodeJS.Timeout | null>(null);
 
   // Metadata modal state
   const [metadataModal, setMetadataModal] = React.useState<DocumentMetadata | null>(null);
   const { metadataProcessing, startTracking, setRefreshCallback } = useMetadata();
-  const [uploadMetadataCache, setUploadMetadataCache] = React.useState<Map<string, boolean>>(new Map());
+  const [uploadMetadataCache, setUploadMetadataCache] = React.useState<Map<string, { hasMetadata: boolean; isGenerated?: boolean }>>(new Map());
+
+  // Track workspace-level AI operations to disable concurrent operations
+  const hasActiveAIOperation = generating || metadataProcessing.size > 0;
 
   // Trigger metadata extraction for uploaded document
   async function extractUploadMetadata(filename: string) {
@@ -103,6 +111,26 @@ export function CustomersPage() {
   const [panelMode, setPanelMode] = React.useState<'split' | 'chat' | 'docs'>('split');
   const [docQuery, setDocQuery] = React.useState<string>("");
   const [docsTab, setDocsTab] = React.useState('uploaded'); // 'uploaded' or 'generated'
+  
+  // Regenerate dialog state
+  const [regenerateOpen, setRegenerateOpen] = React.useState(false);
+  const [regenerateDoc, setRegenerateDoc] = React.useState<{ name: string; customerId: number } | null>(null);
+  const [regenerateDocJobInfo, setRegenerateDocJobInfo] = React.useState<{ template: string; instructions?: string; pinnedDocuments?: string[] } | null>(null);
+  const [revisionInstructions, setRevisionInstructions] = React.useState('');
+  const [regenerating, setRegenerating] = React.useState(false);
+  
+  // Delete generated document dialog state
+  const [deleteGenDocOpen, setDeleteGenDocOpen] = React.useState(false);
+  const [deleteGenDocName, setDeleteGenDocName] = React.useState<string | null>(null);
+  const [deletingGenDoc, setDeletingGenDoc] = React.useState(false);
+  
+  // Upload/embed generated document state
+  const [uploadingGenDoc, setUploadingGenDoc] = React.useState(false);
+  const [uploadGenDocName, setUploadGenDocName] = React.useState<string | null>(null);
+  
+  // Track which generated documents have been uploaded to workspace
+  const [uploadedGenDocs, setUploadedGenDocs] = React.useState<Set<string>>(new Set());
+  
   const rowsClass = panelMode === 'split'
     ? 'grid grid-rows-[minmax(0,2fr)_minmax(0,1fr)]'
     : (panelMode === 'chat'
@@ -326,7 +354,11 @@ export function CustomersPage() {
         const r = await apiFetch(`/api/uploads/${cid}`);
         if (!r.ok) throw new Error(String(r.status));
         const data: UploadItem[] = await r.json();
-        if (!ignore) setUploads(Array.isArray(data) ? data : []);
+        // Sort by most recently modified first
+        const sorted = Array.isArray(data) ? data.sort((a, b) => 
+          new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime()
+        ) : [];
+        if (!ignore) setUploads(sorted);
       } catch {
         if (!ignore) setUploads([]);
       } finally {
@@ -346,7 +378,11 @@ export function CustomersPage() {
         const r = await apiFetch(`/api/documents/${cid}/files`);
         if (!r.ok) throw new Error(String(r.status));
         const data: UploadItem[] = await r.json();
-        if (!ignore) setGeneratedDocs(Array.isArray(data) ? data : []);
+        // Sort by most recently modified first
+        const sorted = Array.isArray(data) ? data.sort((a, b) => 
+          new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime()
+        ) : [];
+        if (!ignore) setGeneratedDocs(sorted);
       } catch {
         if (!ignore) setGeneratedDocs([]);
       } finally {
@@ -358,6 +394,130 @@ export function CustomersPage() {
     return () => { ignore = true };
   }, [selectedId]);
 
+  // Cross-reference generated docs with uploads to track which have been uploaded to workspace
+  React.useEffect(() => {
+    if (!uploads.length || !generatedDocs.length) {
+      setUploadedGenDocs(new Set());
+      return;
+    }
+    
+    // Create a set of upload filenames for quick lookup
+    const uploadFilenames = new Set(uploads.map(u => u.name));
+    
+    // Check which generated docs exist in uploads
+    const uploaded = new Set<string>();
+    generatedDocs.forEach(doc => {
+      if (uploadFilenames.has(doc.name)) {
+        uploaded.add(doc.name);
+      }
+    });
+    
+    setUploadedGenDocs(uploaded);
+  }, [uploads, generatedDocs]);
+
+  // Load metadata for uploaded documents to check if they're generated
+  React.useEffect(() => {
+    if (!selectedId || !uploads.length) return;
+    
+    let ignore = false;
+    async function loadUploadMetadata() {
+      for (const upload of uploads) {
+        // Skip if already cached
+        if (uploadMetadataCache.has(upload.name)) continue;
+        
+        try {
+          const r = await apiFetch(`/api/uploads/${selectedId}/metadata?name=${encodeURIComponent(upload.name)}`);
+          const data = await r.json();
+          
+          const hasMetadata = data.metadata && (data.metadata.documentType || data.metadata.purpose || (data.metadata.keyTopics && data.metadata.keyTopics.length > 0));
+          const isGenerated = data.metadata?.extraFields?.isGenerated === true;
+          
+          if (!ignore) {
+            setUploadMetadataCache(prev => new Map(prev).set(upload.name, { hasMetadata, isGenerated }));
+          }
+        } catch (err) {
+          console.error(`Failed to load metadata for ${upload.name}:`, err);
+        }
+      }
+    }
+    
+    loadUploadMetadata();
+    return () => { ignore = true };
+  }, [uploads, selectedId]);
+
+  // Load existing gen_cards for the workspace
+  React.useEffect(() => {
+    let ignore = false;
+    async function loadGenCards() {
+      if (!wsSlug) return;
+      try {
+        const response = await A.genCardsByWorkspace(wsSlug);
+        if (!ignore && response?.cards) {
+          // Filter and sort cards by timestamp
+          const validCards = Array.isArray(response.cards) ? response.cards.filter((c: any) => c.id) : [];
+          setChatCards(validCards.sort((a: any, b: any) => (a.timestamp || 0) - (b.timestamp || 0)));
+        }
+      } catch (err) {
+        console.error('Failed to load gen cards:', err);
+        if (!ignore) setChatCards([]);
+      }
+    }
+    loadGenCards();
+    return () => { ignore = true };
+  }, [wsSlug]);
+
+  // Poll for gen_card updates when there are running jobs
+  React.useEffect(() => {
+    if (!wsSlug) {
+      // Clear any existing polling when workspace changes
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+        pollingIntervalRef.current = null;
+      }
+      return;
+    }
+    
+    // Function to poll for updates
+    const pollForUpdates = async () => {
+      try {
+        const response = await A.genCardsByWorkspace(wsSlug);
+        if (response?.cards) {
+          const validCards = Array.isArray(response.cards) ? response.cards.filter((c: any) => c.id) : [];
+          setChatCards(validCards.sort((a: any, b: any) => (a.timestamp || 0) - (b.timestamp || 0)));
+          
+          // Check if we should stop polling
+          const hasRunningJobs = validCards.some((c: any) => c.jobStatus === 'running');
+          if (!hasRunningJobs && !generating && pollingIntervalRef.current) {
+            clearInterval(pollingIntervalRef.current);
+            pollingIntervalRef.current = null;
+          }
+        }
+      } catch (err) {
+        console.error('Failed to poll gen cards:', err);
+      }
+    };
+    
+    // Start polling if there are running jobs or generation is active
+    const hasRunningJobs = chatCards.some(card => card.jobStatus === 'running');
+    const shouldPoll = hasRunningJobs || generating;
+    
+    if (shouldPoll && !pollingIntervalRef.current) {
+      // Start new polling interval
+      pollingIntervalRef.current = setInterval(pollForUpdates, 3000);
+    } else if (!shouldPoll && pollingIntervalRef.current) {
+      // Stop polling if no longer needed
+      clearInterval(pollingIntervalRef.current);
+      pollingIntervalRef.current = null;
+    }
+    
+    return () => {
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+        pollingIntervalRef.current = null;
+      }
+    };
+  }, [wsSlug, chatCards.some(c => c.jobStatus === 'running'), generating]);
+
   // Load templates once when opening generate modal
   React.useEffect(() => {
     if (!generateOpen) return;
@@ -367,7 +527,7 @@ export function CustomersPage() {
       try {
         const r = await apiFetch(`/api/templates`);
         const data = await r.json().catch(() => ({}));
-        const list: Array<{ slug: string; name: string }> = Array.isArray(data?.templates) ? data.templates : [];
+        const list: Array<{ slug: string; name: string; hasFullGen?: boolean }> = Array.isArray(data?.templates) ? data.templates : [];
         if (!ignore) setTemplates(list);
         if (!ignore && list.length && !selectedTemplate) setSelectedTemplate(list[0].slug);
       } catch {
@@ -446,6 +606,21 @@ export function CustomersPage() {
     return () => { ignore = true };
   }, [generateOpen, selectedTemplate, selectedId]);
 
+  function handleGenerateClick() {
+    // If no documents selected, show warning
+    if (genPinnedDocs.size === 0) {
+      setShowNoDocsWarning(true);
+      return;
+    }
+    // Otherwise, proceed directly
+    generateDocument();
+  }
+
+  function proceedWithoutDocs() {
+    setShowNoDocsWarning(false);
+    generateDocument();
+  }
+
   async function generateDocument() {
     if (!selectedId) { toast.error("Select a customer first"); return; }
     if (!selectedTemplate) { toast.error("Choose a template"); return; }
@@ -481,6 +656,7 @@ export function CustomersPage() {
       
       // Step 2: Pin ONLY selected documents
       const docsToPinList = genDocuments.filter(d => genPinnedDocs.has(d.name) && d.anythingllmPath);
+      const pinnedDocPaths: string[] = [];
       if (docsToPinList.length > 0) {
         toast.info(`Pinning ${docsToPinList.length} selected document(s)...`);
         for (const doc of docsToPinList) {
@@ -490,6 +666,10 @@ export function CustomersPage() {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ docPath: doc.anythingllmPath, pinStatus: true })
             });
+            // Track the pinned document path
+            if (doc.anythingllmPath) {
+              pinnedDocPaths.push(doc.anythingllmPath);
+            }
             // Update UI state for document cards
             setPinnedDocs(prev => {
               const next = new Set(prev);
@@ -502,10 +682,11 @@ export function CustomersPage() {
         }
       }
       
-      // Step 2: Start generation
+      // Step 3: Start generation with pinned document paths
       setGenSteps({}); setGenProgress(0); setGenError(null);
       const extra = genInstructions && genInstructions.trim().length ? `&instructions=${encodeURIComponent(genInstructions)}` : '';
-      const url = `/api/generate/stream?customerId=${encodeURIComponent(String(selectedId))}&template=${encodeURIComponent(String(selectedTemplate))}${extra}`;
+      const pinnedDocsParam = pinnedDocPaths.length > 0 ? `&pinnedDocuments=${encodeURIComponent(JSON.stringify(pinnedDocPaths))}` : '';
+      const url = `/api/generate/stream?customerId=${encodeURIComponent(String(selectedId))}&template=${encodeURIComponent(String(selectedTemplate))}${extra}${pinnedDocsParam}`;
       const es = apiEventSource(url);
       genEventRef.current = es;
       let fileName: string | null = null
@@ -526,21 +707,39 @@ export function CustomersPage() {
             if (data.jobId) {
               const jid = String(data.jobId)
               setGenJobId(jid)
-              // Inject a chat card for this job (running)
+              // Inject chat cards for this job
               setChatCards((prev) => {
-                const next = prev.filter((c) => c.id !== jid)
-                const card = {
+                const next = prev.filter((c) => c.id !== jid && c.id !== `${jid}-reply`)
+                const timestamp = Date.now()
+                
+                // User card: Document requested
+                const userCard = {
                   id: jid,
                   side: 'user' as const,
                   template: selectedTemplate || undefined,
                   jobId: jid,
                   jobStatus: 'running' as const,
                   aiContext: genInstructions || undefined,
-                  timestamp: Date.now()
+                  timestamp
                 }
-                next.push(card)
-                // Save to backend
-                if (wsSlug) { A.upsertGenCard({ id: jid, workspaceSlug: wsSlug, side: 'user', template: selectedTemplate || undefined, jobId: jid, jobStatus: 'running' as const, aiContext: genInstructions || undefined, timestamp: card.timestamp }).catch(() => { }) }
+                
+                // Assistant reply card: Document generating
+                const assistantCard = {
+                  id: `${jid}-reply`,
+                  side: 'assistant' as const,
+                  template: selectedTemplate || undefined,
+                  jobId: jid,
+                  jobStatus: 'running' as const,
+                  timestamp
+                }
+                
+                next.push(userCard, assistantCard)
+                
+                // Save both to backend
+                if (wsSlug) { 
+                  A.upsertGenCard({ id: jid, workspaceSlug: wsSlug, side: 'user', template: selectedTemplate || undefined, jobId: jid, jobStatus: 'running' as const, aiContext: genInstructions || undefined, timestamp }).catch(() => { })
+                  A.upsertGenCard({ id: `${jid}-reply`, workspaceSlug: wsSlug, side: 'assistant', template: selectedTemplate || undefined, jobId: jid, jobStatus: 'running' as const, timestamp }).catch(() => { })
+                }
                 return next
               })
             }
@@ -558,7 +757,24 @@ export function CustomersPage() {
             setGenError(errMsg)
             if (genJobId) {
               const jid = genJobId
-              setChatCards((prev) => prev.map((c) => c.id === jid ? { ...c, jobStatus: 'error', timestamp: Date.now() } : c))
+              const timestamp = Date.now()
+              setChatCards((prev) => prev.map((c) => 
+                c.id === `${jid}-reply` 
+                  ? { ...c, jobStatus: 'error' as const, timestamp } 
+                  : c
+              ))
+              // Update assistant card in backend
+              if (wsSlug) {
+                A.upsertGenCard({ 
+                  id: `${jid}-reply`, 
+                  workspaceSlug: wsSlug, 
+                  side: 'assistant', 
+                  template: selectedTemplate || undefined, 
+                  jobId: jid, 
+                  jobStatus: 'error', 
+                  timestamp 
+                }).catch(() => { })
+              }
             }
             setGenSteps((prev) => {
               const order = ['resolveCustomer', 'loadTemplate', 'resolveWorkspace', 'readGenerator', 'aiUpdate', 'transpile', 'execute', 'mergeWrite']
@@ -576,33 +792,52 @@ export function CustomersPage() {
             setGenProgress(100)
             if (data?.jobId) {
               const jid = String(data.jobId)
+              const now = Date.now()
               setChatCards((prev) => {
-                const now = Date.now();
-                const updated = prev.map((c) => c.id === jid ? { ...c, jobStatus: 'done' as const, filename: fileName || c.filename, timestamp: now, side: 'user' as const } : c);
-                // Also append a received card announcing generation complete
-                const assistantId = `${jid}-done`;
-                if (!updated.find((c) => c.id === assistantId)) {
-                  updated.push({ id: assistantId, side: 'assistant' as const, template: selectedTemplate || undefined, jobId: jid, jobStatus: 'done' as const, filename: fileName || undefined, timestamp: now });
-                }
-                // Persist both cards
+                // Update the assistant reply card to 'done' with filename
+                const updated = prev.map((c) => 
+                  c.id === `${jid}-reply` 
+                    ? { ...c, jobStatus: 'done' as const, filename: fileName || c.filename, timestamp: now }
+                    : c
+                );
+                
+                // Persist updated assistant card
                 if (wsSlug) {
-                  A.upsertGenCard({ id: jid, workspaceSlug: wsSlug, side: 'user', template: selectedTemplate || undefined, jobId: jid, jobStatus: 'done' as const, filename: fileName || undefined, aiContext: genInstructions || undefined, timestamp: now }).catch(() => { })
-                  A.upsertGenCard({ id: assistantId, workspaceSlug: wsSlug, side: 'assistant', template: selectedTemplate || undefined, jobId: jid, jobStatus: 'done' as const, filename: fileName || undefined, timestamp: now }).catch(() => { })
+                  A.upsertGenCard({ 
+                    id: `${jid}-reply`, 
+                    workspaceSlug: wsSlug, 
+                    side: 'assistant', 
+                    template: selectedTemplate || undefined, 
+                    jobId: jid, 
+                    jobStatus: 'done', 
+                    filename: fileName || undefined, 
+                    timestamp: now 
+                  }).catch(() => { })
                 }
                 return updated;
               })
             } else if (genJobId) {
               const jid = genJobId
+              const now = Date.now()
               setChatCards((prev) => {
-                const now = Date.now();
-                const updated = prev.map((c) => c.id === jid ? { ...c, jobStatus: 'done' as const, filename: fileName || c.filename, timestamp: now, side: 'user' as const } : c);
-                const assistantId = `${jid}-done`;
-                if (!updated.find((c) => c.id === assistantId)) {
-                  updated.push({ id: assistantId, side: 'assistant' as const, template: selectedTemplate || undefined, jobId: jid, jobStatus: 'done' as const, filename: fileName || undefined, timestamp: now });
-                }
+                // Update the assistant reply card to 'done' with filename
+                const updated = prev.map((c) => 
+                  c.id === `${jid}-reply` 
+                    ? { ...c, jobStatus: 'done' as const, filename: fileName || c.filename, timestamp: now }
+                    : c
+                );
+                
                 if (wsSlug) {
-                  A.upsertGenCard({ id: jid, workspaceSlug: wsSlug, side: 'user', template: selectedTemplate || undefined, jobId: jid, jobStatus: 'done' as const, filename: fileName || undefined, aiContext: genInstructions || undefined, timestamp: now }).catch(() => { })
-                  A.upsertGenCard({ id: assistantId, workspaceSlug: wsSlug, side: 'assistant', template: selectedTemplate || undefined, jobId: jid, jobStatus: 'done' as const, filename: fileName || undefined, timestamp: now }).catch(() => { })
+                  A.upsertGenCard({ 
+                    id: `${jid}-reply`, 
+                    workspaceSlug: wsSlug, 
+                    side: 'assistant', 
+                    template: selectedTemplate || undefined, 
+                    jobId: jid, 
+                    jobStatus: 'done', 
+                    filename: fileName || undefined, 
+                    timestamp: now 
+                  }).catch(() => { })
                 }
                 return updated;
               })
@@ -639,14 +874,22 @@ export function CustomersPage() {
                 try { 
                   const r2 = await apiFetch(`/api/uploads/${selectedId}`); 
                   const d2: UploadItem[] = await r2.json(); 
-                  setUploads(Array.isArray(d2) ? d2 : []) 
+                  // Sort by most recently modified first
+                  const sorted = Array.isArray(d2) ? d2.sort((a, b) => 
+                    new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime()
+                  ) : [];
+                  setUploads(sorted) 
                 } catch { } 
               })();
               (async () => { 
                 try { 
-                  const r3 = await apiFetch(`/api/documents/${selectedId}`); 
+                  const r3 = await apiFetch(`/api/documents/${selectedId}/files`); 
                   const d3: UploadItem[] = await r3.json(); 
-                  setGeneratedDocs(Array.isArray(d3) ? d3 : []) 
+                  // Sort by most recently modified first
+                  const sorted = Array.isArray(d3) ? d3.sort((a, b) => 
+                    new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime()
+                  ) : [];
+                  setGeneratedDocs(sorted) 
                 } catch { } 
               })();
             toast.success('Document generated')
@@ -659,8 +902,22 @@ export function CustomersPage() {
         if (genJobId) {
           const jid = genJobId
           const now = Date.now();
-          setChatCards((prev) => prev.map((c) => c.id === jid ? { ...c, jobStatus: 'error', timestamp: now } : c))
-          if (wsSlug) { A.upsertGenCard({ id: jid, workspaceSlug: wsSlug, side: 'user', template: selectedTemplate || undefined, jobId: jid, jobStatus: 'error', aiContext: genInstructions || undefined, timestamp: now }).catch(() => { }) }
+          setChatCards((prev) => prev.map((c) => 
+            c.id === `${jid}-reply` 
+              ? { ...c, jobStatus: 'error' as const, timestamp: now } 
+              : c
+          ))
+          if (wsSlug) { 
+            A.upsertGenCard({ 
+              id: `${jid}-reply`, 
+              workspaceSlug: wsSlug, 
+              side: 'assistant', 
+              template: selectedTemplate || undefined, 
+              jobId: jid, 
+              jobStatus: 'error', 
+              timestamp: now 
+            }).catch(() => { }) 
+          }
         }
         // Unpin documents on error
         (async () => {
@@ -919,6 +1176,350 @@ export function CustomersPage() {
       toast.error?.('Failed to open file')
     }
   }
+
+  async function handleRegenerate() {
+    if (!regenerateDoc || !selectedId) return;
+
+    try {
+      setRegenerating(true);
+      
+      // Use cached job info if available, otherwise fetch it
+      let templateSlug = regenerateDocJobInfo?.template || '';
+      let originalInstructions = regenerateDocJobInfo?.instructions || '';
+      let pinnedDocuments = regenerateDocJobInfo?.pinnedDocuments;
+      
+      // If we don't have cached job info, fetch it
+      if (!regenerateDocJobInfo) {
+        try {
+          const jobsResponse = await apiFetch('/api/generate/jobs');
+          const jobsData = await jobsResponse.json();
+          const jobs = Array.isArray(jobsData?.jobs) ? jobsData.jobs : [];
+          
+          const matchingJob = jobs.find((j: any) => 
+            j.customerId === selectedId && 
+            j.file?.name === regenerateDoc.name &&
+            j.status === 'done'
+          );
+          
+          if (matchingJob) {
+            templateSlug = matchingJob.template;
+            originalInstructions = matchingJob.instructions || '';
+            pinnedDocuments = matchingJob.pinnedDocuments;
+          } else {
+            toast.error('Unable to find original generation job for this document');
+            setRegenerating(false);
+            return;
+          }
+        } catch (err) {
+          console.error('Failed to retrieve original job:', err);
+          toast.error('Failed to retrieve original job information');
+          setRegenerating(false);
+          return;
+        }
+      }
+      
+      // Step 1: Re-pin the original documents if needed
+      if (pinnedDocuments && pinnedDocuments.length > 0 && wsSlug) {
+        toast.info(`Re-pinning ${pinnedDocuments.length} document(s)...`);
+        
+        // Track which documents were pinned for later unpinning
+        const pinnedDocNames = new Set<string>();
+        
+        for (const docPath of pinnedDocuments) {
+          try {
+            await apiFetch(`/api/anythingllm/workspace/${encodeURIComponent(wsSlug)}/update-pin`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ docPath, pinStatus: true })
+            });
+            
+            // Extract filename from docPath and track it
+            // docPath format is typically "customerName/filename.ext-uuid.json"
+            const filename = docPath.split('/').pop()?.replace(/-[a-f0-9-]+\.json$/, '') || '';
+            if (filename) {
+              pinnedDocNames.add(filename);
+            }
+          } catch (err) {
+            console.error(`Failed to re-pin document ${docPath}:`, err);
+          }
+        }
+        
+        // Update genPinnedDocs so unpinning logic can find them later
+        setGenPinnedDocs(pinnedDocNames);
+      } else {
+        // No documents to pin for regeneration
+        setGenPinnedDocs(new Set());
+      }
+
+      // Step 2: Combine original instructions with revision instructions
+      const combinedInstructions = originalInstructions 
+        ? `${originalInstructions}\n\nREVISIONS:\n${revisionInstructions}`
+        : revisionInstructions;
+
+      // Step 4: Use streaming API for real-time updates and gen_cards (like regular generation)
+      setGenSteps({}); 
+      setGenProgress(0); 
+      setGenError(null);
+      setRegenerateOpen(false); // Close dialog before starting
+      setRevisionInstructions('');
+      setRegenerateDocJobInfo(null); // Clear cached job info
+      
+      const instructionsParam = combinedInstructions ? `&instructions=${encodeURIComponent(combinedInstructions)}` : '';
+      const pinnedDocsParam = pinnedDocuments && pinnedDocuments.length > 0 
+        ? `&pinnedDocuments=${encodeURIComponent(JSON.stringify(pinnedDocuments))}` 
+        : '';
+      const url = `/api/generate/stream?customerId=${encodeURIComponent(String(selectedId))}&template=${encodeURIComponent(templateSlug)}${instructionsParam}${pinnedDocsParam}`;
+      const es = apiEventSource(url);
+      genEventRef.current = es;
+      let fileName: string | null = null;
+      
+      es.onmessage = (ev) => {
+        try {
+          const data = JSON.parse(ev.data || '{}');
+          if (data?.type === 'log') {
+            // suppress
+          } else if (data?.type === 'info') {
+            if (data.jobId) {
+              const jid = String(data.jobId);
+              setGenJobId(jid);
+              // Inject chat cards for regeneration job
+              setChatCards((prev) => {
+                const next = prev.filter((c) => c.id !== jid && c.id !== `${jid}-reply`);
+                const timestamp = Date.now();
+                
+                const userCard = {
+                  id: jid,
+                  side: 'user' as const,
+                  template: templateSlug || undefined,
+                  jobId: jid,
+                  jobStatus: 'running' as const,
+                  aiContext: combinedInstructions || undefined,
+                  timestamp
+                };
+                
+                const assistantCard = {
+                  id: `${jid}-reply`,
+                  side: 'assistant' as const,
+                  template: templateSlug || undefined,
+                  jobId: jid,
+                  jobStatus: 'running' as const,
+                  timestamp
+                };
+                
+                next.push(userCard, assistantCard);
+                
+                if (wsSlug) {
+                  A.upsertGenCard({ id: jid, workspaceSlug: wsSlug, side: 'user', template: templateSlug || undefined, jobId: jid, jobStatus: 'running' as const, aiContext: combinedInstructions || undefined, timestamp }).catch(() => {});
+                  A.upsertGenCard({ id: `${jid}-reply`, workspaceSlug: wsSlug, side: 'assistant', template: templateSlug || undefined, jobId: jid, jobStatus: 'running' as const, timestamp }).catch(() => {});
+                }
+                return next;
+              });
+            }
+          } else if (data?.type === 'step') {
+            const name = String(data.name || '');
+            const status = (String(data.status || 'start') as 'start' | 'ok');
+            const p = typeof data.progress === 'number' ? Math.max(0, Math.min(100, Math.floor(data.progress))) : null;
+            setGenSteps((prev) => ({ ...(prev || {}), [name]: status }));
+            if (p != null) setGenProgress(p);
+          } else if (data?.type === 'error') {
+            const errMsg = String(data.error || 'unknown');
+            setGenError(errMsg);
+            if (genJobId) {
+              const jid = genJobId;
+              const timestamp = Date.now();
+              setChatCards((prev) => prev.map((c) => 
+                c.id === `${jid}-reply` 
+                  ? { ...c, jobStatus: 'error' as const, timestamp } 
+                  : c
+              ));
+              if (wsSlug) {
+                A.upsertGenCard({ id: `${jid}-reply`, workspaceSlug: wsSlug, side: 'assistant', template: templateSlug || undefined, jobId: jid, jobStatus: 'error', timestamp }).catch(() => {});
+              }
+            }
+            toast.error(`Regeneration failed: ${errMsg}`);
+            if (es && typeof es.close === 'function') es.close();
+            genEventRef.current = null;
+            setRegenerating(false);
+            setGenJobId(null);
+          } else if (data?.type === 'done') {
+            if (data?.file?.name) fileName = String(data.file.name);
+            setGenProgress(100);
+            if (data?.jobId) {
+              const jid = String(data.jobId);
+              const now = Date.now();
+              setChatCards((prev) => {
+                const updated = prev.map((c) => 
+                  c.id === `${jid}-reply` 
+                    ? { ...c, jobStatus: 'done' as const, filename: fileName || c.filename, timestamp: now }
+                    : c
+                );
+                if (wsSlug) {
+                  A.upsertGenCard({ id: `${jid}-reply`, workspaceSlug: wsSlug, side: 'assistant', template: templateSlug || undefined, jobId: jid, jobStatus: 'done', filename: fileName || undefined, timestamp: now }).catch(() => {});
+                }
+                return updated;
+              });
+            }
+            toast.success('Document regenerated successfully');
+            
+            // Refresh generated docs
+            apiFetch(`/api/documents/${selectedId}/files`)
+              .then(r => r.json())
+              .then((data: UploadItem[]) => {
+                const sorted = Array.isArray(data) ? data.sort((a, b) => 
+                  new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime()
+                ) : [];
+                setGeneratedDocs(sorted);
+              })
+              .catch(() => {});
+            
+            if (es && typeof es.close === 'function') es.close();
+            genEventRef.current = null;
+            setRegenerating(false);
+            setGenJobId(null);
+          }
+        } catch (err) {
+          console.error('Stream parse error:', err);
+        }
+      };
+      
+      es.onerror = (err) => {
+        console.error('Stream error:', err);
+        toast.error('Regeneration stream error');
+        if (genJobId) {
+          const jid = genJobId;
+          const now = Date.now();
+          setChatCards((prev) => prev.map((c) => 
+            c.id === `${jid}-reply` 
+              ? { ...c, jobStatus: 'error' as const, timestamp: now } 
+              : c
+          ));
+          if (wsSlug) { 
+            A.upsertGenCard({ 
+              id: `${jid}-reply`, 
+              workspaceSlug: wsSlug, 
+              side: 'assistant', 
+              template: templateSlug || undefined, 
+              jobId: jid, 
+              jobStatus: 'error', 
+              timestamp: now 
+            }).catch(() => { }); 
+          }
+        }
+        if (es && typeof es.close === 'function') es.close();
+        genEventRef.current = null;
+        setRegenerating(false);
+        setGenJobId(null);
+      };
+
+    } catch (error) {
+      console.error(error);
+      const errorMsg = error instanceof Error ? error.message : 'Failed to regenerate document';
+      toast.error(errorMsg);
+    } finally {
+      setRegenerating(false);
+    }
+  }
+
+  async function handleDeleteGeneratedDoc() {
+    if (!deleteGenDocName || !selectedId) return;
+
+    try {
+      setDeletingGenDoc(true);
+
+      const response = await apiFetch(`/api/documents/${selectedId}/file?name=${encodeURIComponent(deleteGenDocName)}`, {
+        method: 'DELETE'
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to delete document');
+      }
+
+      toast.success('Document deleted successfully');
+      setDeleteGenDocOpen(false);
+      setDeleteGenDocName(null);
+
+      // Refresh generated docs list
+      try {
+        const r = await apiFetch(`/api/documents/${selectedId}/files`);
+        if (r.ok) {
+          const data: UploadItem[] = await r.json();
+          const sorted = Array.isArray(data) ? data.sort((a, b) =>
+            new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime()
+          ) : [];
+          setGeneratedDocs(sorted);
+        }
+      } catch (err) {
+        console.error('Failed to refresh generated docs:', err);
+      }
+    } catch (error) {
+      console.error(error);
+      toast.error('Failed to delete document');
+    } finally {
+      setDeletingGenDoc(false);
+    }
+  }
+
+  async function embedGeneratedDoc(filename: string) {
+    if (!selectedId) {
+      toast.error('No customer selected');
+      return;
+    }
+
+    try {
+      setUploadingGenDoc(true);
+      setUploadGenDocName(filename);
+      
+      const toastId = (toast as any).loading ? (toast as any).loading("Uploading and embedding...") : undefined;
+
+      // Call backend endpoint to copy and embed the generated document
+      const response = await apiFetch(`/api/documents/${selectedId}/embed-generated`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filename })
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error((errorData as any)?.error || 'Failed to embed document');
+      }
+
+      const json = await response.json().catch(() => ({}));
+      const uploadedFilename = (json as any)?.filename || filename;
+
+      // Start tracking metadata extraction
+      console.log('[EMBED-GEN] Starting metadata tracking for:', uploadedFilename);
+      startTracking(selectedId, uploadedFilename);
+
+      // Refresh uploads list
+      try {
+        const r2 = await apiFetch(`/api/uploads/${selectedId}`);
+        const d2: UploadItem[] = await r2.json();
+        setUploads(d2);
+      } catch (err) {
+        console.error('Failed to refresh uploads:', err);
+      }
+
+      if ((json as any)?.embeddingWarning) {
+        toast.warning?.((json as any).embeddingWarning) ?? toast.success("Uploaded; embedding may still be processing");
+      } else {
+        if (toastId) (toast as any).success("Embedding completed", { id: toastId });
+        else toast.success("Embedding completed");
+      }
+
+      // Add to uploaded set
+      setUploadedGenDocs(prev => new Set(prev).add(filename));
+
+      // Switch to uploaded tab to show the newly embedded document
+      setDocsTab('uploaded');
+    } catch (error) {
+      console.error('Failed to embed generated document:', error);
+      toast.error((error as Error).message || 'Failed to embed document');
+    } finally {
+      setUploadingGenDoc(false);
+      setUploadGenDocName(null);
+    }
+  }
+
   function startDelete(c: Customer) {
     setDeleteId(c.id);
     setDeleteName(c.name);
@@ -1047,7 +1648,6 @@ export function CustomersPage() {
                           onKeyDown={(e) => {
                             if (e.key === "Enter" || e.key === " ") setSelectedId(c.id);
                           }}
-                          title={new Date(c.createdAt).toLocaleString()}
                         >
                           {/* Selection indicator */}
                           {selectedId === c.id && (
@@ -1079,7 +1679,7 @@ export function CustomersPage() {
                             {/* Right: actions (delete) */}
                             <div className="opacity-60 group-hover:opacity-100 transition-opacity duration-200 ml-2 flex items-center gap-1">
                               <Tooltip>
-                                <TooltipTrigger>
+                                <TooltipTrigger asChild>
                                   <Button
                                     size="icon"
                                     variant="destructive"
@@ -1090,12 +1690,12 @@ export function CustomersPage() {
                                       startDelete(c);
                                     }}
                                     aria-label={`Delete ${c.name}`}
-                                    title={`Delete ${c.name}`}
                                     className="h-7 w-7 sm:h-9 sm:w-9"
                                   >
                                     {deleting === c.name ? "." : <Icon.Trash className="h-3 w-3 sm:h-4 sm:w-4" />}
                                   </Button>
                                 </TooltipTrigger>
+                                <TooltipContent>Delete Customer</TooltipContent>
                               </Tooltip>
                             </div>
                           </div>
@@ -1143,13 +1743,14 @@ export function CustomersPage() {
                     <>
                       <Dialog>
                         <Tooltip>
-                          <TooltipTrigger>
+                          <TooltipTrigger asChild>
                             <DialogTrigger asChild>
-                              <Button size="icon" variant="ghost" aria-label="Recent jobs" title="Recent jobs">
+                              <Button size="icon" variant="ghost" aria-label="Recent jobs">
                                 <Icon.History className="h-4 w-4" />
                               </Button>
                             </DialogTrigger>
                           </TooltipTrigger>
+                          <TooltipContent>Recent Jobs</TooltipContent>
                         </Tooltip>
                         <DialogContent className="w-[95vw] sm:!max-w-6xl">
                           <DialogHeader>
@@ -1167,11 +1768,12 @@ export function CustomersPage() {
                         </DialogContent>
                       </Dialog>
                       <Tooltip>
-                        <TooltipTrigger>
+                        <TooltipTrigger asChild>
                           <Button size="icon" variant="ghost" onClick={() => setPanelMode(panelMode === 'chat' ? 'split' : 'chat')} aria-label={panelMode === 'chat' ? 'Collapse chat' : 'Expand chat'}>
                             {panelMode === 'chat' ? (<Minimize2 className="h-4 w-4" />) : (<Maximize2 className="h-4 w-4" />)}
                           </Button>
                         </TooltipTrigger>
+                        <TooltipContent>{panelMode === 'chat' ? 'Collapse' : 'Expand'} Chat</TooltipContent>
                       </Tooltip>
                     </>
                   )}
@@ -1205,13 +1807,14 @@ export function CustomersPage() {
                       <>
                         <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
                           <Tooltip>
-                            <TooltipTrigger>
+                            <TooltipTrigger asChild>
                               <DialogTrigger asChild>
                                 <Button disabled={!selectedId} size="icon" variant="ghost" aria-label="Upload document">
                                   <Icon.Upload className="h-4 w-4" />
                                 </Button>
                               </DialogTrigger>
                             </TooltipTrigger>
+                            <TooltipContent>Upload Document</TooltipContent>
                           </Tooltip>
                         <DialogContent>
                           <DialogHeader>
@@ -1307,7 +1910,7 @@ export function CustomersPage() {
                       </Dialog>
                       {/* Open uploads folder */}
                       <Tooltip>
-                        <TooltipTrigger>
+                        <TooltipTrigger asChild>
                           <Button
                             size="icon"
                             variant="ghost"
@@ -1327,6 +1930,7 @@ export function CustomersPage() {
                             <Icon.Folder className="h-4 w-4" />
                           </Button>
                         </TooltipTrigger>
+                        <TooltipContent>Open Uploads Folder</TooltipContent>
                       </Tooltip>
                     </>
                   )}
@@ -1334,15 +1938,18 @@ export function CustomersPage() {
                   {docsTab === 'generated' && (
                     <>
                       <Tooltip>
-                        <TooltipTrigger>
-                          <Button disabled={!selectedId} size="icon" variant="ghost" aria-label="Generate document" onClick={() => setGenerateOpen(true)}>
+                        <TooltipTrigger asChild>
+                          <Button disabled={!selectedId || hasActiveAIOperation} size="icon" variant="ghost" aria-label="Generate document" onClick={() => setGenerateOpen(true)}>
                             <Icon.FileText className="h-4 w-4" />
                           </Button>
                         </TooltipTrigger>
+                        <TooltipContent>
+                          {hasActiveAIOperation ? 'AI operation in progress' : 'Generate document'}
+                        </TooltipContent>
                       </Tooltip>
                       {/* Open documents folder for generated docs */}
                       <Tooltip>
-                        <TooltipTrigger>
+                        <TooltipTrigger asChild>
                           <Button
                             size="icon"
                             variant="ghost"
@@ -1362,17 +1969,19 @@ export function CustomersPage() {
                             <Icon.Folder className="h-4 w-4" />
                           </Button>
                         </TooltipTrigger>
+                        <TooltipContent>Open Documents Folder</TooltipContent>
                       </Tooltip>
                     </>
                   )}
                   
                   {/* Expand/Collapse Documents - right most */}
                   <Tooltip>
-                    <TooltipTrigger>
+                    <TooltipTrigger asChild>
                       <Button size="icon" variant="ghost" onClick={() => setPanelMode(panelMode === 'docs' ? 'split' : 'docs')} aria-label={panelMode === 'docs' ? 'Collapse documents' : 'Expand documents'}>
                         {panelMode === 'docs' ? (<Minimize2 className="h-4 w-4" />) : (<Maximize2 className="h-4 w-4" />)}
                       </Button>
                     </TooltipTrigger>
+                    <TooltipContent>{panelMode === 'docs' ? 'Collapse' : 'Expand'} Documents</TooltipContent>
                   </Tooltip>
                   </div>
                 </div>
@@ -1409,6 +2018,11 @@ export function CustomersPage() {
                                     >
                                       {u.name}
                                     </button>
+                                    {uploadMetadataCache.get(u.name)?.isGenerated && (
+                                      <Badge variant="secondary" className="mt-1">
+                                        Generated
+                                      </Badge>
+                                    )}
                                     <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
                                       <span>{formatBytes(u.size)}</span>
                                       <span title={new Date(u.modifiedAt).toLocaleString()}>{formatRelativeTime(u.modifiedAt)}</span>
@@ -1417,7 +2031,7 @@ export function CustomersPage() {
                                   <div className="flex items-center gap-1 sm:gap-2 shrink-0">
                                     {/* Metadata Button */}
                                     <Tooltip>
-                                      <TooltipTrigger>
+                                      <TooltipTrigger asChild>
                                         <Button 
                                           size="icon" 
                                           variant="ghost" 
@@ -1432,25 +2046,36 @@ export function CustomersPage() {
                                               
                                               // Check if metadata exists
                                               const hasMetadata = data.metadata && (data.metadata.documentType || data.metadata.purpose || (data.metadata.keyTopics && data.metadata.keyTopics.length > 0));
-                                              setUploadMetadataCache(prev => new Map(prev).set(u.name, hasMetadata));
+                                              const isGenerated = data.metadata?.extraFields?.isGenerated === true;
+                                              setUploadMetadataCache(prev => new Map(prev).set(u.name, { hasMetadata, isGenerated }));
                                               
                                               if (!hasMetadata) {
-                                                // No metadata - trigger extraction
-                                                await extractUploadMetadata(u.name);
+                                                // No metadata - trigger extraction (only if not generating)
+                                                if (!generating) {
+                                                  await extractUploadMetadata(u.name);
+                                                }
                                               } else {
-                                                // Has metadata - show it
+                                                // Has metadata - show it (allowed even during generation)
                                                 setMetadataModal(data.metadata || null);
                                               }
                                             } catch (err) {
                                               console.error('Failed to load metadata:', err);
-                                              // If error, try extraction
-                                              await extractUploadMetadata(u.name);
+                                              // If error, try extraction (only if not generating)
+                                              if (!generating) {
+                                                await extractUploadMetadata(u.name);
+                                              }
                                             }
                                           }}
+                                          style={
+                                            // Hide button if generating AND no metadata
+                                            generating && uploadMetadataCache.get(u.name)?.hasMetadata === false
+                                              ? { display: 'none' }
+                                              : undefined
+                                          }
                                         >
                                           {metadataProcessing.has(u.name) ? (
                                             <Loader2 className="h-4 w-4 animate-spin" />
-                                          ) : uploadMetadataCache.get(u.name) === false ? (
+                                          ) : uploadMetadataCache.get(u.name)?.hasMetadata === false ? (
                                             <RefreshCw className="h-4 w-4" />
                                           ) : (
                                             <Info className="h-4 w-4" />
@@ -1460,14 +2085,13 @@ export function CustomersPage() {
                                       <TooltipContent>
                                         {metadataProcessing.has(u.name) 
                                           ? 'Extracting metadata...' 
-                                          : uploadMetadataCache.get(u.name) === false
-                                          ? 'Extract Metadata'
-                                          : 'View Metadata'
-                                        }
+                                          : uploadMetadataCache.get(u.name)?.hasMetadata === false 
+                                            ? 'Extract Metadata' 
+                                            : 'View Metadata'}
                                       </TooltipContent>
                                     </Tooltip>
                                     <Tooltip>
-                                      <TooltipTrigger>
+                                      <TooltipTrigger asChild>
                                         <Button size="icon" variant="ghost" className="h-9 w-9" aria-label={`Download ${u.name}`} onClick={() => { const a = document.createElement('a'); a.href = `/api/uploads/${selectedId}/file?name=${encodeURIComponent(u.name)}`; a.download = u.name; document.body.appendChild(a); a.click(); a.remove(); }}>
                                           <Download className="h-4 w-4" />
                                         </Button>
@@ -1475,7 +2099,7 @@ export function CustomersPage() {
                                       <TooltipContent>Download</TooltipContent>
                                     </Tooltip>
                                     <Tooltip>
-                                      <TooltipTrigger>
+                                      <TooltipTrigger asChild>
                                         <Button 
                                           size="icon" 
                                           variant={pinnedDocs.has(u.name) ? "default" : "outline"}
@@ -1494,7 +2118,7 @@ export function CustomersPage() {
                                       <TooltipContent>{pinnedDocs.has(u.name) ? 'Unpin' : 'Pin'} Document</TooltipContent>
                                     </Tooltip>
                                     <Tooltip>
-                                      <TooltipTrigger>
+                                      <TooltipTrigger asChild>
                                         <Button size="icon" variant="destructive" className="h-9 w-9" disabled={uploading || deleting === u.name} onClick={() => deleteUpload(u.name)} aria-label={`Delete ${u.name}`}>
                                           {deleting === u.name ? '.' : <Icon.Trash className="h-4 w-4" />}
                                         </Button>
@@ -1527,50 +2151,148 @@ export function CustomersPage() {
                       <div className="text-sm text-muted-foreground">Loading generated documents.</div>
                     </div>
                   ) : (docQuery.trim() ? generatedDocs.filter((d) => d.name.toLowerCase().includes(docQuery.trim().toLowerCase())).length : generatedDocs.length) ? (
-                    <ScrollArea className="flex-1 min-h-0 h-full">
-                      <div className="px-4 pb-4 space-y-2">
-                        {(docQuery.trim() ? generatedDocs.filter((d) => d.name.toLowerCase().includes(docQuery.trim().toLowerCase())) : generatedDocs).map((d, idx) => {
-                          const { Icon: DocIcon, wrapper, label } = getDocumentIconMeta(d.name);
-                          return (
-                          <div key={idx} className="rounded-md border bg-card/50 transition px-3 py-2">
-                            <div className="flex gap-3">
-                              <div className={`flex h-8 w-8 items-center justify-center rounded-md ${wrapper} shrink-0`} title={label}>
-                                <DocIcon className="h-4 w-4" />
+                    <>
+                      {/* Generation Progress Indicator */}
+                      {generating && genJobId && (
+                        <div className="border-b bg-muted/30 px-4 py-3">
+                          <div className="flex items-center gap-3">
+                            <Icon.Refresh className="h-4 w-4 animate-spin text-primary shrink-0" />
+                            <div className="flex-1 min-w-0">
+                              <div className="text-sm font-medium">Generating document...</div>
+                              <div className="text-xs text-muted-foreground mt-0.5">
+                                {genProgress != null && genProgress > 0 ? `${genProgress}% complete` : 'Starting generation...'}
                               </div>
-                              <div className="flex-1 min-w-0">
-                                <div className="flex items-center justify-between gap-3">
-                                  <div className="min-w-0">
-                                    <button
-                                      type="button"
-                                      onClick={(e) => { e.preventDefault(); openCustomerFile('generated', d.name); }}
-                                      title={d.name}
-                                      className="font-medium hover:underline break-words leading-snug block text-left"
-                                    >
-                                      {d.name}
-                                    </button>
-                                    <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
-                                      <span>{formatBytes(d.size)}</span>
-                                      <span title={new Date(d.modifiedAt).toLocaleString()}>{formatRelativeTime(d.modifiedAt)}</span>
+                            </div>
+                            <Button 
+                              size="sm" 
+                              variant="outline" 
+                              onClick={() => setGenLogs([])}
+                              className="shrink-0"
+                            >
+                              <Eye className="h-3.5 w-3.5 mr-1.5" />
+                              View Progress
+                            </Button>
+                          </div>
+                          {genProgress != null && genProgress > 0 && (
+                            <div className="mt-2 w-full bg-muted rounded-full h-1.5 overflow-hidden">
+                              <div 
+                                className="bg-primary h-full transition-all duration-300 ease-out"
+                                style={{ width: `${genProgress}%` }}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      <ScrollArea className="flex-1 min-h-0 h-full">
+                        <div className="px-4 pb-4 space-y-2">
+                          {(docQuery.trim() ? generatedDocs.filter((d) => d.name.toLowerCase().includes(docQuery.trim().toLowerCase())) : generatedDocs).map((d, idx) => {
+                            const { Icon: DocIcon, wrapper, label } = getDocumentIconMeta(d.name);
+                            return (
+                            <div key={idx} className="rounded-md border bg-card/50 transition px-3 py-2">
+                              <div className="flex gap-3">
+                                <div className={`flex h-8 w-8 items-center justify-center rounded-md ${wrapper} shrink-0`} title={label}>
+                                  <DocIcon className="h-4 w-4" />
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center justify-between gap-3">
+                                    <div className="min-w-0">
+                                      <button
+                                        type="button"
+                                        onClick={(e) => { e.preventDefault(); openCustomerFile('generated', d.name); }}
+                                        title={d.name}
+                                        className="font-medium hover:underline break-words leading-snug block text-left"
+                                      >
+                                        {d.name}
+                                      </button>
+                                      {uploadedGenDocs.has(d.name) && (
+                                        <Badge variant="default" className="mt-1">
+                                          In Workspace
+                                        </Badge>
+                                      )}
+                                      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                                        <span>{formatBytes(d.size)}</span>
+                                        <span title={new Date(d.modifiedAt).toLocaleString()}>{formatRelativeTime(d.modifiedAt)}</span>
+                                      </div>
                                     </div>
-                                  </div>
-                                  <div className="flex items-center gap-1 sm:gap-2 shrink-0">
-                                    <Tooltip>
-                                      <TooltipTrigger>
-                                        <Button size="icon" variant="ghost" className="h-9 w-9" aria-label={`Download ${d.name}`} onClick={() => { const a = document.createElement('a'); a.href = `/api/documents/${selectedId}/file?name=${encodeURIComponent(d.name)}`; a.download = d.name; document.body.appendChild(a); a.click(); a.remove(); }}>
-                                          <Download className="h-4 w-4" />
-                                        </Button>
-                                      </TooltipTrigger>
-                                      <TooltipContent>Download</TooltipContent>
-                                    </Tooltip>
+                                    <div className="flex items-center gap-1 sm:gap-2 shrink-0">
+                                      <Tooltip>
+                                        <TooltipTrigger asChild>
+                                          <Button 
+                                            size="icon" 
+                                            variant="ghost" 
+                                            className="h-9 w-9" 
+                                            aria-label="Upload to Workspace" 
+                                            disabled={uploadingGenDoc && uploadGenDocName === d.name || uploadedGenDocs.has(d.name)}
+                                            onClick={() => embedGeneratedDoc(d.name)}
+                                          >
+                                            {uploadingGenDoc && uploadGenDocName === d.name ? (
+                                              <Loader2 className="h-4 w-4 animate-spin" />
+                                            ) : (
+                                              <Upload className="h-4 w-4" />
+                                            )}
+                                          </Button>
+                                        </TooltipTrigger>
+                                        <TooltipContent>
+                                          {uploadedGenDocs.has(d.name) ? 'Already in Workspace' : 'Upload to Workspace'}
+                                        </TooltipContent>
+                                      </Tooltip>
+                                      <Tooltip>
+                                        <TooltipTrigger asChild>
+                                          <Button size="icon" variant="ghost" className="h-9 w-9" aria-label="Regenerate with Revisions" onClick={async () => { 
+                                            setRegenerateDoc({ name: d.name, customerId: selectedId });
+                                            // Fetch job info
+                                            try {
+                                              const jobsResponse = await apiFetch('/api/generate/jobs');
+                                              const jobsData = await jobsResponse.json();
+                                              const jobs = Array.isArray(jobsData?.jobs) ? jobsData.jobs : [];
+                                              const matchingJob = jobs.find((j: any) => 
+                                                j.customerId === selectedId && 
+                                                j.file?.name === d.name &&
+                                                j.status === 'done'
+                                              );
+                                              if (matchingJob) {
+                                                setRegenerateDocJobInfo({
+                                                  template: matchingJob.template,
+                                                  instructions: matchingJob.instructions,
+                                                  pinnedDocuments: matchingJob.pinnedDocuments
+                                                });
+                                              }
+                                            } catch (err) {
+                                              console.error('Failed to fetch job info:', err);
+                                            }
+                                            setRegenerateOpen(true); 
+                                          }}>
+                                            <RefreshCw className="h-4 w-4" />
+                                          </Button>
+                                        </TooltipTrigger>
+                                        <TooltipContent>Regenerate with Revisions</TooltipContent>
+                                      </Tooltip>
+                                      <Tooltip>
+                                        <TooltipTrigger asChild>
+                                          <Button size="icon" variant="ghost" className="h-9 w-9" aria-label={`Download ${d.name}`} onClick={() => { const a = document.createElement('a'); a.href = `/api/documents/${selectedId}/file?name=${encodeURIComponent(d.name)}`; a.download = d.name; document.body.appendChild(a); a.click(); a.remove(); }}>
+                                            <Download className="h-4 w-4" />
+                                          </Button>
+                                        </TooltipTrigger>
+                                        <TooltipContent>Download</TooltipContent>
+                                      </Tooltip>
+                                      <Tooltip>
+                                        <TooltipTrigger asChild>
+                                          <Button size="icon" variant="destructive" className="h-9 w-9" disabled={deletingGenDoc && deleteGenDocName === d.name} onClick={() => { setDeleteGenDocName(d.name); setDeleteGenDocOpen(true); }} aria-label={`Delete ${d.name}`}>
+                                            {deletingGenDoc && deleteGenDocName === d.name ? '...' : <Icon.Trash className="h-4 w-4" />}
+                                          </Button>
+                                        </TooltipTrigger>
+                                        <TooltipContent>Delete</TooltipContent>
+                                      </Tooltip>
+                                    </div>
                                   </div>
                                 </div>
                               </div>
                             </div>
-                          </div>
-                        );
-                        })}
-                      </div>
-                    </ScrollArea>
+                          );
+                          })}
+                        </div>
+                      </ScrollArea>
+                    </>
                   ) : (
                     <div className="p-4">
                       <div className="text-muted-foreground text-sm">{docQuery.trim() ? 'No matching generated documents.' : 'No generated documents yet for this customer.'}</div>
@@ -1605,82 +2327,253 @@ export function CustomersPage() {
 
       {/* Generate Document Dialog */}
       <Dialog open={generateOpen} onOpenChange={setGenerateOpen}>
-        <DialogContent className="sm:max-w-2xl">
+        <DialogContent className="sm:max-w-3xl overflow-x-hidden">
           <DialogHeader>
             <DialogTitle>Generate Document</DialogTitle>
             <DialogDescription>
               Select template and documents to include in generation.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4">
+          <div className="space-y-4" style={{ maxWidth: '100%', overflow: 'hidden' }}>
+            {/* Template Selection */}
             <div>
-              <label className="text-sm font-medium">Template</label>
-              <select className="mt-1 w-full border rounded-md h-9 px-2 bg-background" value={selectedTemplate} onChange={(e) => setSelectedTemplate(e.target.value)} disabled={loadingTemplates || generating}>
-                {loadingTemplates ? <option>Loading templates...</option> : (
-                  templates.length ? templates.map((t) => (
-                    <option key={t.slug} value={t.slug}>{t.name || t.slug}</option>
-                  )) : <option value="">No templates found</option>
-                )}
-              </select>
+              <label className="text-sm font-medium mb-2 block">Template</label>
+              {loadingTemplates ? (
+                <div className="border rounded-md h-9 px-3 flex items-center text-sm text-muted-foreground">
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Loading templates...
+                </div>
+              ) : templates.length === 0 ? (
+                <div className="border rounded-md h-9 px-3 flex items-center text-sm text-muted-foreground">
+                  No templates found
+                </div>
+              ) : (
+                <>
+                  <div className="relative mb-2">
+                    <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      type="text"
+                      placeholder="Search templates..."
+                      className="pl-8 h-9"
+                      value={genTemplateQuery}
+                      onChange={(e) => setGenTemplateQuery(e.target.value)}
+                      disabled={generating}
+                    />
+                  </div>
+                  <Select value={selectedTemplate} onValueChange={setSelectedTemplate} disabled={generating}>
+                    <SelectTrigger className="w-full">
+                      <SelectValue placeholder="Select a template">
+                        {selectedTemplate && (() => {
+                          const t = templates.find(tmpl => tmpl.slug === selectedTemplate);
+                          return t ? (
+                            <div className="flex items-center gap-2">
+                              <span>{t.name || t.slug}</span>
+                              {!t.hasFullGen && (
+                                <TooltipProvider>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <AlertCircle className="h-4 w-4 text-amber-500" />
+                                    </TooltipTrigger>
+                                    <TooltipContent>
+                                      <p>Template not compiled yet</p>
+                                    </TooltipContent>
+                                  </Tooltip>
+                                </TooltipProvider>
+                              )}
+                            </div>
+                          ) : null;
+                        })()}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent className="max-h-[300px]">
+                      {(() => {
+                        const filteredTemplates = genTemplateQuery.trim()
+                          ? templates.filter(t => 
+                              (t.name || t.slug).toLowerCase().includes(genTemplateQuery.toLowerCase())
+                            )
+                          : templates;
+                        
+                        return filteredTemplates.length === 0 ? (
+                          <div className="p-2 text-sm text-muted-foreground text-center">
+                            No templates match your search
+                          </div>
+                        ) : (
+                          filteredTemplates.map((t) => (
+                            <SelectItem key={t.slug} value={t.slug}>
+                              <div className="flex items-center gap-2">
+                                <span>{t.name || t.slug}</span>
+                                {!t.hasFullGen && (
+                                  <TooltipProvider>
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <AlertCircle className="h-4 w-4 text-amber-500" />
+                                      </TooltipTrigger>
+                                      <TooltipContent>
+                                        <p>Template not compiled yet</p>
+                                      </TooltipContent>
+                                    </Tooltip>
+                                  </TooltipProvider>
+                                )}
+                              </div>
+                            </SelectItem>
+                          ))
+                        );
+                      })()}
+                    </SelectContent>
+                  </Select>
+                  
+                  {/* Warning for uncompiled templates */}
+                  {selectedTemplate && (() => {
+                    const t = templates.find(tmpl => tmpl.slug === selectedTemplate);
+                    return t && !t.hasFullGen ? (
+                      <div className="mt-2 flex items-start gap-2 p-3 rounded-md bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-900">
+                        <AlertCircle className="h-4 w-4 text-amber-600 dark:text-amber-500 mt-0.5 shrink-0" />
+                        <div className="text-sm text-amber-800 dark:text-amber-400">
+                          This template has not been compiled yet. Please compile it in the Templates page before generating documents.
+                        </div>
+                      </div>
+                    ) : null;
+                  })()}
+                </>
+              )}
             </div>
             
             {/* Document selection with relevance scores */}
             {selectedTemplate && (
               <div>
-                <label className="text-sm font-medium">
-                  Documents to Include ({genPinnedDocs.size} selected)
-                </label>
-                <div className="mt-2 border rounded-md max-h-[280px] overflow-y-auto">
-                  {loadingGenDocs ? (
-                    <div className="p-4 text-sm text-muted-foreground text-center">
-                      Loading document relevance scores...
-                    </div>
-                  ) : genDocuments.length === 0 ? (
-                    <div className="p-4 text-sm text-muted-foreground text-center">
-                      No documents with metadata found for this template
-                    </div>
-                  ) : (
-                    <div className="divide-y">
-                      {genDocuments.map((doc) => {
-                        const isPinned = genPinnedDocs.has(doc.name);
-                        const scoreColor = doc.relevance >= 8 ? 'text-green-600' : doc.relevance >= 6 ? 'text-yellow-600' : 'text-gray-500';
-                        
-                        return (
-                          <div key={doc.name} className="p-3 hover:bg-muted/50 transition">
-                            <div className="flex items-start gap-3">
-                              <Button
-                                size="icon"
-                                variant={isPinned ? "default" : "outline"}
-                                className="h-8 w-8 shrink-0 mt-0.5"
-                                onClick={() => {
-                                  setGenPinnedDocs(prev => {
-                                    const next = new Set(prev);
-                                    if (isPinned) next.delete(doc.name);
-                                    else next.add(doc.name);
-                                    return next;
-                                  });
-                                }}
-                                disabled={generating}
-                              >
-                                <Pin className={`h-3.5 w-3.5 ${isPinned ? 'fill-current' : ''}`} />
-                              </Button>
-                              <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-2">
-                                  <span className="text-sm font-medium truncate">{doc.name}</span>
-                                  <Badge variant="outline" className={`text-xs shrink-0 ${scoreColor}`}>
-                                    {doc.relevance.toFixed(1)}/10
-                                  </Badge>
-                                </div>
-                                <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
-                                  {doc.reasoning}
-                                </p>
-                              </div>
-                            </div>
-                          </div>
-                        );
-                      })}
+                <div className="flex items-center justify-between mb-2">
+                  <label className="text-sm font-medium">
+                    Documents to Include ({genPinnedDocs.size}/3 selected)
+                  </label>
+                  {genDocuments.length > 0 && (
+                    <div className="flex gap-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 text-xs"
+                        onClick={() => {
+                          // Sort by relevance descending and take top 3 (or fewer if less than 3 available)
+                          const topDocs = genDocuments
+                            .sort((a, b) => b.relevance - a.relevance)
+                            .slice(0, 3)
+                            .map(d => d.name);
+                          setGenPinnedDocs(new Set(topDocs));
+                        }}
+                        disabled={generating}
+                      >
+                        Select Top 3
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 text-xs"
+                        onClick={() => setGenPinnedDocs(new Set())}
+                        disabled={generating || genPinnedDocs.size === 0}
+                      >
+                        Clear All
+                      </Button>
                     </div>
                   )}
+                </div>
+                {genPinnedDocs.size >= 3 && (
+                  <div className="mb-2 text-xs text-muted-foreground bg-muted/50 border border-border rounded-md px-3 py-2">
+                    <Info className="h-3.5 w-3.5 inline mr-1" />
+                    Maximum of 3 documents reached. Unpin a document to select another.
+                  </div>
+                )}
+                {/* Search field */}
+                <div className="relative mb-2">
+                  <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <Input
+                    type="text"
+                    placeholder="Search documents..."
+                    className="pl-8 h-9"
+                    value={genDocQuery}
+                    onChange={(e) => setGenDocQuery(e.target.value)}
+                    disabled={generating}
+                  />
+                </div>
+                <div className="border rounded-md max-h-[320px] overflow-hidden">
+                  <ScrollArea className="h-[320px]" style={{ width: '100%' }}>
+                    <div style={{ width: '100%', maxWidth: '100%', overflow: 'hidden' }}>
+                    {loadingGenDocs ? (
+                      <div className="p-4 text-sm text-muted-foreground text-center">
+                        Loading document relevance scores...
+                      </div>
+                    ) : genDocuments.length === 0 ? (
+                      <div className="p-4 text-sm text-muted-foreground text-center">
+                        No documents with metadata found for this template
+                      </div>
+                    ) : (() => {
+                      const filteredDocs = genDocQuery.trim()
+                        ? genDocuments.filter(doc => 
+                            doc.name.toLowerCase().includes(genDocQuery.toLowerCase()) ||
+                            doc.reasoning.toLowerCase().includes(genDocQuery.toLowerCase())
+                          )
+                        : genDocuments;
+                      
+                      return filteredDocs.length === 0 ? (
+                        <div className="p-4 text-sm text-muted-foreground text-center">
+                          No documents match your search
+                        </div>
+                      ) : (
+                        <div className="divide-y pr-3" style={{ width: '100%', maxWidth: '100%', boxSizing: 'border-box' }}>
+                          {filteredDocs.map((doc) => {
+                            const isPinned = genPinnedDocs.has(doc.name);
+                            const scoreColor = doc.relevance >= 8 ? 'text-green-600' : doc.relevance >= 6 ? 'text-yellow-600' : 'text-gray-500';
+                            const canPin = isPinned || genPinnedDocs.size < 3;
+                            
+                            return (
+                              <div key={doc.name} className="p-3 hover:bg-muted/50 transition" style={{ boxSizing: 'border-box', width: '100%', maxWidth: '100%' }}>
+                                <div className="flex items-start gap-3" style={{ width: '100%', maxWidth: '100%', boxSizing: 'border-box', minWidth: 0 }}>
+                                  <Tooltip>
+                                    <TooltipTrigger asChild>
+                                      <Button
+                                        size="icon"
+                                        variant={isPinned ? "default" : "outline"}
+                                        className="h-8 w-8 shrink-0 mt-0.5"
+                                        onClick={() => {
+                                          setGenPinnedDocs(prev => {
+                                            const next = new Set(prev);
+                                            if (isPinned) {
+                                              next.delete(doc.name);
+                                            } else if (next.size < 3) {
+                                              next.add(doc.name);
+                                            }
+                                            return next;
+                                          });
+                                        }}
+                                        disabled={generating || (!isPinned && !canPin)}
+                                      >
+                                        <Pin className={`h-3.5 w-3.5 ${isPinned ? 'fill-current' : ''}`} />
+                                      </Button>
+                                    </TooltipTrigger>
+                                    {!canPin && (
+                                      <TooltipContent>
+                                        Maximum 3 documents allowed
+                                      </TooltipContent>
+                                    )}
+                                  </Tooltip>
+                                  <div className="flex-1" style={{ minWidth: 0, width: 0, boxSizing: 'border-box', overflow: 'hidden' }}>
+                                    <div className="flex items-center gap-2" style={{ width: '100%', overflow: 'hidden', minWidth: 0 }}>
+                                      <span className="text-sm font-medium truncate" style={{ flex: 1, minWidth: 0 }}>{doc.name}</span>
+                                      <Badge variant="outline" className={`text-xs shrink-0 ${scoreColor}`}>
+                                        {doc.relevance.toFixed(1)}/10
+                                      </Badge>
+                                    </div>
+                                    <p className="text-xs text-muted-foreground mt-1" style={{ wordBreak: 'break-word', whiteSpace: 'normal', overflowWrap: 'break-word' }}>
+                                      {doc.reasoning}
+                                    </p>
+                                  </div>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
+                    </div>
+                  </ScrollArea>
                 </div>
               </div>
             )}
@@ -1702,12 +2595,47 @@ export function CustomersPage() {
           </div>
           <DialogFooter>
             <Button variant="secondary" onClick={() => setGenerateOpen(false)} disabled={generating}>Cancel</Button>
-            <Button onClick={generateDocument} disabled={!selectedId || !selectedTemplate || generating || genPinnedDocs.size === 0} aria-label="Confirm generate">
+            <Button 
+              onClick={handleGenerateClick} 
+              disabled={
+                !selectedId || 
+                !selectedTemplate || 
+                generating ||
+                (() => {
+                  const t = templates.find(tmpl => tmpl.slug === selectedTemplate);
+                  return t && !t.hasFullGen;
+                })()
+              } 
+              aria-label="Confirm generate"
+            >
               {generating ? 'Generating...' : 'Generate'}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* No Documents Warning Dialog */}
+      <AlertDialog open={showNoDocsWarning} onOpenChange={setShowNoDocsWarning}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>No Documents Selected</AlertDialogTitle>
+          </AlertDialogHeader>
+          <div className="py-4">
+            <p className="text-sm text-muted-foreground">
+              You haven't selected any specific documents. The workspace will automatically determine which content to use based on the AI conversation context.
+            </p>
+            <p className="text-sm text-muted-foreground mt-3">
+              <strong>Note:</strong> This may not include all relevant information. For best results, select up to 3 documents with the highest relevance scores.
+            </p>
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Go Back</AlertDialogCancel>
+            <AlertDialogAction onClick={proceedWithoutDocs}>
+              Continue Without Documents
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Generation Logs */}
       <Dialog open={!!genLogs} onOpenChange={(v) => { if (!v) { setGenLogs(null); setGenSteps({}); setGenProgress(null); setGenJobId(null); setGenError(null) } }}>
@@ -1793,6 +2721,7 @@ export function CustomersPage() {
         metadata={metadataModal} 
         open={!!metadataModal} 
         onOpenChange={(open) => !open && setMetadataModal(null)}
+        disableRetry={generating}
         onRetry={async (filename: string) => {
           if (!selectedId) return;
           try {
@@ -1816,6 +2745,104 @@ export function CustomersPage() {
           }
         }}
       />
+
+      {/* Regenerate Dialog */}
+      <Dialog open={regenerateOpen} onOpenChange={setRegenerateOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Regenerate Document with Revisions</DialogTitle>
+            <DialogDescription>
+              Add revision instructions to improve or fix the generated document. The AI will maintain the original workspace context.
+            </DialogDescription>
+          </DialogHeader>
+
+          {regenerateDoc && (
+            <div className="space-y-4">
+              {/* Document Details */}
+              <div className="space-y-2 text-sm">
+                {regenerateDocJobInfo?.template && (
+                  <div className="flex items-center gap-2">
+                    <span className="text-muted-foreground">Template:</span>
+                    <code className="px-2 py-0.5 bg-muted rounded">{regenerateDocJobInfo.template}</code>
+                  </div>
+                )}
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground">Customer:</span>
+                  <span>{customers.find(c => c.id === selectedId)?.name || `Customer ${selectedId}`}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-muted-foreground">Document:</span>
+                  <code className="px-2 py-0.5 bg-muted rounded text-xs">{regenerateDoc.name}</code>
+                </div>
+              </div>
+
+              {/* Original Instructions (if any) */}
+              {regenerateDocJobInfo?.instructions && (
+                <div className="space-y-2">
+                  <label className="text-sm font-medium">Original Instructions</label>
+                  <div className="p-3 bg-muted rounded-md text-sm whitespace-pre-wrap max-h-60 overflow-y-auto">
+                    {regenerateDocJobInfo.instructions}
+                  </div>
+                </div>
+              )}
+
+              {/* Revision Instructions Input */}
+              <div className="space-y-2">
+                <label htmlFor="revision-instructions" className="text-sm font-medium">
+                  Revision Instructions {!regenerateDocJobInfo?.instructions && <span className="text-muted-foreground">(required)</span>}
+                </label>
+                <Textarea
+                  id="revision-instructions"
+                  placeholder="Describe the changes needed (e.g., 'Fix table 2 formatting', 'Add executive summary section', 'Update conclusion with new data')..."
+                  value={revisionInstructions}
+                  onChange={(e) => setRevisionInstructions(e.target.value)}
+                  rows={6}
+                  className="resize-none"
+                />
+                <p className="text-xs text-muted-foreground">
+                  The AI will use the same workspace context and documents as the original generation.
+                </p>
+              </div>
+            </div>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setRegenerateOpen(false); setRevisionInstructions(''); setRegenerateDocJobInfo(null); }} disabled={regenerating}>
+              Cancel
+            </Button>
+            <Button onClick={handleRegenerate} disabled={regenerating || !revisionInstructions.trim()}>
+              {regenerating ? 'Regenerating...' : 'Regenerate Document'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Generated Document Confirmation */}
+      <AlertDialog open={deleteGenDocOpen} onOpenChange={setDeleteGenDocOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete Generated Document?</AlertDialogTitle>
+          </AlertDialogHeader>
+          <div className="py-3">
+            <p className="text-sm text-muted-foreground">
+              Are you sure you want to delete <span className="font-medium text-foreground">{deleteGenDocName}</span>?
+            </p>
+            <p className="text-sm text-muted-foreground mt-2">
+              This action cannot be undone. The file will be permanently removed from disk.
+            </p>
+          </div>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deletingGenDoc}>Cancel</AlertDialogCancel>
+            <AlertDialogAction 
+              onClick={handleDeleteGeneratedDoc} 
+              disabled={deletingGenDoc}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+            >
+              {deletingGenDoc ? 'Deleting...' : 'Delete'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -2015,6 +3042,7 @@ function RecentJobs({ selectedId }: { selectedId: number | null }) {
     </div>
   )
 }
+
 
 
 

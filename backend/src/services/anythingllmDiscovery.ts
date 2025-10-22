@@ -1,6 +1,54 @@
 // backend/src/services/anythingllmDiscovery.ts
 import { readSettings, writeSettings } from './settings';
 import { logInfo, logError } from '../utils/logger';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+
+const execAsync = promisify(exec);
+
+/**
+ * Get list of listening ports on the system (Windows/Mac/Linux compatible)
+ */
+async function getListeningPorts(): Promise<number[]> {
+  try {
+    const platform = process.platform;
+    let command: string;
+    
+    if (platform === 'win32') {
+      // Windows: Use netstat
+      command = 'netstat -an | findstr LISTENING';
+    } else if (platform === 'darwin') {
+      // macOS: Use lsof
+      command = 'lsof -iTCP -sTCP:LISTEN -n -P';
+    } else {
+      // Linux: Use ss or netstat
+      command = 'ss -tln || netstat -tln';
+    }
+    
+    const { stdout } = await execAsync(command);
+    const ports = new Set<number>();
+    
+    // Parse output to extract port numbers
+    const lines = stdout.split('\n');
+    for (const line of lines) {
+      // Match patterns like :3001, 0.0.0.0:52974, [::]:3000, etc.
+      const matches = line.match(/:(\d+)\s/g);
+      if (matches) {
+        for (const match of matches) {
+          const port = parseInt(match.replace(/[:\s]/g, ''));
+          if (port >= 3000 && port <= 70000) {
+            ports.add(port);
+          }
+        }
+      }
+    }
+    
+    return Array.from(ports).sort((a, b) => a - b);
+  } catch (error) {
+    logError(`[DISCOVERY] Failed to get listening ports: ${error}`);
+    return [];
+  }
+}
 
 /**
  * Discover AnythingLLM Desktop API port by scanning common ports
@@ -12,8 +60,17 @@ export async function discoverAnythingLLMPort(): Promise<number | null> {
   logInfo('[DISCOVERY] Searching for AnythingLLM Desktop API...');
   
   try {
-    // Common ports to try first (faster)
-    const commonPorts = [3001, 3002, 64685, 3000];
+    // Common ports to try first (faster) - ordered by likelihood
+    const commonPorts = [
+      3001,   // Default AnythingLLM port (MOST COMMON - check first!)
+      3002,   // Alternative AnythingLLM port
+      3000,   // Common dev port
+      64685,  // Known Desktop port
+      52974,  // Previously observed ephemeral port
+      49152,  // Start of typical ephemeral range
+      50000,  // Common ephemeral start
+      60000,  // Mid-range ephemeral
+    ];
     logInfo(`[DISCOVERY] Testing common ports: ${commonPorts.join(', ')}`);
     
     for (const port of commonPorts) {
@@ -24,21 +81,49 @@ export async function discoverAnythingLLMPort(): Promise<number | null> {
       }
     }
     
-    // Scan typical Desktop range (sample every 100 ports for speed)
-    // Full scan would take too long (20,000 ports * 2s timeout = hours)
+    // Try to get actual listening ports from the system (fast!)
+    logInfo('[DISCOVERY] Checking system listening ports...');
+    const listeningPorts = await getListeningPorts();
+    
+    if (listeningPorts.length > 0) {
+      logInfo(`[DISCOVERY] Found ${listeningPorts.length} listening ports, testing for AnythingLLM...`);
+      
+      // Test listening ports that aren't in common ports already
+      const portsToTest = listeningPorts.filter(p => !commonPorts.includes(p));
+      
+      for (const port of portsToTest) {
+        const isValid = await testAnythingLLMPort(port);
+        if (isValid) {
+          logInfo(`[DISCOVERY] Found AnythingLLM API on listening port ${port}`);
+          return port;
+        }
+      }
+    }
+    
+    // Fallback: Scan ephemeral port ranges more thoroughly
+    // Windows ephemeral: 49152-65535, Linux: 32768-60999
+    // Sample every 50 ports for better coverage while staying fast
+    logInfo('[DISCOVERY] System scan unsuccessful, falling back to port range sampling...');
     const samplePorts: number[] = [];
-    for (let port = 50000; port < 70000; port += 100) {
+    
+    // Scan Windows ephemeral range (49152-65535)
+    for (let port = 49152; port < 65535; port += 50) {
       samplePorts.push(port);
     }
     
-    logInfo(`[DISCOVERY] Sampling Desktop port range (${samplePorts.length} ports)`);
+    // Scan typical Desktop high range (additional coverage)
+    for (let port = 65535; port < 70000; port += 100) {
+      samplePorts.push(port);
+    }
+    
+    logInfo(`[DISCOVERY] Sampling ephemeral port range (${samplePorts.length} ports)`);
     
     for (const port of samplePorts) {
       const isValid = await testAnythingLLMPort(port);
       if (isValid) {
         logInfo(`[DISCOVERY] Found AnythingLLM API on port ${port}`);
-        // Once we find a valid port in a range, scan nearby ports
-        const nearbyPort = await scanNearbyPorts(port, 100);
+        // Once we find a valid port in a range, scan nearby ports more thoroughly
+        const nearbyPort = await scanNearbyPorts(port, 50);
         return nearbyPort || port;
       }
     }
@@ -55,13 +140,16 @@ export async function discoverAnythingLLMPort(): Promise<number | null> {
  * Scan ports near a discovered port (more thorough)
  */
 async function scanNearbyPorts(centerPort: number, range: number): Promise<number | null> {
-  const startPort = Math.max(50000, centerPort - range);
+  const startPort = Math.max(49152, centerPort - range);
   const endPort = Math.min(70000, centerPort + range);
+  
+  logInfo(`[DISCOVERY] Scanning nearby ports ${startPort}-${endPort} around ${centerPort}`);
   
   for (let port = startPort; port <= endPort; port++) {
     if (port === centerPort) continue; // Already tested
     const isValid = await testAnythingLLMPort(port);
     if (isValid) {
+      logInfo(`[DISCOVERY] Found better match at port ${port}`);
       return port;
     }
   }

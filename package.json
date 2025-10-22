@@ -1,6 +1,6 @@
 {
     "name": "docsmith",
-    "version": "1.0.2",
+    "version": "1.1.0",
     "description": "DocSmith: Document management and workspace collaboration app.",
     "author": "Perry Chapman",
     "main": "electron/main.js",
@@ -110,7 +110,8 @@
             "createStartMenuShortcut": true,
             "shortcutName": "DocSmith",
             "perMachine": false,
-            "runAfterFinish": true
+            "runAfterFinish": true,
+            "artifactName": "${productName}-Setup-${version}.${ext}"
         },
         "mac": {
             "target": [

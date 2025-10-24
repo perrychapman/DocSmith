@@ -594,6 +594,17 @@ export async function saveDocumentMetadata(
   metadata: DocumentMetadata,
   workspaceSlug?: string
 ): Promise<void> {
+  // Load existing metadata to preserve extraFields that shouldn't be overwritten
+  const existing = await loadDocumentMetadata(customerId, metadata.filename)
+  if (existing?.extraFields) {
+    // Merge existing extraFields with new ones, preferring new values
+    metadata.extraFields = {
+      ...existing.extraFields,
+      ...(metadata.extraFields || {})
+    }
+    logInfo(`[METADATA] Preserved existing extraFields for ${metadata.filename}`)
+  }
+  
   // Calculate template relevance scores using AI if workspace available
   // ONLY if template relevance hasn't been calculated yet
   const hasExistingRelevance = metadata.extraFields?.templateRelevance && 

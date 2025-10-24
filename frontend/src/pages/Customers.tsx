@@ -1614,12 +1614,26 @@ export function CustomersPage() {
         const d2: UploadItem[] = await r2.json();
         setUploads(d2);
         
-        // Invalidate metadata cache for this file so it gets reloaded with isGenerated flag
-        setUploadMetadataCache(prev => {
-          const newCache = new Map(prev);
-          newCache.delete(uploadedFilename);
-          return newCache;
-        });
+        // Reload metadata for this file to get the isGenerated flag
+        try {
+          const r3 = await apiFetch(`/api/uploads/${selectedId}/metadata?name=${encodeURIComponent(uploadedFilename)}`);
+          const data = await r3.json();
+          
+          const hasMetadata = data.metadata && (data.metadata.documentType || data.metadata.purpose || (data.metadata.keyTopics && data.metadata.keyTopics.length > 0));
+          const isGenerated = data.metadata?.extraFields?.isGenerated === true;
+          
+          console.log(`[EMBED-GEN] Loaded metadata for ${uploadedFilename}: isGenerated=${isGenerated}`);
+          
+          setUploadMetadataCache(prev => new Map(prev).set(uploadedFilename, { hasMetadata, isGenerated }));
+        } catch (metaErr) {
+          console.error('Failed to reload metadata:', metaErr);
+          // If metadata loading fails, just clear the cache entry
+          setUploadMetadataCache(prev => {
+            const newCache = new Map(prev);
+            newCache.delete(uploadedFilename);
+            return newCache;
+          });
+        }
       } catch (err) {
         console.error('Failed to refresh uploads:', err);
       }

@@ -80,65 +80,39 @@ async function extractMetadataInBackground(
     const isExcel = targetDocs.length > 1
     console.log(`[METADATA] Extracting metadata for ${filename} (${targetDocs.length} document(s))`)
     
-    // Wait for AnythingLLM to finish indexing ALL documents
-    const maxWaitTime = isExcel ? 60000 : 30000 // 60s for Excel (multiple sheets), 30s for others
-    const checkInterval = 2000 // Check every 2 seconds
-    const startTime = Date.now()
-    let allIndexed = false
-    
-    while (!allIndexed && (Date.now() - startTime) < maxWaitTime) {
-      try {
-        const workspaceInfo = await anythingllmRequest<any>(
-          `/workspace/${encodeURIComponent(workspaceSlug)}`,
-          'GET'
-        )
-        
-        const documents = workspaceInfo?.workspace?.documents || []
-        
-        // Check if ALL target documents are indexed
-        const foundCount = targetDocs.filter(targetDoc => 
-          documents.find((d: any) => 
-            d.docpath === targetDoc || 
-            d.name === targetDoc ||
-            d.location === targetDoc
-          )
-        ).length
-        
-        if (foundCount === targetDocs.length) {
-          console.log(`[METADATA] ✓ All ${targetDocs.length} document(s) are indexed`)
-          allIndexed = true
-          break
-        } else {
-          console.log(`[METADATA] Waiting for indexing: ${foundCount}/${targetDocs.length} documents ready`)
-        }
-        
-        await new Promise(resolve => setTimeout(resolve, checkInterval))
-      } catch (err) {
-        // Continue waiting - might be a transient error
-        await new Promise(resolve => setTimeout(resolve, checkInterval))
-      }
-    }
-    
-    // Retry logic for metadata analysis (sometimes first attempt fails if document still indexing)
+    // Retry logic for metadata analysis with exponential backoff
+    // Documents may still be indexing when we first try to analyze them
     let metadata: any = null
     let lastError: Error | null = null
-    const maxRetries = 3
+    const maxRetries = 5 // Increased from 3 since we're not pre-waiting
+    const baseDelay = 2000 // Start with 2 second delay
     
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
+        console.log(`[METADATA] Analysis attempt ${attempt}/${maxRetries}`)
+        
         // Pass allDocumentPaths so metadata analysis can pin/analyze all sheets
         metadata = await analyzeDocumentMetadata(filePath, filename, workspaceSlug, documentName, documentName, allDocumentPaths)
         
         // Check if we got meaningful metadata (not just fallback)
         if (metadata.documentType || metadata.purpose || (metadata.keyTopics && metadata.keyTopics.length > 0)) {
+          console.log(`[METADATA] ✓ Successfully extracted metadata on attempt ${attempt}`)
           break
         } else if (attempt < maxRetries) {
-          await new Promise(resolve => setTimeout(resolve, 3000))
+          // Exponential backoff: 2s, 4s, 8s, 16s
+          const delay = baseDelay * Math.pow(2, attempt - 1)
+          console.log(`[METADATA] Incomplete metadata, retrying in ${delay}ms...`)
+          await new Promise(resolve => setTimeout(resolve, delay))
         }
       } catch (err) {
         lastError = err as Error
+        console.error(`[METADATA] Attempt ${attempt} failed:`, err)
+        
         if (attempt < maxRetries) {
-          await new Promise(resolve => setTimeout(resolve, 3000))
+          // Exponential backoff: 2s, 4s, 8s, 16s
+          const delay = baseDelay * Math.pow(2, attempt - 1)
+          console.log(`[METADATA] Retrying in ${delay}ms...`)
+          await new Promise(resolve => setTimeout(resolve, delay))
         }
       }
     }

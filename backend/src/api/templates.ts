@@ -79,69 +79,11 @@ async function extractTemplateMetadataInBackground(
     console.log(`[TEMPLATE-METADATA] Workspace: ${workspaceSlug}`)
     console.log(`[TEMPLATE-METADATA] Template file: ${path.basename(templatePath)}`)
     
-    // Wait for AnythingLLM to finish indexing the template with retries
-    // Production builds may take longer than dev mode
-    const maxWaitTime = 30000 // 30 seconds max
-    const checkInterval = 2000 // Check every 2 seconds
-    const startTime = Date.now()
-    let isIndexed = false
-    const templateFileName = path.basename(templatePath)
-    const isExcel = templatePath.toLowerCase().endsWith('.xlsx')
+    // Note: We don't need to wait for the template to be indexed in the workspace
+    // The metadata analysis uses local file structure analysis (for Excel) and AI prompting
+    // It doesn't query the actual template document content from the workspace
     
-    console.log(`[TEMPLATE-METADATA] Waiting for template to be indexed (max ${maxWaitTime/1000}s)...${isExcel ? ' (Excel file - checking for all sheets)' : ''}`)
-    
-    while (!isIndexed && (Date.now() - startTime) < maxWaitTime) {
-      try {
-        // Check if template file exists in workspace embeddings
-        const workspaceInfo = await anythingllmRequest<any>(
-          `/workspace/${encodeURIComponent(workspaceSlug)}`,
-          'GET'
-        )
-        
-        const documents = workspaceInfo?.workspace?.documents || []
-        
-        // For Excel files, check if we have multiple sheet documents
-        if (isExcel) {
-          const sheetDocs = documents.filter((d: any) => 
-            (d.docpath && d.docpath.includes('.xlsx-')) || 
-            (d.name && d.name.startsWith('sheet-'))
-          )
-          
-          if (sheetDocs.length > 0) {
-            console.log(`[TEMPLATE-METADATA] Found ${sheetDocs.length} Excel sheet document(s) indexed after ${((Date.now() - startTime)/1000).toFixed(1)}s`)
-            isIndexed = true
-            break
-          }
-        } else {
-          // For non-Excel files, just check for the single document
-          const foundDoc = documents.find((d: any) => 
-            d.docpath?.includes(templateFileName) ||
-            d.name?.includes(templateFileName) ||
-            d.location?.includes(templateFileName)
-          )
-          
-          if (foundDoc) {
-            console.log(`[TEMPLATE-METADATA] Template indexed successfully after ${((Date.now() - startTime)/1000).toFixed(1)}s`)
-            isIndexed = true
-            break
-          }
-        }
-        
-        console.log(`[TEMPLATE-METADATA] Template not yet indexed, waiting ${checkInterval/1000}s... (${((Date.now() - startTime)/1000).toFixed(1)}s elapsed)`)
-        await new Promise(resolve => setTimeout(resolve, checkInterval))
-      } catch (err) {
-        console.error(`[TEMPLATE-METADATA] Error checking indexing status:`, err)
-        // Continue waiting - might just be a transient error
-        await new Promise(resolve => setTimeout(resolve, checkInterval))
-      }
-    }
-    
-    if (!isIndexed) {
-      console.log(`[TEMPLATE-METADATA] Template not indexed after ${maxWaitTime/1000}s, proceeding anyway (might be slow indexing)`)
-      // Proceed anyway - the template might still be queryable even if not showing in workspace.documents yet
-    }
-    
-    // Retry logic for metadata analysis (sometimes first attempt fails if template still indexing)
+    // Retry logic for metadata analysis (sometimes first attempt fails due to LLM issues)
     console.log(`[TEMPLATE-METADATA] Sending AI analysis request for "${templateName}"`)
     let metadata: any = null
     let lastError: Error | null = null
@@ -309,38 +251,59 @@ router.post("/:slug/fullgen/rebuild", async (req, res) => {
 router.get("/:slug/preview", async (req, res) => {
   const slug = String(req.params.slug)
   const variant = String(req.query.variant || 'original').toLowerCase()
+  console.log(`[TEMPLATE-PREVIEW] Request for slug: "${slug}"`)
   try {
     const dir = path.join(TEMPLATES_ROOT, slug)
-    if (!fs.existsSync(dir)) return res.status(404).json({ error: 'Template not found' })
+    const resolvedDir = path.resolve(dir)
+    console.log(`[TEMPLATE-PREVIEW] Looking for template at: ${resolvedDir}`)
+    console.log(`[TEMPLATE-PREVIEW] Directory exists: ${fs.existsSync(dir)}`)
+    
+    if (!fs.existsSync(dir)) {
+      console.log(`[TEMPLATE-PREVIEW] Template not found. Checking TEMPLATES_ROOT contents...`)
+      try {
+        const templates = fs.readdirSync(TEMPLATES_ROOT)
+        console.log(`[TEMPLATE-PREVIEW] Available templates:`, templates)
+      } catch (e) {
+        console.log(`[TEMPLATE-PREVIEW] Could not list templates:`, e)
+      }
+      return res.status(404).json({ error: 'Template not found' })
+    }
 
-    const docxPath = path.join(dir, 'template.docx')
-    const xlsxPath = path.join(dir, 'template.xlsx')
-    const srcName = (fs.readdirSync(dir).find((n) => /^source\./i.test(n)) || '')
+    // Find any .docx or .xlsx file in the directory (not just "template.*")
+    const files = fs.readdirSync(dir)
+    const docxFile = files.find(f => f.toLowerCase().endsWith('.docx'))
+    const xlsxFile = files.find(f => f.toLowerCase().endsWith('.xlsx'))
+    const docxPath = docxFile ? path.join(dir, docxFile) : null
+    const xlsxPath = xlsxFile ? path.join(dir, xlsxFile) : null
+    
+    const srcName = (files.find((n) => /^source\./i.test(n)) || '')
     const srcPath = srcName ? path.join(dir, srcName) : ''
     const tmplHbsPath = path.join(dir, 'template.hbs')
     const suggestedPath = path.join(dir, 'template.suggested.hbs')
 
     // For DOCX/XLSX files, serve the raw file for download/opening
     // Frontend will handle preview via Electron or external viewer
-    if (fs.existsSync(docxPath)) {
+    if (docxPath && fs.existsSync(docxPath)) {
+      console.log(`[TEMPLATE-PREVIEW] Found DOCX: ${docxFile}`)
       const relPath = path.relative(process.cwd(), docxPath).replace(/\\/g, '/');
       return res.json({ 
         type: 'binary',
         format: 'docx', 
         path: docxPath,
         downloadUrl: `/api/templates/${encodeURIComponent(slug)}/download/docx`,
-        source: 'template.docx' 
+        source: docxFile 
       })
     }
     
-    if (fs.existsSync(xlsxPath)) {
+    if (xlsxPath && fs.existsSync(xlsxPath)) {
+      console.log(`[TEMPLATE-PREVIEW] Found XLSX: ${xlsxFile}`)
       const relPath = path.relative(process.cwd(), xlsxPath).replace(/\\/g, '/');
       return res.json({ 
         type: 'binary',
         format: 'xlsx', 
         path: xlsxPath,
         downloadUrl: `/api/templates/${encodeURIComponent(slug)}/download/xlsx`,
-        source: 'template.xlsx' 
+        source: xlsxFile 
       })
     }
 
@@ -381,23 +344,33 @@ router.get("/:slug/download/:fileType", async (req, res) => {
     const dir = path.join(TEMPLATES_ROOT, slug);
     if (!fs.existsSync(dir)) return res.status(404).json({ error: 'Template not found' });
 
-    let filePath: string;
+    // Find any file with the matching extension
+    const files = fs.readdirSync(dir);
+    let filePath: string | null = null;
     let contentType: string;
     let fileName: string;
 
     if (fileType === 'docx') {
-      filePath = path.join(dir, 'template.docx');
+      const docxFile = files.find(f => f.toLowerCase().endsWith('.docx'));
+      if (!docxFile) {
+        return res.status(404).json({ error: 'DOCX file not found' });
+      }
+      filePath = path.join(dir, docxFile);
       contentType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
-      fileName = `${slug}-template.docx`;
+      fileName = docxFile; // Use original filename
     } else if (fileType === 'xlsx') {
-      filePath = path.join(dir, 'template.xlsx');
+      const xlsxFile = files.find(f => f.toLowerCase().endsWith('.xlsx'));
+      if (!xlsxFile) {
+        return res.status(404).json({ error: 'XLSX file not found' });
+      }
+      filePath = path.join(dir, xlsxFile);
       contentType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
-      fileName = `${slug}-template.xlsx`;
+      fileName = xlsxFile; // Use original filename
     } else {
       return res.status(400).json({ error: 'Invalid file type' });
     }
 
-    if (!fs.existsSync(filePath)) {
+    if (!filePath || !fs.existsSync(filePath)) {
       return res.status(404).json({ error: 'File not found' });
     }
 
@@ -420,8 +393,12 @@ router.get("/:slug/preview.pdf", async (req, res) => {
     const dir = path.join(TEMPLATES_ROOT, slug)
     if (!fs.existsSync(dir)) return res.status(404).json({ error: 'Template not found' })
 
-    const docxPath = path.join(dir, 'template.docx')
-    const srcName = (fs.readdirSync(dir).find((n) => /^source\./i.test(n)) || '')
+    // Find any .docx file in the directory
+    const files = fs.readdirSync(dir)
+    const docxFile = files.find(f => f.toLowerCase().endsWith('.docx'))
+    const docxPath = docxFile ? path.join(dir, docxFile) : null
+    
+    const srcName = (files.find((n) => /^source\./i.test(n)) || '')
     const srcPath = srcName ? path.join(dir, srcName) : ''
     const tmplHbsPath = path.join(dir, 'template.hbs')
     const suggestedPath = path.join(dir, 'suggested.hbs')
@@ -439,7 +416,7 @@ router.get("/:slug/preview.pdf", async (req, res) => {
       }
     }
 
-    if (fs.existsSync(docxPath)) {
+    if (docxPath && fs.existsSync(docxPath)) {
       html = await docxToHtml(docxPath)
     } else {
       const hbsFile = fs.existsSync(suggestedPath) ? suggestedPath : (fs.existsSync(tmplHbsPath) ? tmplHbsPath : '')
@@ -515,14 +492,19 @@ router.get("/:slug/file", async (req, res) => {
   try {
     const dir = path.join(TEMPLATES_ROOT, slug)
     if (!fs.existsSync(dir)) return res.status(404).json({ error: 'Template not found' })
-    const docxPath = path.join(dir, 'template.docx')
-    if (!fs.existsSync(docxPath)) return res.status(404).json({ error: 'No DOCX template for this slug' })
+    
+    // Find any .docx file in the directory
+    const files = fs.readdirSync(dir)
+    const docxFile = files.find(f => f.toLowerCase().endsWith('.docx'))
+    if (!docxFile) return res.status(404).json({ error: 'No DOCX template for this slug' })
+    
+    const docxPath = path.join(dir, docxFile)
 
     // Always return the original; compiled placeholder rendering removed
     const buf: Buffer = fs.readFileSync(docxPath)
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document')
-    res.setHeader('Content-Disposition', `inline; filename="${slug}.docx"`)
+    res.setHeader('Content-Disposition', `inline; filename="${docxFile}"`)
     res.setHeader('Cache-Control', 'no-store')
     return res.send(buf)
   } catch (e) {
@@ -622,32 +604,26 @@ router.post("/upload", (req, res) => {
               console.log(`[TEMPLATE-UPLOAD] Upload response:`, resp)
             }
             
-            // Move ALL documents to template folder
-            const templateFolderName = `Template_${name}` || `Template_${providedSlug}`
+            // DON'T move documents to a Template_ folder - just embed them directly
+            // The documents will be in custom-documents/ folder with their original structure
             if (uploadedDocNames.length > 0) {
-              console.log(`[TEMPLATE-UPLOAD] Moving ${uploadedDocNames.length} document(s) to ${templateFolderName}...`)
-              for (const docName of uploadedDocNames) {
-                try {
-                  await anythingllmRequest("/document/move-files", "POST", {
-                    files: [{ from: docName, to: `${templateFolderName}/${path.basename(docName)}` }]
-                  })
-                } catch (moveErr) {
-                  console.error(`[TEMPLATE-UPLOAD] Failed to move ${docName}:`, moveErr)
-                }
-              }
-              
-              // Wait briefly for documents to be moved
-              await new Promise(resolve => setTimeout(resolve, 2000))
-              
-              // Embed ALL documents in the workspace
-              const movedPaths = uploadedDocNames.map(name => `${templateFolderName}/${path.basename(name)}`)
-              console.log(`[TEMPLATE-UPLOAD] Embedding ${movedPaths.length} document(s) into workspace...`)
+              console.log(`[TEMPLATE-UPLOAD] Embedding ${uploadedDocNames.length} document(s) into workspace...`)
               try {
                 await anythingllmRequest(`/workspace/${encodeURIComponent(wsSlug)}/update-embeddings`, "POST", {
-                  adds: movedPaths,
+                  adds: uploadedDocNames,
                   deletes: []
                 })
                 console.log(`[TEMPLATE-UPLOAD] All documents embedded successfully`)
+                
+                // Write sidecar file with ACTUAL document paths from upload response
+                const sidecarPath = path.join(dir, `${path.basename(target)}.allm.json`)
+                const sidecarData = {
+                  documents: uploadedDocNames,
+                  workspaceSlug: wsSlug,
+                  uploadedAt: new Date().toISOString()
+                }
+                fs.writeFileSync(sidecarPath, JSON.stringify(sidecarData, null, 2), 'utf-8')
+                console.log(`[TEMPLATE-UPLOAD] Created sidecar file with ${uploadedDocNames.length} document path(s)`)
               } catch (embedErr) {
                 console.error(`[TEMPLATE-UPLOAD] Failed to embed documents:`, embedErr)
               }
@@ -1065,8 +1041,12 @@ router.get("/:slug/compile/stream", async (req, res) => {
         } catch { skeleton = '' }
         stepOk('extractSkeleton')
       } else {
-        const docxPath = path.join(dir, 'template.docx')
-        if (fs.existsSync(docxPath)) {
+        // Find any .docx file in the directory
+        const files = fs.readdirSync(dir)
+        const docxFile = files.find(f => f.toLowerCase().endsWith('.docx'))
+        const docxPath = docxFile ? path.join(dir, docxFile) : null
+        
+        if (docxPath && fs.existsSync(docxPath)) {
           const buffer = fs.readFileSync(docxPath)
           stepOk('readTemplate')
           stepStart('extractSkeleton')
@@ -1124,11 +1104,29 @@ router.get("/:slug/compile/stream", async (req, res) => {
           stepOk('extractSkeleton')
         } else {
           const src = (fs.readdirSync(dir).find((n)=>/^source\./i.test(n))||'')
-          if (src) { skeleton = fs.readFileSync(path.join(dir, src), 'utf-8'); stepOk('readTemplate'); stepOk('extractSkeleton') }
-          else if (fs.existsSync(path.join(dir,'template.hbs'))) { skeleton = fs.readFileSync(path.join(dir,'template.hbs'),'utf-8'); stepOk('readTemplate'); stepOk('extractSkeleton') }
+          if (src) { 
+            skeleton = fs.readFileSync(path.join(dir, src), 'utf-8'); 
+            stepOk('readTemplate'); 
+            stepOk('extractSkeleton') 
+          } else if (fs.existsSync(path.join(dir,'template.hbs'))) { 
+            skeleton = fs.readFileSync(path.join(dir,'template.hbs'),'utf-8'); 
+            stepOk('readTemplate'); 
+            stepOk('extractSkeleton') 
+          } else {
+            // No template found - mark steps as complete anyway
+            logPush('Warning: No .docx template file found')
+            stepOk('readTemplate')
+            stepOk('extractSkeleton')
+          }
         }
       }
-    } catch { /* ignore; skeleton may be empty */ }
+    } catch (err: any) { 
+      // Log error but continue - skeleton may be empty
+      logPush(`Warning during skeleton extraction: ${err.message || err}`)
+      // Make sure steps are marked complete even if there's an error
+      stepOk('readTemplate')
+      stepOk('extractSkeleton')
+    }
 
     // Build metadata-enhanced context
     stepStart('buildMetadataContext')
@@ -1226,21 +1224,40 @@ YOUR JOB: Separate TEMPLATE STRUCTURE from PLACEHOLDER DATA
    - Preserve header row exactly as-is
    - Start data population below headers
 
-EXCEL REQUIREMENTS:
-- If template has one sheet: Use that sheet as the structure template
-- If data naturally groups by category/type: CREATE additional sheets dynamically
-- Each sheet should follow the structure/formatting of the template sheet
-- Use A1 references for individual cells
-- Use ranges for bulk data population
-- Preserve formatting from template for all sheets
+EXCEL SHEET MANAGEMENT (YOU DECIDE):
+You have FULL AUTONOMY to determine the optimal sheet structure based on data and user needs.
 
-MULTI-SHEET INTELLIGENCE:
-- Analyze the data requirements and user instructions
-- If instructions mention "separate sheets", "by category", "by type", etc., create multiple sheets
-- If data has natural groupings (e.g., different applications, departments, products), create separate sheets
-- Name new sheets descriptively based on the data grouping
-- Each new sheet should replicate the template's header row and formatting
-- Example: Template has "Test Cases" sheet → Generate sheets if data groups by application
+SHEET STRATEGY OPTIONS:
+1. KEEP EXISTING: Use template sheet as-is if data fits naturally in one sheet
+2. RENAME SHEETS: Change sheet names to better reflect the actual data/purpose
+3. CREATE ADDITIONAL SHEETS: Add new sheets when data groups logically
+4. DUPLICATE & CUSTOMIZE: Copy template sheet structure for each category/grouping
+5. HYBRID: Mix of preserved template sheets and dynamically created ones
+
+WHEN TO CREATE MULTIPLE SHEETS (your judgment):
+✓ Data naturally groups by category, type, department, application, etc.
+✓ User instructions mention "separate", "by category", "organize by", etc.
+✓ Large datasets that would be clearer split into logical sections
+✓ Different data types that need different column structures
+✓ Template sheet name is generic ("Sheet1", "Data", "Template") → rename/expand as needed
+
+WHEN TO KEEP SINGLE SHEET:
+✓ Data is homogeneous and fits naturally in one table
+✓ Template sheet name is specific and appropriate
+✓ No clear logical groupings in the data
+✓ User instructions suggest single-sheet output
+
+SHEET NAMING (be descriptive):
+- Use meaningful names based on actual data content
+- Examples: "Test Cases - App A", "Inventory - Electronics", "Q1 Sales", "Summary"
+- Avoid generic names like "Sheet1" unless template explicitly requires it
+
+TECHNICAL RULES:
+- Use A1 references for individual cells
+- Use 'ranges' array for efficient bulk population (2D arrays)
+- Use insertRows with copyStyleFromRow to preserve formatting when adding data rows
+- Replicate header row formatting exactly for each new sheet
+- Preserve ALL template formatting: fonts, colors, fills, borders, number formats, alignment
 
 STRICT RULES:
 - NO external imports or file I/O
@@ -1304,14 +1321,50 @@ WML REQUIREMENTS:
 - Preserve ALL styling from STYLES, THEME, NUMBERING XML
 - Convert theme colors to hex where needed
 
+DOCUMENT STRUCTURE AUTONOMY (YOU DECIDE):
+You have FULL AUTONOMY to determine the optimal document structure based on data and user needs.
+
+STRUCTURE STRATEGY OPTIONS:
+1. PRESERVE EXACTLY: Keep template structure as-is if data fits naturally
+2. EXPAND SECTIONS: Add new sections/tables when data requires logical groupings
+3. REPLICATE PATTERNS: Duplicate table/list structures for categorized data
+4. DYNAMIC ORGANIZATION: Reorganize content based on data groupings
+5. HYBRID: Mix preserved structure with dynamically created sections
+
+WHEN TO EXPAND/DUPLICATE (your judgment):
+✓ Data naturally groups by category, type, department, application, etc.
+✓ User instructions mention "separate sections", "by category", "organize by", etc.
+✓ Large datasets clearer when split into logical sections or multiple tables
+✓ Different data types requiring different table structures
+✓ Template has generic sample rows → expand based on actual data volume
+
+WHEN TO PRESERVE EXACTLY:
+✓ Template structure perfectly matches data organization
+✓ Data is homogeneous and fits naturally in existing structure
+✓ No clear logical groupings in the data
+✓ User instructions suggest preserving template layout
+
+DYNAMIC CONTENT DECISIONS (be intelligent):
+- Add section headers dynamically based on data categories
+- Create multiple tables from one template table if data groups logically
+- Expand lists beyond template samples based on actual data count
+- Add page breaks between logical sections if needed
+- Use descriptive headings that reflect actual data content
+
+EXAMPLES:
+- Template has "Test Cases" table → Create separate tables for each application
+- Template has 3 sample list items → Expand to actual data count (10, 50, etc.)
+- Template has generic sections → Add category-specific sections dynamically
+- Template shows single department → Create sections for each department in data
+
 STRICT CONSTRAINTS:
 - Do NOT output HTML, Markdown, or DOCX buffer
 - No external imports or file I/O
-- Do NOT add content not in template skeleton
-- Do NOT change fonts/colors/spacing unless expanding data
+- PRESERVE all formatting from template (fonts, colors, spacing, styles)
+- Do NOT change fonts/colors/spacing unless expanding data sections
 - If unsure whether something is data or structure, treat as structure
-- For tables: preserve header row formatting, replicate data rows
-- For lists: preserve numbering format, populate items from data
+- For tables: preserve header row formatting exactly, replicate data rows
+- For lists: preserve numbering format exactly, populate items from data
 ${userInstructionsAddendum}
 ${documentStructure}
 
@@ -1327,9 +1380,80 @@ ${skeleton}`
     logPush(`Sending compilation request to workspace: ${wsSlug}`)
     try {
       if (isCancelled(job.id)) { jobLog(job.id, 'cancelled'); send({ type: 'error', error: 'cancelled' }); return res.end() }
-      const chat = await anythingllmRequest<any>(`/workspace/${encodeURIComponent(String(wsSlug))}/chat`, 'POST', { message: prompt, mode: 'query', sessionId: 'system-template-compile' })
+      
+      // Step 1: Get all workspace documents and unpin them
+      logPush('[COMPILE] Preparing workspace documents...')
+      try {
+        const wsInfo = await anythingllmRequest<any>(`/workspace/${encodeURIComponent(wsSlug)}`, 'GET')
+        const allDocs = wsInfo?.workspace?.documents || []
+        
+        if (allDocs.length > 0) {
+          logPush(`[COMPILE] Unpinning ${allDocs.length} existing document(s)...`)
+          for (const doc of allDocs) {
+            try {
+              await anythingllmRequest(
+                `/workspace/${encodeURIComponent(wsSlug)}/update-pin`,
+                'POST',
+                { docPath: doc.docpath, pinStatus: false }
+              )
+            } catch (err) {
+              // Ignore unpin errors
+            }
+          }
+        }
+      } catch (err) {
+        logPush(`[COMPILE] Warning: Could not unpin existing documents: ${(err as Error).message}`)
+      }
+      
+      // Step 2: Read sidecar file and pin ONLY template documents
+      let templateDocs: string[] = []
+      try {
+        const files = fs.readdirSync(dir)
+        const sidecarFiles = files.filter(f => f.endsWith('.allm.json'))
+        for (const sidecarFile of sidecarFiles) {
+          const sidecarPath = path.join(dir, sidecarFile)
+          const sidecarData = JSON.parse(fs.readFileSync(sidecarPath, 'utf-8'))
+          if (sidecarData?.documents && Array.isArray(sidecarData.documents)) {
+            templateDocs.push(...sidecarData.documents)
+          }
+        }
+        
+        if (templateDocs.length > 0) {
+          logPush(`[COMPILE] Pinning ${templateDocs.length} template document(s)...`)
+          for (const docPath of templateDocs) {
+            try {
+              await anythingllmRequest(
+                `/workspace/${encodeURIComponent(wsSlug)}/update-pin`,
+                'POST',
+                { docPath, pinStatus: true }
+              )
+              logPush(`[COMPILE] ✓ Pinned: ${docPath}`)
+            } catch (err) {
+              logPush(`[COMPILE] Failed to pin ${docPath}: ${(err as Error).message}`)
+            }
+          }
+        } else {
+          logPush('[COMPILE] Warning: No template documents found in sidecar files')
+        }
+      } catch (err) {
+        logPush(`[COMPILE] Could not read sidecar files: ${(err as Error).message}`)
+      }
+      
+      // Step 3: Send compilation request with query mode
+      logPush('[COMPILE] Sending AI compilation request with pinned template...')
+      const chat = await anythingllmRequest<any>(`/workspace/${encodeURIComponent(String(wsSlug))}/chat`, 'POST', { 
+        message: prompt, 
+        mode: 'query', 
+        sessionId: 'system-template-compile'
+      })
       const text = String(chat?.textResponse || chat?.message || chat || '')
       logPush(`AI response received (${text.length} chars)`)
+      
+      // Log first 500 chars of response for debugging
+      if (text.length < 200 || !text.includes('export async function generate')) {
+        logPush(`AI response preview: ${text.substring(0, 500)}${text.length > 500 ? '...' : ''}`)
+      }
+      
       let code = text
       const m = text.match(/```[a-z]*\s*([\s\S]*?)```/i)
       if (m && m[1]) {
@@ -1489,14 +1613,18 @@ router.get("/:slug/preview.pdf", async (req, res) => {
     const dir = path.join(TEMPLATES_ROOT, slug)
     if (!fs.existsSync(dir)) return res.status(404).json({ error: 'Template not found' })
 
-    const docxPath = path.join(dir, 'template.docx')
-    const srcName = (fs.readdirSync(dir).find((n) => /^source\./i.test(n)) || '')
+    // Find any .docx file in the directory
+    const files = fs.readdirSync(dir)
+    const docxFile = files.find(f => f.toLowerCase().endsWith('.docx'))
+    const docxPath = docxFile ? path.join(dir, docxFile) : null
+    
+    const srcName = (files.find((n) => /^source\./i.test(n)) || '')
     const srcPath = srcName ? path.join(dir, srcName) : ''
     const tmplHbsPath = path.join(dir, 'template.hbs')
     const suggestedPath = path.join(dir, 'suggested.hbs')
 
     // DOCX: Pure-JS conversion using Mammoth -> HTML, then render to PDF via Puppeteer
-    if (fs.existsSync(docxPath)) {
+    if (docxPath && fs.existsSync(docxPath)) {
       const buffer = fs.readFileSync(docxPath)
       // Extract page size, margins, and default font to improve fidelity
       let pageCss = "@page { size: 8.5in 11in; margin: 0.75in; }"
@@ -1679,7 +1807,96 @@ router.delete("/:slug", async (req, res) => {
       if (workspaceSlug) {
         console.log(`[TEMPLATE-DELETE] Deleting workspace: ${workspaceSlug}`)
         
-        // Before deleting workspace, delete the Excel folder if it exists
+        // Step 1: Remove all documents from workspace embeddings and system
+        try {
+          let docPaths: string[] = []
+          
+          // Read from sidecar file(s) for document paths
+          try {
+            const files = fs.readdirSync(safeDir)
+            const sidecarFiles = files.filter(f => f.endsWith('.allm.json'))
+            console.log(`[TEMPLATE-DELETE] Found ${sidecarFiles.length} sidecar file(s)`)
+            
+            for (const sidecarFile of sidecarFiles) {
+              try {
+                const sidecarPath = path.join(safeDir, sidecarFile)
+                const sidecarData = JSON.parse(fs.readFileSync(sidecarPath, 'utf-8'))
+                if (sidecarData?.documents && Array.isArray(sidecarData.documents)) {
+                  console.log(`[TEMPLATE-DELETE] Sidecar file ${sidecarFile} contains ${sidecarData.documents.length} document(s)`)
+                  docPaths.push(...sidecarData.documents)
+                }
+              } catch (err) {
+                console.error(`[TEMPLATE-DELETE] Failed to read sidecar ${sidecarFile}:`, err)
+              }
+            }
+          } catch (err) {
+            console.error(`[TEMPLATE-DELETE] Failed to read sidecar files:`, err)
+          }
+          
+          console.log(`[TEMPLATE-DELETE] Found ${docPaths.length} document path(s) to delete`)
+          
+          // Now delete the documents
+          if (docPaths.length > 0) {
+            console.log(`[TEMPLATE-DELETE] Deleting ${docPaths.length} document(s)...`)
+            
+            // Add short name variants
+            const allPaths: string[] = []
+            for (const docPath of docPaths) {
+              console.log(`[TEMPLATE-DELETE] Document to delete: ${docPath}`)
+              allPaths.push(docPath)
+              
+              const shortName = docPath.split('/').pop()
+              if (shortName && shortName !== docPath) {
+                allPaths.push(shortName)
+              }
+            }
+            
+            // Remove duplicates
+            const uniquePaths = Array.from(new Set(allPaths))
+            console.log(`[TEMPLATE-DELETE] Removing ${uniquePaths.length} unique document path(s) (including variants)...`)
+            
+            // Remove from workspace embeddings
+            try {
+              await anythingllmRequest(
+                `/workspace/${encodeURIComponent(workspaceSlug)}/update-embeddings`,
+                "POST",
+                { deletes: uniquePaths }
+              )
+              console.log(`[TEMPLATE-DELETE] ✓ Removed documents from workspace embeddings`)
+            } catch (err) {
+              console.error(`[TEMPLATE-DELETE] Failed to remove from workspace embeddings:`, err)
+            }
+            
+            // Remove from system
+            try {
+              await anythingllmRequest(
+                "/system/remove-documents",
+                "DELETE",
+                { names: uniquePaths }
+              )
+              console.log(`[TEMPLATE-DELETE] ✓ Removed documents from system`)
+            } catch (err) {
+              console.error(`[TEMPLATE-DELETE] Failed to remove from system:`, err)
+              
+              // Retry
+              console.log(`[TEMPLATE-DELETE] Retrying system removal...`)
+              try {
+                await anythingllmRequest(
+                  "/system/remove-documents",
+                  "DELETE",
+                  { names: uniquePaths }
+                )
+                console.log(`[TEMPLATE-DELETE] ✓ Removed documents from system on retry`)
+              } catch (retryErr) {
+                console.error(`[TEMPLATE-DELETE] Failed to remove from system on retry:`, retryErr)
+              }
+            }
+          }
+        } catch (err) {
+          console.error(`[TEMPLATE-DELETE] Failed to retrieve/delete workspace documents:`, err)
+        }
+        
+        // Step 2: Delete Excel folder if it exists
         if (excelFolderToDelete) {
           try {
             console.log(`[TEMPLATE-DELETE] Deleting Excel folder: "${excelFolderToDelete}"`)
@@ -1691,39 +1908,43 @@ router.delete("/:slug", async (req, res) => {
           }
         }
         
-        // Also check for Template_ folders that need cleanup
+        // Step 3: Check for and delete Template_ folders
         try {
-          const wsInfo = await anythingllmRequest<any>(`/workspace/${encodeURIComponent(workspaceSlug)}`, 'GET')
-          const documents = wsInfo?.workspace?.documents || []
+          const data = await anythingllmRequest<any>('/documents', 'GET')
+          const items = (data?.localFiles?.items ?? []) as any[]
           
-          console.log(`[TEMPLATE-DELETE] Found ${documents.length} document(s) in workspace`)
+          // Flatten the document tree
+          const allDocs: any[] = []
+          function flatten(nodes: any[], output: any[]) {
+            for (const node of nodes) {
+              if (node.type === 'file') output.push(node)
+              if (node.items && Array.isArray(node.items)) flatten(node.items, output)
+            }
+          }
+          flatten(items, allDocs)
           
-          // Find ALL Template_ folders that need deletion
+          // Find Template_ folders related to this template
           const foldersToDelete = new Set<string>()
-          
-          for (const doc of documents) {
-            const docSource = doc.docSource || doc.location || ''
-            console.log(`[TEMPLATE-DELETE] Document path: ${docSource}`)
+          for (const doc of allDocs) {
+            const qualifiedName = String(doc?.qualifiedName || "")
+            const name = String(doc?.name || "")
+            const docPath = qualifiedName || name
             
-            // Extract folder name from document path (e.g., "Template_MyTemplate/file.json" -> "Template_MyTemplate")
-            const folderMatch = docSource.match(/^([^/]+)\//)
+            // Extract folder name (e.g., "Template_MyTemplate/file.json" -> "Template_MyTemplate")
+            const folderMatch = docPath.match(/^(Template_[^/]+)\//)
             if (folderMatch) {
-              console.log(`[TEMPLATE-DELETE] Regex matched folder: ${folderMatch[1]}`)
               foldersToDelete.add(folderMatch[1])
-            } else {
-              console.log(`[TEMPLATE-DELETE] No folder match for path: ${docSource}`)
             }
           }
           
           if (foldersToDelete.size > 0) {
             console.log(`[TEMPLATE-DELETE] Found ${foldersToDelete.size} Template folder(s) to clean up:`, Array.from(foldersToDelete))
             
-            // Delete each folder
             for (const folderName of foldersToDelete) {
               try {
                 console.log(`[TEMPLATE-DELETE] Removing folder: ${folderName}`)
                 await anythingllmRequest("/system/remove-folder", "DELETE", { name: folderName })
-                console.log(`[TEMPLATE-DELETE] Folder removed successfully: ${folderName}`)
+                console.log(`[TEMPLATE-DELETE] ✓ Folder removed: ${folderName}`)
               } catch (err) {
                 console.error(`[TEMPLATE-DELETE] Failed to remove folder ${folderName}:`, err)
                 if (!excelFolderWarning) {
@@ -1731,18 +1952,16 @@ router.delete("/:slug", async (req, res) => {
                 }
               }
             }
-          } else {
-            console.log(`[TEMPLATE-DELETE] No Template folders found to delete`)
           }
         } catch (err) {
-          console.error(`[TEMPLATE-DELETE] Failed to check for folders:`, err)
+          console.error(`[TEMPLATE-DELETE] Failed to check/delete Template folders:`, err)
         }
         
-        // Now delete the workspace
+        // Step 4: Delete the workspace itself
         try {
           await anythingllmRequest<any>(`/workspace/${encodeURIComponent(String(workspaceSlug))}`, 'DELETE')
           workspaceDeleted = true
-          console.log(`[TEMPLATE-DELETE] Workspace deleted successfully`)
+          console.log(`[TEMPLATE-DELETE] ✓ Workspace deleted successfully`)
         } catch (e) {
           console.error(`[TEMPLATE-DELETE] Failed to delete workspace:`, e)
           workspaceWarning = `Failed to delete workspace: ${(e as Error).message}`
@@ -1825,10 +2044,13 @@ router.post("/:slug/metadata-extract", async (req, res) => {
     
     const name = meta?.name || slug
     
-    // Find template file
-    const docxPath = path.join(dir, 'template.docx')
-    const xlsxPath = path.join(dir, 'template.xlsx')
-    const templatePath = fs.existsSync(docxPath) ? docxPath : (fs.existsSync(xlsxPath) ? xlsxPath : '')
+    // Find template file - look for any .docx or .xlsx file
+    const files = fs.readdirSync(dir)
+    const docxFile = files.find(f => f.toLowerCase().endsWith('.docx'))
+    const xlsxFile = files.find(f => f.toLowerCase().endsWith('.xlsx'))
+    const docxPath = docxFile ? path.join(dir, docxFile) : null
+    const xlsxPath = xlsxFile ? path.join(dir, xlsxFile) : null
+    const templatePath = docxPath || xlsxPath || ''
     
     if (!templatePath) {
       return res.status(404).json({ error: "Template file not found" })

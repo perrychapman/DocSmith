@@ -17,6 +17,7 @@ import { useTemplateMetadata } from "../contexts/TemplateMetadataContext";
 import { Search, FileText as FileTextIcon, FileSpreadsheet, FileCode, CheckCircle2, AlertTriangle, Loader2, Sparkles, Copy, X, ExternalLink, Info, RefreshCw, Network, Zap } from "lucide-react";
 import { toast } from "sonner";
 import { apiFetch, apiEventSource } from '../lib/api';
+import { useDebouncedState } from '../lib/hooks';
 
 type TItem = { slug: string; name?: string; dir?: string; hasTemplate?: boolean; hasDocx?: boolean; hasExcel?: boolean; hasSource?: boolean; hasFullGen?: boolean; compiledAt?: string; workspaceSlug?: string; updatedAt?: string; versionCount?: number };
 
@@ -60,7 +61,8 @@ export default function TemplatesPage() {
       return { ...prev, [slug]: nextState };
     });
   }, []);
-  const [q, setQ] = React.useState("");
+  // Debounced search query for better performance
+  const [debouncedQ, q, setQ] = useDebouncedState<string>("", 300);
   const [typeFilter, setTypeFilter] = React.useState<string>("all"); // all|docx|excel|text
   const [sortBy, setSortBy] = React.useState<string>("recent"); // recent|name
   const [selectedSlug, setSelectedSlug] = React.useState<string | null>(null);
@@ -82,6 +84,14 @@ export default function TemplatesPage() {
   // Track if any AI operation (compile or metadata extraction) is running
   const anyCompileInFlight = Object.values(compileStates).some(s => s.status === 'running');
   const hasActiveAIOperation = anyCompileInFlight || metadataProcessing.size > 0;
+
+  // Memoized filtered and sorted templates for better performance
+  const filteredAndSortedItems = React.useMemo(() => {
+    return items
+      .filter((t) => !debouncedQ || (t.name || t.slug).toLowerCase().includes(debouncedQ.toLowerCase()) || t.slug.toLowerCase().includes(debouncedQ.toLowerCase()))
+      .filter((t) => typeFilter === 'all' ? true : (typeFilter === 'docx' ? !!t.hasDocx : (typeFilter === 'excel' ? !!(t as any).hasExcel : !t.hasDocx && !((t as any).hasExcel))))
+      .sort((a, b) => sortBy === 'name' ? String(a.name || a.slug).localeCompare(String(b.name || b.slug)) : (new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime()));
+  }, [items, debouncedQ, typeFilter, sortBy]);
 
   // Format relative time helper (from Customers.tsx)
   function formatRelativeTime(value?: string | number | Date): string {
@@ -743,11 +753,7 @@ export default function TemplatesPage() {
             ) : items.length ? (
               <div className="flex-1 overflow-y-auto">
                 <div className="p-4 space-y-2">
-                  {items
-                    .filter((t) => !q || (t.name || t.slug).toLowerCase().includes(q.toLowerCase()) || t.slug.toLowerCase().includes(q.toLowerCase()))
-                    .filter((t) => typeFilter === 'all' ? true : (typeFilter === 'docx' ? !!t.hasDocx : (typeFilter === 'excel' ? !!(t as any).hasExcel : !t.hasDocx && !((t as any).hasExcel))))
-                    .sort((a, b) => sortBy === 'name' ? String(a.name || a.slug).localeCompare(String(b.name || b.slug)) : (new Date(b.updatedAt || 0).getTime() - new Date(a.updatedAt || 0).getTime()))
-                    .map((t) => {
+                  {filteredAndSortedItems.map((t) => {
                       const state = compileStates[t.slug];
                       const effectiveStatus = state?.status ?? (t.hasFullGen ? 'success' : 'idle');
                       const isActiveCompile = compiling === t.slug;

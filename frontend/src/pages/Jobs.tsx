@@ -15,6 +15,7 @@ import { Icon } from "../components/icons";
 import { Search, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { apiFetch } from "../lib/api";
+import { useDebouncedState } from "../lib/hooks";
 
 type Job = {
   id: string;
@@ -44,7 +45,8 @@ export default function JobsPage() {
   const [activeId, setActiveId] = React.useState<string | null>(null);
   const [active, setActive] = React.useState<Job | null>(null);
   const [statusFilter, setStatusFilter] = React.useState<string>('');
-  const [q, setQ] = React.useState('');
+  // Debounced search query for better performance
+  const [debouncedQ, q, setQ] = useDebouncedState<string>('', 300);
   const [error, setError] = React.useState<string | null>(null);
   const [clearOpen, setClearOpen] = React.useState(false);
   const [deleteOpen, setDeleteOpen] = React.useState(false);
@@ -128,10 +130,35 @@ export default function JobsPage() {
     return `${m}:${String(s).padStart(2,'0')}`
   }
 
-  const filtered = jobs.filter(j =>
-    (!statusFilter || j.status === statusFilter) &&
-    (!q || (j.template?.toLowerCase().includes(q.toLowerCase()) || String(j.customerName||j.customerId).toLowerCase().includes(q.toLowerCase())))
-  );
+  // Parse log entries into structured format with category and message
+  const parseLogEntry = React.useCallback((log: string) => {
+    const match = log.match(/^\[([A-Z-]+)\]\s*(.*)$/);
+    if (match) {
+      return { category: match[1], message: match[2], raw: log };
+    }
+    return { category: null, message: log, raw: log };
+  }, []);
+
+  // Get color for log category - only highlight SUCCESS and ERROR
+  const getLogColor = React.useCallback((category: string | null) => {
+    if (!category) return 'text-muted-foreground';
+    switch (category) {
+      case 'SUCCESS':
+        return 'text-green-600 dark:text-green-400 font-semibold';
+      case 'ERROR':
+        return 'text-red-600 dark:text-red-400 font-semibold';
+      default:
+        return 'text-muted-foreground';
+    }
+  }, []);
+
+  // Memoized filtered jobs for better performance
+  const filtered = React.useMemo(() => {
+    return jobs.filter(j =>
+      (!statusFilter || j.status === statusFilter) &&
+      (!debouncedQ || (j.template?.toLowerCase().includes(debouncedQ.toLowerCase()) || String(j.customerName||j.customerId).toLowerCase().includes(debouncedQ.toLowerCase())))
+    );
+  }, [jobs, statusFilter, debouncedQ]);
 
   const isCompileJob = (j: Job) => {
     return j.customerId === 0 || String(j.customerName||'').toLowerCase() === 'template' || String(j.file?.name||'') === 'generator.full.ts'
@@ -619,7 +646,27 @@ export default function JobsPage() {
                         <div className="font-medium text-sm">Logs</div>
                       </div>
                       <ScrollArea className="flex-1 min-h-0">
-                        <pre className="whitespace-pre-wrap px-3 py-2 text-xs">{Array.isArray(active.logs) ? active.logs.join('\n') : ''}</pre>
+                        <div className="px-3 py-2 space-y-0.5 text-xs font-mono">
+                          {Array.isArray(active.logs) && active.logs.length > 0 ? (
+                            active.logs.map((log, idx) => {
+                              const parsed = parseLogEntry(log);
+                              return (
+                                <div key={idx} className={getLogColor(parsed.category)}>
+                                  {parsed.category ? (
+                                    <>
+                                      <span className="font-semibold">[{parsed.category}]</span>{' '}
+                                      <span className="text-foreground/90">{parsed.message}</span>
+                                    </>
+                                  ) : (
+                                    <span>{parsed.message}</span>
+                                  )}
+                                </div>
+                              );
+                            })
+                          ) : (
+                            <div className="text-muted-foreground">No logs available</div>
+                          )}
+                        </div>
                       </ScrollArea>
                     </div>
                   </div>

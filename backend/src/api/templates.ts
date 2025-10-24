@@ -86,8 +86,9 @@ async function extractTemplateMetadataInBackground(
     const startTime = Date.now()
     let isIndexed = false
     const templateFileName = path.basename(templatePath)
+    const isExcel = templatePath.toLowerCase().endsWith('.xlsx')
     
-    console.log(`[TEMPLATE-METADATA] Waiting for template to be indexed (max ${maxWaitTime/1000}s)...`)
+    console.log(`[TEMPLATE-METADATA] Waiting for template to be indexed (max ${maxWaitTime/1000}s)...${isExcel ? ' (Excel file - checking for all sheets)' : ''}`)
     
     while (!isIndexed && (Date.now() - startTime) < maxWaitTime) {
       try {
@@ -98,16 +99,32 @@ async function extractTemplateMetadataInBackground(
         )
         
         const documents = workspaceInfo?.workspace?.documents || []
-        const foundDoc = documents.find((d: any) => 
-          d.docpath?.includes(templateFileName) ||
-          d.name?.includes(templateFileName) ||
-          d.location?.includes(templateFileName)
-        )
         
-        if (foundDoc) {
-          console.log(`[TEMPLATE-METADATA] Template indexed successfully after ${((Date.now() - startTime)/1000).toFixed(1)}s`)
-          isIndexed = true
-          break
+        // For Excel files, check if we have multiple sheet documents
+        if (isExcel) {
+          const sheetDocs = documents.filter((d: any) => 
+            (d.docpath && d.docpath.includes('.xlsx-')) || 
+            (d.name && d.name.startsWith('sheet-'))
+          )
+          
+          if (sheetDocs.length > 0) {
+            console.log(`[TEMPLATE-METADATA] Found ${sheetDocs.length} Excel sheet document(s) indexed after ${((Date.now() - startTime)/1000).toFixed(1)}s`)
+            isIndexed = true
+            break
+          }
+        } else {
+          // For non-Excel files, just check for the single document
+          const foundDoc = documents.find((d: any) => 
+            d.docpath?.includes(templateFileName) ||
+            d.name?.includes(templateFileName) ||
+            d.location?.includes(templateFileName)
+          )
+          
+          if (foundDoc) {
+            console.log(`[TEMPLATE-METADATA] Template indexed successfully after ${((Date.now() - startTime)/1000).toFixed(1)}s`)
+            isIndexed = true
+            break
+          }
         }
         
         console.log(`[TEMPLATE-METADATA] Template not yet indexed, waiting ${checkInterval/1000}s... (${((Date.now() - startTime)/1000).toFixed(1)}s elapsed)`)
@@ -213,8 +230,12 @@ router.get("/", (_req, res) => {
           const slug = d.name
           const dir = path.join(TEMPLATES_ROOT, slug)
           const hasHbs = fs.existsSync(path.join(dir, "template.hbs"))
-          const hasDocx = fs.existsSync(path.join(dir, "template.docx"))
-          const hasExcel = fs.existsSync(path.join(dir, "template.xlsx"))
+          
+          // Check for any .docx or .xlsx file in the directory (not just "template.*")
+          const files = fs.readdirSync(dir)
+          const hasDocx = files.some(f => f.toLowerCase().endsWith('.docx'))
+          const hasExcel = files.some(f => f.toLowerCase().endsWith('.xlsx'))
+          
           // Versioning disabled
           const versionCount = 0
           let hasSource = false
@@ -535,15 +556,25 @@ router.post("/upload", (req, res) => {
   upload.single("file")(req as any, res as any, async (err: any) => {
     if (err) return res.status(400).json({ error: String(err?.message || err) })
     try {
-      const f = (req as any).file as { filename: string; path: string } | undefined
+      const f = (req as any).file as { filename: string; path: string; originalname?: string } | undefined
       if (!f) return res.status(400).json({ error: "No file uploaded" })
       const providedSlug = safeSlug(String((req.body?.slug || "").trim() || path.parse(f.filename).name.replace(/__upload$/, "")))
       const dir = path.join(TEMPLATES_ROOT, providedSlug)
       fs.mkdirSync(dir, { recursive: true })
-      const ext = (path.extname(f.filename) || ".txt").toLowerCase()
+      
+      // Use original filename to determine file type and extension
+      const originalName = f.originalname || f.filename
+      const ext = path.extname(originalName).toLowerCase()
       const isDocx = ext === ".docx"
       const isExcel = ext === ".xlsx"
-      const target = path.join(dir, isDocx ? `template.docx` : (isExcel ? `template.xlsx` : `source${ext}`))
+      
+      // Use original filename instead of generic "template.*"
+      const originalBasename = path.parse(originalName).name
+      const safeOriginalName = safeSlug(originalBasename) + ext
+      const target = path.join(dir, safeOriginalName)
+      
+      console.log(`[TEMPLATE-UPLOAD] Original: ${originalName}, Ext: ${ext}, isExcel: ${isExcel}, Target: ${safeOriginalName}`)
+      
       fs.renameSync(f.path, target)
       // Write/merge template.json
       const metaPath = path.join(dir, 'template.json')
@@ -570,6 +601,7 @@ router.post("/upload", (req, res) => {
           wsSlug = created?.workspace?.slug
         }
         if (wsSlug) {
+          let uploadedDocNames: string[] = []
           try {
             const fd = new FormData()
             const buf = fs.readFileSync(target)
@@ -578,8 +610,69 @@ router.post("/upload", (req, res) => {
             const theFile = new File([uint], path.basename(target))
             fd.append("file", theFile)
             fd.append("addToWorkspaces", wsSlug)
-            await anythingllmRequest<any>("/document/upload", "POST", fd)
-          } catch {}
+            
+            console.log(`[TEMPLATE-UPLOAD] Uploading ${path.basename(target)} to AnythingLLM...`)
+            const resp = await anythingllmRequest<any>("/document/upload", "POST", fd)
+            
+            // Extract ALL documents from response (important for Excel files with multiple sheets)
+            if (resp?.documents && Array.isArray(resp.documents)) {
+              uploadedDocNames = resp.documents.map((doc: any) => doc.location || '').filter(Boolean)
+              console.log(`[TEMPLATE-UPLOAD] Upload created ${uploadedDocNames.length} document(s):`, uploadedDocNames)
+            } else {
+              console.log(`[TEMPLATE-UPLOAD] Upload response:`, resp)
+            }
+            
+            // Move ALL documents to template folder
+            const templateFolderName = `Template_${name}` || `Template_${providedSlug}`
+            if (uploadedDocNames.length > 0) {
+              console.log(`[TEMPLATE-UPLOAD] Moving ${uploadedDocNames.length} document(s) to ${templateFolderName}...`)
+              for (const docName of uploadedDocNames) {
+                try {
+                  await anythingllmRequest("/document/move-files", "POST", {
+                    files: [{ from: docName, to: `${templateFolderName}/${path.basename(docName)}` }]
+                  })
+                } catch (moveErr) {
+                  console.error(`[TEMPLATE-UPLOAD] Failed to move ${docName}:`, moveErr)
+                }
+              }
+              
+              // Wait briefly for documents to be moved
+              await new Promise(resolve => setTimeout(resolve, 2000))
+              
+              // Embed ALL documents in the workspace
+              const movedPaths = uploadedDocNames.map(name => `${templateFolderName}/${path.basename(name)}`)
+              console.log(`[TEMPLATE-UPLOAD] Embedding ${movedPaths.length} document(s) into workspace...`)
+              try {
+                await anythingllmRequest(`/workspace/${encodeURIComponent(wsSlug)}/update-embeddings`, "POST", {
+                  adds: movedPaths,
+                  deletes: []
+                })
+                console.log(`[TEMPLATE-UPLOAD] All documents embedded successfully`)
+              } catch (embedErr) {
+                console.error(`[TEMPLATE-UPLOAD] Failed to embed documents:`, embedErr)
+              }
+              
+              // For Excel files, store the original folder name in template.json for later cleanup
+              if (isExcel && uploadedDocNames.length > 0) {
+                // Extract folder name from original upload path
+                // Format: "custom-documents/filename.xlsx-XXXX/sheet-Name.json"
+                const folderMatch = uploadedDocNames[0].match(/([^\/]+\.xlsx?-[a-f0-9]+)\//i)
+                if (folderMatch) {
+                  const excelFolder = folderMatch[1]
+                  console.log(`[TEMPLATE-UPLOAD] Storing Excel folder name in metadata: "${excelFolder}"`)
+                  try {
+                    const cur = JSON.parse(fs.readFileSync(metaPath, 'utf-8'))
+                    cur.excelFolder = excelFolder
+                    fs.writeFileSync(metaPath, JSON.stringify(cur, null, 2), 'utf-8')
+                  } catch (err) {
+                    console.error(`[TEMPLATE-UPLOAD] Failed to save Excel folder to metadata:`, err)
+                  }
+                }
+              }
+            }
+          } catch (uploadErr) {
+            console.error(`[TEMPLATE-UPLOAD] Upload/move/embed failed:`, uploadErr)
+          }
           // Persist workspace slug
           try { const cur = JSON.parse(fs.readFileSync(metaPath,'utf-8')); cur.workspaceSlug = wsSlug; fs.writeFileSync(metaPath, JSON.stringify(cur, null, 2), 'utf-8') } catch {}
         }
@@ -612,15 +705,22 @@ router.post("/:slug/compile", async (req, res) => {
     if (!fs.existsSync(dir)) return res.status(404).json({ error: 'Template not found' })
     const metaPath = path.join(dir, 'template.json')
     let wsSlug: string | undefined
-    try { const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8')); if (meta?.workspaceSlug) wsSlug = String(meta.workspaceSlug) } catch {}
+    try { 
+      const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'))
+      if (meta?.workspaceSlug) wsSlug = String(meta.workspaceSlug)
+    } catch {}
     if (!wsSlug) return res.status(400).json({ error: 'No workspace associated with this template' })
 
     // Extract skeleton from docx/html/text for the AI to mirror structure
     let skeleton = ''
     let documentAnalysis = ''
     try {
-      const docxPath = path.join(dir, 'template.docx')
-      if (fs.existsSync(docxPath)) {
+      // Find any .docx file in the directory (not just "template.docx")
+      const files = fs.readdirSync(dir)
+      const docxFile = files.find(f => f.toLowerCase().endsWith('.docx'))
+      
+      if (docxFile) {
+        const docxPath = path.join(dir, docxFile)
         const buffer = fs.readFileSync(docxPath)
         
         // Use intelligent document analysis for compilation
@@ -761,7 +861,7 @@ ${documentAnalysis}
 TEMPLATE ARTIFACTS (HTML skeleton + XML excerpts):
 ${skeleton}`
 
-    const chat = await anythingllmRequest<any>(`/workspace/${encodeURIComponent(String(wsSlug))}/chat`, 'POST', { message: prompt, mode: 'query' })
+    const chat = await anythingllmRequest<any>(`/workspace/${encodeURIComponent(String(wsSlug))}/chat`, 'POST', { message: prompt, mode: 'query', sessionId: 'system-template-compile' })
     const text = String(chat?.textResponse || chat?.message || chat || '')
     let code = text
     const m = text.match(/```[a-z]*\s*([\s\S]*?)```/i)
@@ -827,9 +927,13 @@ router.get("/:slug/compile/stream", async (req, res) => {
     let documentStructure = ''
     let isExcel = false
     try {
-      const xlsxPath = path.join(dir, 'template.xlsx')
-      if (fs.existsSync(xlsxPath)) {
+      // Find any .xlsx file in the directory (not just "template.xlsx")
+      const files = fs.readdirSync(dir)
+      const xlsxFile = files.find(f => f.toLowerCase().endsWith('.xlsx'))
+      
+      if (xlsxFile) {
         isExcel = true
+        const xlsxPath = path.join(dir, xlsxFile)
         const buffer = fs.readFileSync(xlsxPath)
         stepOk('readTemplate')
         stepStart('extractSkeleton')
@@ -1223,7 +1327,7 @@ ${skeleton}`
     logPush(`Sending compilation request to workspace: ${wsSlug}`)
     try {
       if (isCancelled(job.id)) { jobLog(job.id, 'cancelled'); send({ type: 'error', error: 'cancelled' }); return res.end() }
-      const chat = await anythingllmRequest<any>(`/workspace/${encodeURIComponent(String(wsSlug))}/chat`, 'POST', { message: prompt, mode: 'query' })
+      const chat = await anythingllmRequest<any>(`/workspace/${encodeURIComponent(String(wsSlug))}/chat`, 'POST', { message: prompt, mode: 'query', sessionId: 'system-template-compile' })
       const text = String(chat?.textResponse || chat?.message || chat || '')
       logPush(`AI response received (${text.length} chars)`)
       let code = text
@@ -1557,34 +1661,122 @@ router.delete("/:slug", async (req, res) => {
     // Attempt to delete associated AnythingLLM workspace first (best-effort)
     let workspaceDeleted = false
     let workspaceSlug: string | undefined
+    let workspaceWarning: string | undefined
+    let excelFolderWarning: string | undefined
+    let excelFolderToDelete: string | undefined
+    
     try {
       const metaPath = path.join(safeDir, 'template.json')
       if (fs.existsSync(metaPath)) {
         const meta = JSON.parse(fs.readFileSync(metaPath, 'utf-8'))
         workspaceSlug = meta?.workspaceSlug
+        excelFolderToDelete = meta?.excelFolder
+        if (excelFolderToDelete) {
+          console.log(`[TEMPLATE-DELETE] Excel folder from metadata: "${excelFolderToDelete}"`)
+        }
       }
+      
       if (workspaceSlug) {
+        console.log(`[TEMPLATE-DELETE] Deleting workspace: ${workspaceSlug}`)
+        
+        // Before deleting workspace, delete the Excel folder if it exists
+        if (excelFolderToDelete) {
+          try {
+            console.log(`[TEMPLATE-DELETE] Deleting Excel folder: "${excelFolderToDelete}"`)
+            await anythingllmRequest("/system/remove-folder", "DELETE", { name: excelFolderToDelete })
+            console.log(`[TEMPLATE-DELETE] ✓ Removed Excel folder: "${excelFolderToDelete}"`)
+          } catch (err) {
+            console.error(`[TEMPLATE-DELETE] Failed to remove Excel folder "${excelFolderToDelete}":`, err)
+            excelFolderWarning = `Failed to remove Excel folder: ${(err as Error).message}`
+          }
+        }
+        
+        // Also check for Template_ folders that need cleanup
+        try {
+          const wsInfo = await anythingllmRequest<any>(`/workspace/${encodeURIComponent(workspaceSlug)}`, 'GET')
+          const documents = wsInfo?.workspace?.documents || []
+          
+          console.log(`[TEMPLATE-DELETE] Found ${documents.length} document(s) in workspace`)
+          
+          // Find ALL Template_ folders that need deletion
+          const foldersToDelete = new Set<string>()
+          
+          for (const doc of documents) {
+            const docSource = doc.docSource || doc.location || ''
+            console.log(`[TEMPLATE-DELETE] Document path: ${docSource}`)
+            
+            // Extract folder name from document path (e.g., "Template_MyTemplate/file.json" -> "Template_MyTemplate")
+            const folderMatch = docSource.match(/^([^/]+)\//)
+            if (folderMatch) {
+              console.log(`[TEMPLATE-DELETE] Regex matched folder: ${folderMatch[1]}`)
+              foldersToDelete.add(folderMatch[1])
+            } else {
+              console.log(`[TEMPLATE-DELETE] No folder match for path: ${docSource}`)
+            }
+          }
+          
+          if (foldersToDelete.size > 0) {
+            console.log(`[TEMPLATE-DELETE] Found ${foldersToDelete.size} Template folder(s) to clean up:`, Array.from(foldersToDelete))
+            
+            // Delete each folder
+            for (const folderName of foldersToDelete) {
+              try {
+                console.log(`[TEMPLATE-DELETE] Removing folder: ${folderName}`)
+                await anythingllmRequest("/system/remove-folder", "DELETE", { name: folderName })
+                console.log(`[TEMPLATE-DELETE] Folder removed successfully: ${folderName}`)
+              } catch (err) {
+                console.error(`[TEMPLATE-DELETE] Failed to remove folder ${folderName}:`, err)
+                if (!excelFolderWarning) {
+                  excelFolderWarning = `Failed to remove folder: ${(err as Error).message}`
+                }
+              }
+            }
+          } else {
+            console.log(`[TEMPLATE-DELETE] No Template folders found to delete`)
+          }
+        } catch (err) {
+          console.error(`[TEMPLATE-DELETE] Failed to check for folders:`, err)
+        }
+        
+        // Now delete the workspace
         try {
           await anythingllmRequest<any>(`/workspace/${encodeURIComponent(String(workspaceSlug))}`, 'DELETE')
           workspaceDeleted = true
+          console.log(`[TEMPLATE-DELETE] Workspace deleted successfully`)
         } catch (e) {
-          // ignore; surface as not deleted
+          console.error(`[TEMPLATE-DELETE] Failed to delete workspace:`, e)
+          workspaceWarning = `Failed to delete workspace: ${(e as Error).message}`
         }
       }
-    } catch {}
+    } catch (err) {
+      console.error(`[TEMPLATE-DELETE] Error during AnythingLLM cleanup:`, err)
+    }
 
     // Remove local folder
-    try { fs.rmSync(safeDir, { recursive: true, force: true }) } catch {}
+    try { 
+      fs.rmSync(safeDir, { recursive: true, force: true })
+      console.log(`[TEMPLATE-DELETE] Local template folder removed: ${safeDir}`)
+    } catch (err) {
+      console.error(`[TEMPLATE-DELETE] Failed to remove local folder:`, err)
+    }
     
     // Delete template metadata from database
     try {
       await deleteTemplateMetadata(slug)
+      console.log(`[TEMPLATE-DELETE] Template metadata deleted from database`)
     } catch (err) {
       console.error('[TEMPLATE-DELETE] Failed to delete metadata:', err)
       // Non-fatal, continue
     }
     
-    return res.json({ ok: true, deleted: slug, ...(workspaceSlug ? { workspaceSlug } : {}), workspaceDeleted })
+    return res.json({ 
+      ok: true, 
+      deleted: slug, 
+      ...(workspaceSlug ? { workspaceSlug } : {}), 
+      workspaceDeleted,
+      ...(workspaceWarning ? { workspaceWarning } : {}),
+      ...(excelFolderWarning ? { excelFolderWarning } : {})
+    })
   } catch (e) {
     return res.status(500).json({ error: (e as Error).message })
   }

@@ -283,6 +283,20 @@ function detectColumnType(values: any[], worksheet: XLSX.WorkSheet, colIdx: numb
 }
 
 /**
+ * Quick helper to get the number of sheets in an Excel file without full analysis
+ */
+export function getExcelSheetCount(filePath: string): number {
+  try {
+    const buffer = fs.readFileSync(filePath)
+    const workbook = XLSX.read(buffer, { type: 'buffer', bookSheets: true })
+    return workbook.SheetNames.length
+  } catch (err) {
+    logError('[FILE-ANALYZER] Failed to read Excel sheet count:', err)
+    return 0
+  }
+}
+
+/**
  * Analyzes a spreadsheet file and extracts accurate structural information
  */
 export async function analyzeSpreadsheet(filePath: string): Promise<SpreadsheetAnalysis> {

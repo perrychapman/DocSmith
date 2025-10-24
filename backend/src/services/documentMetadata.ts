@@ -135,13 +135,16 @@ function rowToMetadata(row: DocumentMetadataRow): DocumentMetadata {
  * @param filename - Original filename
  * @param workspaceSlug - AnythingLLM workspace slug
  * @param documentName - The specific document name/identifier in AnythingLLM (e.g., "custom-documents/myfile.pdf")
+ * @param anythingllmPath - Alternative path for AnythingLLM document
+ * @param allDocumentPaths - Optional array of all document paths (for Excel files with multiple sheets)
  */
 export async function analyzeDocumentMetadata(
   filePath: string,
   filename: string,
   workspaceSlug: string,
   documentName?: string,
-  anythingllmPath?: string
+  anythingllmPath?: string,
+  allDocumentPaths?: string[]
 ): Promise<DocumentMetadata> {
   const fileSize = fs.existsSync(filePath) ? fs.statSync(filePath).size : 0
   const fileExt = path.extname(filename).toLowerCase()
@@ -149,6 +152,7 @@ export async function analyzeDocumentMetadata(
   // Build document-specific prompt that explicitly tells AI which document to analyze
   // Use the document name to target the specific file in the workspace
   const targetDoc = documentName || filename
+  const hasMultipleDocs = allDocumentPaths && allDocumentPaths.length > 1
   
   // Determine document type category for intelligent analysis
   const isSpreadsheet = ['.xlsx', '.xls', '.csv', '.tsv', '.ods'].includes(fileExt)
@@ -158,7 +162,14 @@ export async function analyzeDocumentMetadata(
   const isDocument = ['.pdf', '.doc', '.docx', '.txt', '.rtf', '.odt', '.md'].includes(fileExt)
   
   // Build intelligent prompt based on document type
-  let analysisPrompt = `Please analyze the document named "${targetDoc}" in this workspace.\n\nIMPORTANT: Focus your analysis ONLY on the document "${targetDoc}". Do not analyze other documents in the workspace.\n\n`
+  let analysisPrompt = ''
+  if (hasMultipleDocs) {
+    // Multiple documents (Excel file with multiple sheets)
+    analysisPrompt = `Please analyze ALL sheets from the Excel file "${filename}". The file has been split into ${allDocumentPaths.length} sheet documents:\n\n${allDocumentPaths.map((p, i) => `${i + 1}. ${p}`).join('\n')}\n\nIMPORTANT: Analyze the COMPLETE dataset across ALL sheets. Consider relationships and patterns across sheets. Do not analyze other documents in the workspace.\n\n`
+  } else {
+    // Single document
+    analysisPrompt = `Please analyze the document named "${targetDoc}" in this workspace.\n\nIMPORTANT: Focus your analysis ONLY on the document "${targetDoc}". Do not analyze other documents in the workspace.\n\n`
+  }
   
   // Pre-analyze spreadsheet files to get accurate structural data
   let spreadsheetData: SpreadsheetAnalysis | null = null
@@ -391,51 +402,59 @@ Return ONLY a valid JSON object with the exact structure specified above. No mar
     logInfo(`[METADATA] Target document: "${targetDoc}"`)
     logInfo(`[METADATA] Document type detected: ${isSpreadsheet ? 'Spreadsheet' : isPresentation ? 'Presentation' : isCode ? 'Code' : isImage ? 'Image' : 'Document'}`)
     
-    // Pin the specific document before analysis to ensure AI accesses the correct document
-    const docPathToPin = anythingllmPath || documentName || filename
-    logInfo(`[METADATA] Pinning document for analysis: "${docPathToPin}"`)
+    // Pin the document(s) before analysis to ensure AI accesses the correct content
+    const docsToPin = allDocumentPaths || [anythingllmPath || documentName || filename]
+    const isMultiDoc = docsToPin.length > 1
+    logInfo(`[METADATA] Pinning ${docsToPin.length} document(s) for analysis${isMultiDoc ? ' (Excel file with multiple sheets)' : ''}`)
     
-    try {
-      await anythingllmRequest(
-        `/workspace/${encodeURIComponent(workspaceSlug)}/update-pin`,
-        'POST',
-        {
-          docPath: docPathToPin,
-          pinStatus: true
-        }
-      )
-      logInfo(`[METADATA] Successfully pinned document: "${docPathToPin}"`)
-    } catch (pinErr) {
-      logError(`[METADATA] Failed to pin document (continuing anyway):`, pinErr)
-      // Continue with analysis even if pinning fails
+    for (const docPath of docsToPin) {
+      try {
+        await anythingllmRequest(
+          `/workspace/${encodeURIComponent(workspaceSlug)}/update-pin`,
+          'POST',
+          {
+            docPath: docPath,
+            pinStatus: true
+          }
+        )
+        logInfo(`[METADATA] ✓ Pinned: "${docPath}"`)
+      } catch (pinErr) {
+        logError(`[METADATA] Failed to pin document "${docPath}" (continuing anyway):`, pinErr)
+        // Continue with other documents even if one fails
+      }
     }
     
     // Use query mode with the pinned document
+    // Use a system session ID to hide metadata extraction from user chat UI
     const result = await anythingllmRequest<any>(
       `/workspace/${encodeURIComponent(workspaceSlug)}/chat`,
       'POST',
       { 
         message: analysisPrompt, 
-        mode: 'query'
+        mode: 'query',
+        sessionId: 'system-metadata-extraction'
         // Note: temperature parameter removed - not supported by all models
         // Document is now pinned, so it should be prioritized in the query
       }
     )
     
-    // Unpin the document after analysis
-    try {
-      await anythingllmRequest(
-        `/workspace/${encodeURIComponent(workspaceSlug)}/update-pin`,
-        'POST',
-        {
-          docPath: docPathToPin,
-          pinStatus: false
-        }
-      )
-      logInfo(`[METADATA] Successfully unpinned document: "${docPathToPin}"`)
-    } catch (unpinErr) {
-      logError(`[METADATA] Failed to unpin document:`, unpinErr)
-      // Don't throw - analysis was successful
+    // Unpin ALL document(s) after analysis
+    logInfo(`[METADATA] Unpinning ${docsToPin.length} document(s)`)
+    for (const docPath of docsToPin) {
+      try {
+        await anythingllmRequest(
+          `/workspace/${encodeURIComponent(workspaceSlug)}/update-pin`,
+          'POST',
+          {
+            docPath: docPath,
+            pinStatus: false
+          }
+        )
+        logInfo(`[METADATA] ✓ Unpinned: "${docPath}"`)
+      } catch (unpinErr) {
+        logError(`[METADATA] Failed to unpin document "${docPath}":`, unpinErr)
+        // Don't throw - analysis was successful
+      }
     }
     
     logInfo(`[METADATA] Got response from AnythingLLM: ${JSON.stringify(result, null, 2)}`)

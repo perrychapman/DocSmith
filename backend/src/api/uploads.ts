@@ -10,6 +10,7 @@ import { anythingllmRequest } from "../services/anythingllm"
 import { findDocsByFilename, documentExists, qualifiedNamesForShort } from "../services/anythingllmDocs"
 import { secureFileValidation } from "../services/fileSecurityValidator"
 import { analyzeDocumentMetadata, saveDocumentMetadata, loadDocumentMetadata, deleteDocumentMetadata, generateWorkspaceIndex, refreshWorkspaceIndex } from "../services/documentMetadata"
+import { getExcelSheetCount } from "../services/fileAnalyzer"
 
 // Lazy import multer to avoid types requirement at compile time
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -62,7 +63,8 @@ async function extractMetadataInBackground(
   filePath: string,
   filename: string,
   workspaceSlug: string,
-  documentName?: string
+  documentName?: string,
+  allDocumentPaths?: string[] // For Excel files with multiple sheets
 ): Promise<void> {
   // Notify: processing started
   addNotification({
@@ -74,16 +76,17 @@ async function extractMetadataInBackground(
   })
   
   try {
-    const targetDoc = documentName || filename
-    console.log(`[METADATA] Extracting metadata for ${filename}`)
+    const targetDocs = allDocumentPaths || [documentName || filename]
+    const isExcel = targetDocs.length > 1
+    console.log(`[METADATA] Extracting metadata for ${filename} (${targetDocs.length} document(s))`)
     
-    // Wait for AnythingLLM to finish indexing the document
-    const maxWaitTime = 30000 // 30 seconds max
+    // Wait for AnythingLLM to finish indexing ALL documents
+    const maxWaitTime = isExcel ? 60000 : 30000 // 60s for Excel (multiple sheets), 30s for others
     const checkInterval = 2000 // Check every 2 seconds
     const startTime = Date.now()
-    let isIndexed = false
+    let allIndexed = false
     
-    while (!isIndexed && (Date.now() - startTime) < maxWaitTime) {
+    while (!allIndexed && (Date.now() - startTime) < maxWaitTime) {
       try {
         const workspaceInfo = await anythingllmRequest<any>(
           `/workspace/${encodeURIComponent(workspaceSlug)}`,
@@ -91,15 +94,22 @@ async function extractMetadataInBackground(
         )
         
         const documents = workspaceInfo?.workspace?.documents || []
-        const foundDoc = documents.find((d: any) => 
-          d.docpath === targetDoc || 
-          d.name === targetDoc ||
-          d.location === targetDoc
-        )
         
-        if (foundDoc) {
-          isIndexed = true
+        // Check if ALL target documents are indexed
+        const foundCount = targetDocs.filter(targetDoc => 
+          documents.find((d: any) => 
+            d.docpath === targetDoc || 
+            d.name === targetDoc ||
+            d.location === targetDoc
+          )
+        ).length
+        
+        if (foundCount === targetDocs.length) {
+          console.log(`[METADATA] ✓ All ${targetDocs.length} document(s) are indexed`)
+          allIndexed = true
           break
+        } else {
+          console.log(`[METADATA] Waiting for indexing: ${foundCount}/${targetDocs.length} documents ready`)
         }
         
         await new Promise(resolve => setTimeout(resolve, checkInterval))
@@ -116,7 +126,8 @@ async function extractMetadataInBackground(
     
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       try {
-        metadata = await analyzeDocumentMetadata(filePath, filename, workspaceSlug, documentName, documentName)
+        // Pass allDocumentPaths so metadata analysis can pin/analyze all sheets
+        metadata = await analyzeDocumentMetadata(filePath, filename, workspaceSlug, documentName, documentName, allDocumentPaths)
         
         // Check if we got meaningful metadata (not just fallback)
         if (metadata.documentType || metadata.purpose || (metadata.keyTopics && metadata.keyTopics.length > 0)) {
@@ -180,6 +191,7 @@ type Sidecar = {
   docId?: string
   workspaceSlug?: string
   uploadedAt: string
+  excelFolder?: string // Original folder name for Excel files (e.g., "filename.xlsx-abc123")
 }
 
 function sidecarPath(uploadsDir: string, filename: string) {
@@ -653,191 +665,129 @@ router.post("/:customerId", (req, res, next) => {
                 
                 console.log(`[UPLOAD] Upload response:`, JSON.stringify(resp, null, 2))
                 
-                // Extract uploaded document name from response
-                let uploadedDocName: string | undefined
-                let uploadedLocation: string | undefined
+                // Extract ALL uploaded document paths from response (important for Excel with multiple sheets)
+                let uploadedDocNames: string[] = []
+                let uploadedLocations: string[] = []
                 try {
                   const docs = Array.isArray(resp?.documents) ? resp.documents : []
                   console.log(`[UPLOAD] Found ${docs.length} documents in upload response`)
-                  const first = docs[0]
                   
-                  if (first) {
-                    console.log(`[UPLOAD] First document keys:`, Object.keys(first))
-                    console.log(`[UPLOAD] First document location:`, first.location)
-                    console.log(`[UPLOAD] First document name:`, first.name)
+                  if (docs.length > 0) {
+                    console.log(`[UPLOAD] First document keys:`, Object.keys(docs[0]))
+                    console.log(`[UPLOAD] First document location:`, docs[0].location)
+                    console.log(`[UPLOAD] First document name:`, docs[0].name)
                   }
                   
-                  // CRITICAL FIX: Always prefer location field and preserve full relative path
-                  // AnythingLLM returns location as either:
-                  // 1. Full filesystem path: "C:\...\storage\documents\custom-documents\file.json"
-                  // 2. Relative path: "custom-documents/file.json"
-                  // We need to preserve "custom-documents/" prefix for move and embed operations!
-                  
-                  if (first?.location) {
-                    const fullPath = String(first.location).trim()
-                    uploadedLocation = fullPath
-                    
-                    // Check if it's a full filesystem path (contains drive letter or starts with slash before "documents")
-                    // Match patterns like: "C:\path\storage\documents\custom-documents\file.json"
-                    // But NOT: "custom-documents/file.json" (relative path)
-                    const match = fullPath.match(/[A-Z]:[/\\].*[/\\]documents[/\\](.+)$/i) || 
-                                  fullPath.match(/^[/\\].*[/\\]documents[/\\](.+)$/i)
-                    
-                    if (match && match[1]) {
-                      // Extract everything after "storage\documents\" and normalize slashes
-                      uploadedDocName = match[1].replace(/\\/g, '/')
-                      console.log(`[UPLOAD] Extracted from filesystem path: "${uploadedDocName}"`)
-                    } else {
-                      // It's already a relative path - use it directly
-                      uploadedDocName = fullPath.replace(/\\/g, '/')
-                      console.log(`[UPLOAD] Using relative path from location: "${uploadedDocName}"`)
+                  // Process ALL documents (for Excel files with multiple sheets)
+                  for (const doc of docs) {
+                    if (doc?.location) {
+                      const fullPath = String(doc.location).trim()
+                      uploadedLocations.push(fullPath)
+                      
+                      // Check if it's a full filesystem path
+                      const match = fullPath.match(/[A-Z]:[/\\].*[/\\]documents[/\\](.+)$/i) || 
+                                    fullPath.match(/^[/\\].*[/\\]documents[/\\](.+)$/i)
+                      
+                      if (match && match[1]) {
+                        uploadedDocNames.push(match[1].replace(/\\/g, '/'))
+                      } else {
+                        uploadedDocNames.push(fullPath.replace(/\\/g, '/'))
+                      }
+                    } else if (doc?.name) {
+                      const baseName = String(doc.name).trim()
+                      uploadedDocNames.push(baseName.includes('/') ? baseName : `custom-documents/${baseName}`)
                     }
-                  } else if (first?.name) {
-                    // Fallback: construct path from name (assume custom-documents folder)
-                    const baseName = String(first.name).trim()
-                    // If name already has a folder prefix, use it; otherwise add custom-documents/
-                    uploadedDocName = baseName.includes('/') ? baseName : `custom-documents/${baseName}`
-                    console.log(`[UPLOAD] Constructed from name field: "${uploadedDocName}"`)
                   }
                   
-                  console.log(`[UPLOAD] Final uploaded document location: "${uploadedLocation}"`)
-                  console.log(`[UPLOAD] Final uploaded document name (for move/embed): "${uploadedDocName}"`)
+                  console.log(`[UPLOAD] Extracted ${uploadedDocNames.length} document paths:`, uploadedDocNames)
                 } catch (e) {
                   console.error(`[UPLOAD] Error parsing upload response:`, e)
                 }
                 
-                if (!uploadedDocName) {
-                  throw new Error(`Failed to get document name from upload response`)
+                if (uploadedDocNames.length === 0) {
+                  throw new Error(`Failed to get document names from upload response`)
                 }
 
-                // Step 3: Try to move the file to the customer folder (OPTIONAL - graceful fallback)
-                // Note: AnythingLLM's move-files API has been unreliable in some environments
-                // If move fails, we'll still embed using the original path (custom-documents/...)
-                // The document will still work correctly for metadata extraction even without moving
+                // For Excel files with multiple sheets, we need to move ALL sheets to the customer folder
+                const sourceFilename = file.filename
                 
-                const sourceFilename = uploadedDocName.split('/').pop() || uploadedDocName
-                const targetPath = `${folderName}/${sourceFilename}`
-                console.log(`[UPLOAD] Attempting to organize document: "${uploadedDocName}" -> "${targetPath}"`)
+                console.log(`[UPLOAD] Will move ${uploadedDocNames.length} document(s) to customer folder "${folderName}"`)
                 
-                let moveSucceeded = false
-                const maxMoveRetries = 2 // Reduced retries since move often fails
-                
-                for (let attempt = 1; attempt <= maxMoveRetries; attempt++) {
+                const movedPaths: string[] = []
+                for (const uploadedDocName of uploadedDocNames) {
+                  const sheetFilename = uploadedDocName.split('/').pop() || uploadedDocName
+                  const targetPath = `${folderName}/${sheetFilename}`
+                  
+                  console.log(`[UPLOAD] Moving: "${uploadedDocName}" -> "${targetPath}"`)
+                  
                   try {
-                    console.log(`[UPLOAD] Move attempt ${attempt}/${maxMoveRetries}`)
                     const moveResp = await anythingllmRequest<{ success: boolean; message: string | null }>(
                       "/document/move-files",
                       "POST",
                       { files: [{ from: uploadedDocName, to: targetPath }] }
                     )
-                    console.log(`[UPLOAD] Move response:`, JSON.stringify(moveResp, null, 2))
                     
                     if (moveResp?.success !== false) {
-                      console.log(`[UPLOAD] ✓ Document successfully organized in customer folder: "${targetPath}"`)
-                      moveSucceeded = true
-                      break
+                      console.log(`[UPLOAD] ✓ Moved to: "${targetPath}"`)
+                      movedPaths.push(targetPath)
                     } else {
-                      console.log(`[UPLOAD] Move API returned failure: ${moveResp?.message}`)
-                      break // Don't retry on explicit API failure
+                      console.log(`[UPLOAD] ⚠ Move failed, will use original path: "${uploadedDocName}"`)
+                      movedPaths.push(uploadedDocName)
                     }
                   } catch (moveErr) {
-                    console.error(`[UPLOAD] Move attempt ${attempt} failed:`, moveErr instanceof Error ? moveErr.message : String(moveErr))
-                    if (attempt >= maxMoveRetries) {
-                      console.log(`[UPLOAD] File organization skipped - will proceed with original path`)
-                      console.log(`[UPLOAD] Document remains at: "${uploadedDocName}"`)
-                      console.log(`[UPLOAD] This is OK - metadata extraction will still work correctly!`)
-                    }
+                    console.error(`[UPLOAD] Move error:`, moveErr instanceof Error ? moveErr.message : String(moveErr))
+                    console.log(`[UPLOAD] Will use original path: "${uploadedDocName}"`)
+                    movedPaths.push(uploadedDocName)
                   }
                 }
+                
+                console.log(`[UPLOAD] Moved ${movedPaths.length} documents`)
 
-                // Step 4: Verify document exists and get the ACTUAL path from AnythingLLM
-                // This is critical - we must use AnythingLLM's reported path for embedding!
-                console.log(`[UPLOAD] Querying AnythingLLM to find uploaded document...`)
-                const verifyMaxTime = 20000 // 20 seconds max
-                const verifyInterval = 2000 // Check every 2 seconds
-                const verifyStartTime = Date.now()
-                let actualDocPath: string | undefined
-                let allDocPaths: string[] = [] // Track all document paths (for Excel sheets)
-                let documentExists = false
+                // Step 4: Use the moved paths directly for embedding
+                // The document discovery logic wasn't reliable, but we already have the correct paths from the move operation
+                console.log(`[UPLOAD] Using ${movedPaths.length} moved path(s) for embedding`)
+                const docsToEmbed = movedPaths
                 
-                while (!documentExists && (Date.now() - verifyStartTime) < verifyMaxTime) {
-                  try {
-                    const docsListResp = await anythingllmRequest<any>('/documents', 'GET')
-                    // localFiles might be an object with items array, or items might be at root, or it might be an array itself
-                    let items: any[] = []
-                    if (Array.isArray(docsListResp?.localFiles)) {
-                      items = docsListResp.localFiles
-                    } else if (Array.isArray(docsListResp?.localFiles?.items)) {
-                      items = docsListResp.localFiles.items
-                    } else if (Array.isArray(docsListResp)) {
-                      items = docsListResp
-                    }
-                    
-                    // Flatten the tree structure to find all documents (including Excel sheets)
-                    function flattenDocs(nodes: any[]): any[] {
-                      const result: any[] = []
-                      for (const node of nodes) {
-                        if (node.type === 'file') {
-                          result.push(node)
-                        }
-                        if (node.type === 'folder' && Array.isArray(node.items)) {
-                          result.push(...flattenDocs(node.items))
-                        }
-                      }
-                      return result
-                    }
-                    
-                    const allDocs = flattenDocs(items)
-                    
-                    // Find ALL documents related to the uploaded file (for Excel, this includes all sheets)
-                    // Excel files create a folder with the filename, so we need to match by the base name
-                    const baseFilename = sourceFilename.replace(/\.[^.]+$/, '') // Remove extension
-                    const matchingDocs = allDocs.filter((d: any) => 
-                      d.name?.includes(sourceFilename) ||
-                      d.location?.includes(sourceFilename) ||
-                      d.name?.includes(baseFilename) ||
-                      d.location?.includes(baseFilename)
-                    )
-                    
-                    if (matchingDocs.length > 0) {
-                      console.log(`[UPLOAD] ✓ Found ${matchingDocs.length} document(s) in AnythingLLM after ${((Date.now() - verifyStartTime)/1000).toFixed(1)}s`)
-                      // For Excel files with multiple sheets, we'll embed all of them
-                      allDocPaths = matchingDocs.map((d: any) => d.name || d.location).filter(Boolean)
-                      actualDocPath = allDocPaths[0] // Store first for backward compatibility
-                      console.log(`[UPLOAD] AnythingLLM document paths:`, allDocPaths)
-                      documentExists = true
-                      break
-                    }
-                    
-                    console.log(`[UPLOAD] Document not yet visible, waiting ${verifyInterval/1000}s... (${((Date.now() - verifyStartTime)/1000).toFixed(1)}s elapsed)`)
-                    await new Promise(resolve => setTimeout(resolve, verifyInterval))
-                  } catch (err) {
-                    console.error(`[UPLOAD] Error verifying document:`, err)
-                    await new Promise(resolve => setTimeout(resolve, verifyInterval))
-                  }
+                // For Excel files, give a brief moment for AnythingLLM to finish processing
+                const isExcel = sourceFilename.toLowerCase().endsWith('.xlsx') || sourceFilename.toLowerCase().endsWith('.xls')
+                if (isExcel) {
+                  console.log(`[UPLOAD] Excel file detected with ${movedPaths.length} sheets, waiting 3s for processing...`)
+                  await new Promise(resolve => setTimeout(resolve, 3000))
                 }
                 
-                // Use the actual path from AnythingLLM, or fall back to our best guess
-                const docName = actualDocPath || (moveSucceeded ? targetPath : uploadedDocName)
-                const docsToEmbed = allDocPaths.length > 0 ? allDocPaths : [docName]
+                console.log(`[UPLOAD] Will embed ${docsToEmbed.length} document(s)`)
                 
-                if (!documentExists) {
-                  console.log(`[UPLOAD] ⚠ Document not found in AnythingLLM after ${verifyMaxTime/1000}s`)
-                  console.log(`[UPLOAD] Will attempt embedding with path: "${docName}"`)
-                } else {
-                  console.log(`[UPLOAD] Will embed ${docsToEmbed.length} document(s) using verified paths`)
-                }
-                
-                // Save sidecar mapping
+                // Save sidecar mapping (use first document for backward compatibility)
                 try {
+                  const firstDocPath = docsToEmbed[0]
                   let docId: string | undefined
                   try {
-                    const one = await anythingllmRequest<any>(`/document/${encodeURIComponent(docName)}`, "GET")
+                    const one = await anythingllmRequest<any>(`/document/${encodeURIComponent(firstDocPath)}`, "GET")
                     const items = Array.isArray(one?.localFiles?.items) ? one.localFiles.items : []
-                    const match = items.find((x: any) => (String(x?.name || "") === docName))
+                    const match = items.find((x: any) => (String(x?.name || "") === firstDocPath))
                     if (match?.id) docId = String(match.id)
                   } catch {}
-                  writeSidecar(uploadsDir, file.filename, { docName, docId, workspaceSlug: slug, uploadedAt: new Date().toISOString() })
+                  
+                  // For Excel files, store the original folder name (before moving to customer folder)
+                  // This is needed for cleanup when deleting
+                  let excelFolder: string | undefined
+                  if (isExcel && uploadedDocNames.length > 0) {
+                    // Extract folder name from original upload path
+                    // Format: "custom-documents/filename.xlsx-XXXX/sheet-Name.json"
+                    const folderMatch = uploadedDocNames[0].match(/([^\/]+\.xlsx?-[a-f0-9]+)\//i)
+                    if (folderMatch) {
+                      excelFolder = folderMatch[1]
+                      console.log(`[UPLOAD] Storing Excel folder name in sidecar: "${excelFolder}"`)
+                    }
+                  }
+                  
+                  writeSidecar(uploadsDir, file.filename, { 
+                    docName: firstDocPath, 
+                    docId, 
+                    workspaceSlug: slug, 
+                    uploadedAt: new Date().toISOString(),
+                    ...(excelFolder ? { excelFolder } : {})
+                  })
                 } catch {}
                 
                 // Step 5: Embed the uploaded document(s) into the workspace with retry logic
@@ -889,10 +839,11 @@ router.post("/:customerId", (req, res, next) => {
 
                 // Kick off metadata extraction in background (non-blocking)
                 // Don't await - let it run asynchronously after upload completes
-                console.log(`[UPLOAD] Kicking off background metadata extraction`)
-                console.log(`[UPLOAD] Will analyze document: "${docName || file.filename}"`)
+                console.log(`[UPLOAD] Kicking off background metadata extraction for ${docsToEmbed.length} document(s)`)
+                const firstDocPath = docsToEmbed[0]
+                console.log(`[UPLOAD] Will analyze document(s): ${docsToEmbed.join(', ')}`)
                 setImmediate(() => {
-                  extractMetadataInBackground(id, file.path, file.filename, slug, docName)
+                  extractMetadataInBackground(id, file.path, file.filename, slug, firstDocPath, docsToEmbed)
                     .catch(err => console.error('[METADATA] Background extraction failed:', err))
                 })
                 
@@ -963,29 +914,143 @@ router.delete("/:customerId", (req, res) => {
       const slug = row.workspaceSlug
       if (slug) {
         try {
-          // Prefer sidecar mapping first for exact delete
+          // For Excel files, we need to find ALL sheets, not just one document
+          const isExcel = name.toLowerCase().endsWith('.xlsx') || name.toLowerCase().endsWith('.xls')
+          const folderName = folderNameForCustomer(row.id, row.name, new Date(row.createdAt))
+          
           let names: string[] = []
-          const sc = readSidecar(uploadsDir, name)
-          if (sc?.docName) {
+          
+          if (isExcel) {
+            // For Excel files, find all sheet documents in the customer folder
+            console.log(`[DELETE] Deleting Excel file - will find all sheets`)
             try {
-              const qnames = await qualifiedNamesForShort(sc.docName)
-              names = qnames.length ? qnames : [sc.docName]
-            } catch { names = [sc.docName] }
+              const docsListResp = await anythingllmRequest<any>('/documents', 'GET')
+              let items: any[] = []
+              if (Array.isArray(docsListResp?.localFiles)) {
+                items = docsListResp.localFiles
+              } else if (Array.isArray(docsListResp?.localFiles?.items)) {
+                items = docsListResp.localFiles.items
+              } else if (Array.isArray(docsListResp)) {
+                items = docsListResp
+              }
+              
+              // Flatten the tree to find all files
+              function flattenDocs(nodes: any[], parentPath: string = ''): any[] {
+                const result: any[] = []
+                for (const node of nodes) {
+                  if (node.type === 'file') {
+                    const fullPath = parentPath ? `${parentPath}/${node.name}` : node.name
+                    result.push({
+                      ...node,
+                      fullPath: fullPath
+                    })
+                  }
+                  if (node.type === 'folder' && Array.isArray(node.items)) {
+                    const folderPath = parentPath ? `${parentPath}/${node.name}` : node.name
+                    result.push(...flattenDocs(node.items, folderPath))
+                  }
+                }
+                return result
+              }
+              
+              const allDocs = flattenDocs(items)
+              
+              // Find all sheet files that start with "sheet-" in the customer folder
+              const baseFilename = name.replace(/\.[^.]+$/, '') // Remove extension
+              const sheetDocs = allDocs.filter((d: any) => {
+                const fullPath = d.fullPath || d.location || d.name || ''
+                // Match sheets in customer folder: "Amerihealth_Oct_2025/sheet-*.json"
+                return fullPath.startsWith(folderName + '/sheet-') && fullPath.endsWith('.json')
+              })
+              
+              console.log(`[DELETE] Found ${sheetDocs.length} sheet document(s) for Excel file`)
+              names = sheetDocs.map((d: any) => d.fullPath || d.location || d.name).filter(Boolean)
+              
+              // IMPORTANT: Extract the original Excel folder name NOW (before deleting sheets)
+              // Check if we already have it in sidecar, if not extract from workspace
+              const sc = readSidecar(uploadsDir, name)
+              console.log(`[DELETE] Sidecar status: ${sc ? 'exists' : 'missing'}, excelFolder: ${sc?.excelFolder || 'not set'}`)
+              
+              if (!sc?.excelFolder && names.length > 0) {
+                console.log(`[DELETE] Extracting Excel folder name before deletion...`)
+                try {
+                  const ws = await anythingllmRequest<any>(`/workspace/${encodeURIComponent(String(slug))}`, "GET")
+                  const workspace = (ws as any)?.workspace ?? ws
+                  const docsArr: any[] = Array.isArray(workspace?.documents) ? workspace.documents : []
+                  console.log(`[DELETE] Found ${docsArr.length} documents in workspace`)
+                  
+                  // Look for any sheet document to find the docSource
+                  for (const sheetName of names) {
+                    console.log(`[DELETE] Looking for sheet: "${sheetName}"`)
+                    const doc = docsArr.find((d: any) => {
+                      const docName = String(d?.name || d?.location || "").trim()
+                      return docName === sheetName || docName.endsWith(sheetName)
+                    })
+                    
+                    if (doc) {
+                      console.log(`[DELETE] Found document, docSource: "${doc.docSource}"`)
+                      if (doc.docSource) {
+                        // Extract folder name: "custom-documents/filename.xlsx-XXXX/sheet-Name.json"
+                        const folderMatch = doc.docSource.match(/([^\/]+\.xlsx?-[a-f0-9]+)\//i)
+                        if (folderMatch) {
+                          const excelFolderName = folderMatch[1]
+                          console.log(`[DELETE] ✓ Extracted Excel folder: "${excelFolderName}"`)
+                          // Save to sidecar for this and future deletions
+                          const updatedSidecar = sc ? { ...sc, excelFolder: excelFolderName } : {
+                            docName: sheetName,
+                            uploadedAt: new Date().toISOString(),
+                            excelFolder: excelFolderName
+                          }
+                          writeSidecar(uploadsDir, name, updatedSidecar)
+                          console.log(`[DELETE] Saved folder name to sidecar`)
+                          break
+                        } else {
+                          console.log(`[DELETE] ✗ No folder match in docSource`)
+                        }
+                      }
+                    } else {
+                      console.log(`[DELETE] ✗ Document not found in workspace`)
+                    }
+                  }
+                } catch (err) {
+                  console.error(`[DELETE] Error extracting folder name:`, err)
+                }
+              } else if (sc?.excelFolder) {
+                console.log(`[DELETE] Excel folder already in sidecar: "${sc.excelFolder}"`)
+              }
+            } catch (err) {
+              console.error('[DELETE] Error finding Excel sheets:', err)
+            }
           }
-          // Prefer global documents list, attempt pinned match first, then loose match
-          try { if (!names.length) names = await findDocsByFilename(name, slug || undefined) } catch {}
-          // Fallback to workspace documents listing
+          
+          // If not Excel or no sheets found, use normal document finding logic
           if (!names.length) {
-            const ws = await anythingllmRequest<any>(`/workspace/${encodeURIComponent(String(slug))}`, "GET")
-            const workspace = (ws as any)?.workspace ?? ws
-            const docsArr: any[] = Array.isArray(workspace?.documents) ? workspace.documents : []
-            const matches = docsArr.filter((d: any) => {
-              const t = String(d?.title || "").trim()
-              const c = String(d?.chunkSource || "").trim()
-              return t === name || c === name
-            })
-            names = matches.map((d: any) => String(d?.name || d?.location || "")).filter(Boolean)
+            // Prefer sidecar mapping first for exact delete
+            const sc = readSidecar(uploadsDir, name)
+            if (sc?.docName) {
+              try {
+                const qnames = await qualifiedNamesForShort(sc.docName)
+                names = qnames.length ? qnames : [sc.docName]
+              } catch { names = [sc.docName] }
+            }
+            // Prefer global documents list, attempt pinned match first, then loose match
+            try { if (!names.length) names = await findDocsByFilename(name, slug || undefined) } catch {}
+            // Fallback to workspace documents listing
+            if (!names.length) {
+              const ws = await anythingllmRequest<any>(`/workspace/${encodeURIComponent(String(slug))}`, "GET")
+              const workspace = (ws as any)?.workspace ?? ws
+              const docsArr: any[] = Array.isArray(workspace?.documents) ? workspace.documents : []
+              const matches = docsArr.filter((d: any) => {
+                const t = String(d?.title || "").trim()
+                const c = String(d?.chunkSource || "").trim()
+                return t === name || c === name
+              })
+              names = matches.map((d: any) => String(d?.name || d?.location || "")).filter(Boolean)
+            }
           }
+          
+          console.log(`[DELETE] Will attempt to delete ${names.length} document(s):`, names)
+          
           // Verify candidates exist using /document/:name (tolerate 404 by skipping)
           if (names.length) {
             const verified: string[] = []
@@ -1027,8 +1092,31 @@ router.delete("/:customerId", (req, res) => {
             }
             if (actuallyRemoved.length) {
               removedNames = actuallyRemoved
+              
+              // For Excel files, get folder name BEFORE removing sidecar
+              let excelFolderToDelete: string | undefined
+              if (isExcel) {
+                const sc = readSidecar(uploadsDir, name)
+                excelFolderToDelete = sc?.excelFolder
+                console.log(`[DELETE] Excel folder from sidecar (before removal): "${excelFolderToDelete || 'not found'}"`)
+              }
+              
               // Remove sidecar after successful removal (only if all removed)
               try { if (actuallyRemoved.length === names.length) removeSidecar(uploadsDir, name) } catch {}
+              
+              // For Excel files, also delete the original folder that was created during upload
+              if (isExcel && excelFolderToDelete) {
+                try {
+                  console.log(`[DELETE] Deleting Excel folder: "${excelFolderToDelete}"`)
+                  await anythingllmRequest(`/system/remove-folder`, "DELETE", { name: excelFolderToDelete })
+                  console.log(`[DELETE] ✓ Removed Excel folder: "${excelFolderToDelete}"`)
+                } catch (folderErr) {
+                  console.error(`[DELETE] Failed to remove Excel folder "${excelFolderToDelete}":`, folderErr)
+                  // Non-blocking - sheets were still deleted
+                }
+              } else if (isExcel && !excelFolderToDelete) {
+                console.log(`[DELETE] No Excel folder found in sidecar, skipping folder cleanup`)
+              }
               
               // Refresh workspace index after document deletion
               try {

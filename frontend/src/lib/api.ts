@@ -67,7 +67,11 @@ export const A = {
   updateThread: (slug: string, threadSlug: string, name: string) => jpost(`/api/anythingllm/workspace/${encodeURIComponent(slug)}/thread/${encodeURIComponent(threadSlug)}/update`, { name }),
   deleteThread: (slug: string, threadSlug: string) => jdel(`/api/anythingllm/workspace/${encodeURIComponent(slug)}/thread/${encodeURIComponent(threadSlug)}`),
 
-  workspaceChats: (slug: string, limit = 50, orderBy: "asc" | "desc" = "desc") => jget<any>(`/api/anythingllm/workspace/${encodeURIComponent(slug)}/chats?limit=${limit}&orderBy=${orderBy}`),
+  workspaceChats: (slug: string, limit = 50, orderBy: "asc" | "desc" = "desc", apiSessionId?: string) => {
+    const params = new URLSearchParams({ limit: String(limit), orderBy });
+    if (apiSessionId) params.set('apiSessionId', apiSessionId);
+    return jget<any>(`/api/anythingllm/workspace/${encodeURIComponent(slug)}/chats?${params.toString()}`);
+  },
   threadChats: (slug: string, threadSlug: string) => jget<any>(`/api/anythingllm/workspace/${encodeURIComponent(slug)}/thread/${encodeURIComponent(threadSlug)}/chats`),
   chatWorkspace: (slug: string, body: any) => jpost(`/api/anythingllm/workspace/${encodeURIComponent(slug)}/chat`, body),
   chatThread: (slug: string, threadSlug: string, body: any) => jpost(`/api/anythingllm/workspace/${encodeURIComponent(slug)}/thread/${encodeURIComponent(threadSlug)}/chat`, body),

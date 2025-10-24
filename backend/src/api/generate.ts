@@ -84,7 +84,16 @@ router.post("/", async (req, res) => {
               const stepStartRec = (n: string) => { try { jobStepStart(job.id, n) } catch {} }
               const stepOkRec = (n: string) => { try { jobStepOk(job.id, n) } catch {} }
               
+              logAndPush('[START] Document generation initiated')
+              logAndPush(`[CONFIG] Template: ${slug}`)
+              logAndPush(`[CONFIG] Customer: ${row.name} (ID: ${row.id})`)
+              logAndPush(`[CONFIG] Workspace: ${wsForGen}`)
+              if (filename) logAndPush(`[CONFIG] Custom filename: ${filename}`)
+              if (instructions) logAndPush(`[CONFIG] User instructions provided (${String(instructions).length} chars)`)
+              if (pinnedDocuments?.length) logAndPush(`[CONFIG] ${pinnedDocuments.length} document(s) pinned for this generation`)
+              
               let tsCode = fs.readFileSync(fullGenPath, 'utf-8')
+              logAndPush(`[INIT] Generator loaded: generator.full.ts (${tsCode.length} chars)`)
               stepOkRec('readGenerator')
 
               // Check for cached AI-enhanced generator (per-workspace, 15min TTL)
@@ -101,13 +110,15 @@ router.post("/", async (req, res) => {
                 try {
                   tsCode = fs.readFileSync(cacheFile, 'utf-8')
                   logs.push('ai-cache:hit')
-                  logAndPush('ai-cache:hit')
+                  logAndPush('[CACHE] Using cached AI-enhanced generator (cache is fresh)')
+                  logAndPush(`[CACHE] Cache age: ${Math.round((Date.now() - cacheStat!.mtimeMs) / 1000)}s (TTL: ${CACHE_TTL_MS / 1000}s)`)
                 } catch {}
               }
 
               // AI enhancement: modify generator to incorporate workspace-specific data
               try {
                 if (forceRefresh || !(logs.includes('ai-cache:hit'))) {
+                logAndPush('[AI] Starting AI enhancement process (cache miss or force refresh)')
                 stepStartRec('analyzeTemplate')
                 logAndPush('[ANALYSIS] Analyzing template structure and workspace data...')
                 let documentAnalysis = ''
@@ -170,7 +181,7 @@ router.post("/", async (req, res) => {
                   ? `\n\nUSER ADDITIONAL INSTRUCTIONS (prioritize when writing queries):\n${String(instructions).trim()}\n`
                   : ''
                   
-                const modeGuidance = `\n\nHYBRID DYNAMIC MODE (ALWAYS ENABLED):\n- At runtime, toolkit.json/query/text ARE AVAILABLE for data fetching\n- PRESERVE the template's structure and formatting (static)\n- FETCH variable data dynamically using toolkit methods\n- Example: const data = await toolkit.json('Check workspace index, then return all inventory items with columns: name, quantity, price')\n- The generator will be called fresh for each document generation\n- Use the metadata context below to write intelligent queries that target specific documents\n- Reference pinned or high-relevance documents explicitly in queries\n- ALWAYS reference the workspace document index first to discover available files\n\nIMPORTANT SEPARATION:\n1. STATIC PART (from template): Headers, titles, formatting, styles, table structure, fonts, colors\n2. DYNAMIC PART (from workspace): Actual data values, list items, table rows, variable content\n`
+                const modeGuidance = `\n\nHYBRID DYNAMIC MODE (ALWAYS ENABLED):\n- At runtime, toolkit.json/query/text ARE AVAILABLE for data fetching\n- PRESERVE the template's structure and formatting (static)\n- FETCH variable data dynamically using toolkit methods\n- The generator will be called fresh for each document generation\n- Use the metadata context below to write intelligent queries that target specific documents\n- Reference pinned or high-relevance documents explicitly in queries\n- ALWAYS reference the workspace document index first to discover available files\n\nQUERY OPTIMIZATION (CRITICAL FOR PERFORMANCE):\n- Construct toolkit.json() queries to be CONCISE and DIRECT - minimize query length while maintaining clarity\n- State requirements clearly: specify document source, data to extract, and desired output format (JSON with field names)\n- Avoid verbose explanations, redundant instructions, or excessive formatting details in queries\n- The LLM is intelligent - trust it to understand your intent without over-explanation\n- Optimize based on user requirements with best effort to reduce document generation time\n- Balance clarity with brevity - queries can be as long as needed but eliminate unnecessary words\n\nIMPORTANT SEPARATION:\n1. STATIC PART (from template): Headers, titles, formatting, styles, table structure, fonts, colors\n2. DYNAMIC PART (from workspace): Actual data values, list items, table rows, variable content\n`
                 
                 const aiPrompt = ((tpl as any).kind === 'excel')
                   ? `You are a senior TypeScript engineer and spreadsheet specialist. Update the following DocSmith Excel generator function to use a HYBRID approach: preserve the template's structure/formatting (static) but fetch variable data dynamically. Keep the EXACT export signature. Compose the final output by returning { sheets } (sheet ops). Do not import external modules or do file I/O.${modeGuidance}\nSTRICT CONSTRAINTS:
@@ -202,15 +213,35 @@ ${tsCode}
                 stepStartRec('aiUpdate')
                 logAndPush(`[AI] Sending ${((tpl as any).kind === 'excel') ? 'Excel' : 'DOCX'} generation request to workspace: ${wsForGen}`)
                 logAndPush(`[AI] Prompt size: ${aiPrompt.length} chars (analysis: ${documentAnalysis.length}, metadata: ${metadataContext.length})`)
-                const r = await anythingllmRequest<any>(`/workspace/${encodeURIComponent(wsForGen)}/chat`, 'POST', { message: aiPrompt, mode: 'query' })
+                logAndPush(`[AI] Using session ID: ${job.id}`)
+                logAndPush('[AI] Waiting for LLM response...')
+                const aiStartTime = Date.now()
+                const r = await anythingllmRequest<any>(`/workspace/${encodeURIComponent(wsForGen)}/chat`, 'POST', { message: aiPrompt, mode: 'query', sessionId: `docsmith-job-${job.id}` })
+                const aiDuration = Date.now() - aiStartTime
+                
+                // Validate AI response
+                if (!r) {
+                  throw new Error('AnythingLLM returned null/undefined response')
+                }
+                if (r.error) {
+                  throw new Error(`AnythingLLM error: ${r.error}`)
+                }
+                
                 const t = String(r?.textResponse || r?.message || r || '')
-                logAndPush(`[AI] Response received (${t.length} chars)`)
+                if (!t || t.trim().length === 0) {
+                  throw new Error('AnythingLLM returned empty response - LLM may not be configured or workspace has no data')
+                }
+                
+                logAndPush(`[AI] Response received in ${(aiDuration / 1000).toFixed(1)}s (${t.length} chars)`)
                 const m = t.match(/```[a-z]*\s*([\s\S]*?)```/i)
                 const codeOut = (m && m[1]) ? m[1] : t
                 if (m && m[1]) {
                   logAndPush('[AI] Extracted code from markdown fence blocks')
                 }
-                if (!codeOut || !/export\s+async\s+function\s+generate\s*\(/.test(codeOut)) throw new Error('AI did not return a valid generate function')
+                if (!codeOut || !/export\s+async\s+function\s+generate\s*\(/.test(codeOut)) {
+                  logAndPush('[AI] Response did not contain valid generator code')
+                  throw new Error('AI did not return a valid generate function')
+                }
                 tsCode = codeOut.trim()
                 logAndPush(`[AI] Enhanced generator ready (${tsCode.length} chars)`)
                 logs.push('ai-modified:ok')
@@ -431,45 +462,108 @@ ${tsCode}
                 }
                 const toolkit = {
                   json: async (prompt: string) => {
-                    logAndPush(`[RUNTIME-QUERY] Executing toolkit.json query...`)
-                    const response = await anythingllmRequest<any>(
-                      `/workspace/${encodeURIComponent(wsForGen!)}/chat`,
-                      'POST',
-                      { message: String(prompt), mode: 'query' }
-                    )
-                    const text = String(response?.textResponse || response?.message || '')
+                    const truncatedPrompt = prompt.length > 100 ? prompt.substring(0, 100) + '...' : prompt
+                    logAndPush(`[RUNTIME-QUERY] toolkit.json called: "${truncatedPrompt}"`)
+                    
                     try {
-                      const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/)
-                      const jsonText = jsonMatch ? jsonMatch[1] : text
-                      const parsed = JSON.parse(jsonText)
-                      logAndPush(`[RUNTIME-QUERY] Successfully parsed JSON response`)
-                      return parsed
-                    } catch {
-                      logAndPush('[RUNTIME-QUERY] Could not parse JSON, returning raw text')
-                      return text
+                      const response = await anythingllmRequest<any>(
+                        `/workspace/${encodeURIComponent(wsForGen!)}/chat`,
+                        'POST',
+                        { message: String(prompt), mode: 'query', sessionId: `docsmith-job-${job.id}` }
+                      )
+                      
+                      // Validate response structure
+                      if (!response) {
+                        throw new Error('AnythingLLM returned null/undefined response')
+                      }
+                      if (response.error) {
+                        throw new Error(`AnythingLLM error: ${response.error}`)
+                      }
+                      
+                      const text = String(response?.textResponse || response?.message || '')
+                      if (!text || text.trim().length === 0) {
+                        throw new Error('AnythingLLM returned empty response - LLM may not be configured or workspace has no data')
+                      }
+                      
+                      // Log for debugging
+                      logAndPush(`[RUNTIME-QUERY] Response received: ${text.length} chars`)
+                      
+                      try {
+                        const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/)
+                        const jsonText = jsonMatch ? jsonMatch[1] : text
+                        const parsed = JSON.parse(jsonText)
+                        logAndPush(`[RUNTIME-QUERY] Successfully parsed JSON`)
+                        return parsed
+                      } catch {
+                        logAndPush('[RUNTIME-QUERY] Could not parse JSON, returning raw text')
+                        return text
+                      }
+                    } catch (error: any) {
+                      logAndPush(`[RUNTIME-QUERY] ERROR in toolkit.json: ${error?.message || error}`)
+                      throw error
                     }
                   },
                   query: async (prompt: string) => {
-                    logAndPush(`[RUNTIME-QUERY] Executing toolkit.query...`)
-                    const response = await anythingllmRequest<any>(
-                      `/workspace/${encodeURIComponent(wsForGen!)}/chat`,
-                      'POST',
-                      { message: String(prompt), mode: 'query' }
-                    )
-                    const result = response?.textResponse || response?.message || ''
-                    logAndPush(`[RUNTIME-QUERY] Response received (${String(result).length} chars)`)
-                    return result
+                    const truncatedPrompt = prompt.length > 100 ? prompt.substring(0, 100) + '...' : prompt
+                    logAndPush(`[RUNTIME-QUERY] toolkit.query called: "${truncatedPrompt}"`)
+                    
+                    try {
+                      const response = await anythingllmRequest<any>(
+                        `/workspace/${encodeURIComponent(wsForGen!)}/chat`,
+                        'POST',
+                        { message: String(prompt), mode: 'query', sessionId: `docsmith-job-${job.id}` }
+                      )
+                      
+                      // Validate response structure
+                      if (!response) {
+                        throw new Error('AnythingLLM returned null/undefined response')
+                      }
+                      if (response.error) {
+                        throw new Error(`AnythingLLM error: ${response.error}`)
+                      }
+                      
+                      const result = response?.textResponse || response?.message || ''
+                      if (!result || String(result).trim().length === 0) {
+                        throw new Error('AnythingLLM returned empty response - LLM may not be configured or workspace has no data')
+                      }
+                      
+                      logAndPush(`[RUNTIME-QUERY] Response received: ${String(result).length} chars`)
+                      return result
+                    } catch (error: any) {
+                      logAndPush(`[RUNTIME-QUERY] ERROR in toolkit.query: ${error?.message || error}`)
+                      throw error
+                    }
                   },
                   text: async (prompt: string) => {
-                    logAndPush(`[RUNTIME-QUERY] Executing toolkit.text query...`)
-                    const response = await anythingllmRequest<any>(
-                      `/workspace/${encodeURIComponent(wsForGen!)}/chat`,
-                      'POST',
-                      { message: String(prompt), mode: 'query' }
-                    )
-                    const result = String(response?.textResponse || response?.message || '')
-                    logAndPush(`[RUNTIME-QUERY] Response received (${result.length} chars)`)
-                    return result
+                    const truncatedPrompt = prompt.length > 100 ? prompt.substring(0, 100) + '...' : prompt
+                    logAndPush(`[RUNTIME-QUERY] toolkit.text called: "${truncatedPrompt}"`)
+                    
+                    try {
+                      const response = await anythingllmRequest<any>(
+                        `/workspace/${encodeURIComponent(wsForGen!)}/chat`,
+                        'POST',
+                        { message: String(prompt), mode: 'query', sessionId: `docsmith-job-${job.id}` }
+                      )
+                      
+                      // Validate response structure
+                      if (!response) {
+                        throw new Error('AnythingLLM returned null/undefined response')
+                      }
+                      if (response.error) {
+                        throw new Error(`AnythingLLM error: ${response.error}`)
+                      }
+                      
+                      const result = String(response?.textResponse || response?.message || '')
+                      if (!result || result.trim().length === 0) {
+                        throw new Error('AnythingLLM returned empty response - LLM may not be configured or workspace has no data')
+                      }
+                      
+                      logAndPush(`[RUNTIME-QUERY] Response received: ${result.length} chars`)
+                      return result
+                    } catch (error: any) {
+                      logAndPush(`[RUNTIME-QUERY] ERROR in toolkit.text: ${error?.message || error}`)
+                      throw error
+                    }
                   },
                   getSkeleton: async (kind?: 'html'|'text') => {
                     try {
@@ -495,7 +589,34 @@ ${tsCode}
                 if (isCancelled(job.id)) { logAndPush('cancelled'); return res.status(499).json({ error: 'cancelled', jobId: job.id }) }
                 
                 logAndPush('[EXECUTE] Running generator function with workspace toolkit...')
-                const result = await generateFull(toolkit, builder, context)
+                logAndPush(`[EXECUTE] Context: customer=${context.customer?.name}, workspace=${wsForGen}`)
+                if (pinnedDocuments?.length) {
+                  logAndPush(`[EXECUTE] Using ${pinnedDocuments.length} pinned document(s)`)
+                }
+                
+                // Add timeout to prevent hanging generators (10 minutes max)
+                const GENERATOR_TIMEOUT_MS = 10 * 60 * 1000 // 10 minutes
+                const timeoutPromise = new Promise((_, reject) => {
+                  setTimeout(() => reject(new Error('Generator execution timeout (10 minutes)')), GENERATOR_TIMEOUT_MS)
+                })
+                
+                let result: any
+                try {
+                  logAndPush('[EXECUTE] Invoking generator function...')
+                  const executeStartTime = Date.now()
+                  result = await Promise.race([
+                    generateFull(toolkit, builder, context),
+                    timeoutPromise
+                  ])
+                  const executeDuration = Date.now() - executeStartTime
+                  logAndPush(`[EXECUTE] Generator completed in ${(executeDuration / 1000).toFixed(1)}s`)
+                } catch (executeError: any) {
+                  const errorMsg = executeError?.message || String(executeError)
+                  logAndPush(`[EXECUTE] Error: ${errorMsg}`)
+                  markJobError(job.id, `Generator execution failed: ${errorMsg}`)
+                  return res.status(502).json({ error: errorMsg, jobId: job.id })
+                }
+                
                 logAndPush('[EXECUTE] Generator execution complete')
                 stepOkRec('execute')
                 
@@ -506,12 +627,15 @@ ${tsCode}
                     return res.status(502).json({ error: 'Full generator did not return WML/bodyXml', jobId: job.id })
                   }
                   const inner = String((result as any).wml || (result as any).bodyXml || '')
-                  logAndPush(`[MERGE] Merging generated content (${inner.length} chars) into template...`)
+                  logAndPush(`[MERGE] Starting DOCX merge (content: ${inner.length} chars)`)
+                  logAndPush('[MERGE] Injecting generated content into template structure...')
                   if (isCancelled(job.id)) { logAndPush('cancelled'); return res.status(499).json({ error: 'cancelled', jobId: job.id }) }
                   
                   stepStartRec('merge')
+                  const mergeStartTime = Date.now()
                   const merged = (await import('../services/docxCompose')).mergeWmlIntoDocxTemplate(fs.readFileSync((tpl as any).templatePath), inner)
-                  logAndPush(`[MERGE] Document merge complete (${merged.length} bytes)`)
+                  const mergeDuration = Date.now() - mergeStartTime
+                  logAndPush(`[MERGE] DOCX merge complete in ${(mergeDuration / 1000).toFixed(1)}s (${merged.length} bytes)`)
                   stepOkRec('merge')
                   
                   const dt = new Date()
@@ -522,10 +646,12 @@ ${tsCode}
                   const baseName = filename || defaultBase
                   const fnameLocal = baseName
                   const outPathLocal = path.join(docsDir, fnameLocal + '.docx')
-                  logAndPush(`[OUTPUT] Writing document: ${path.basename(outPathLocal)}`)
+                  logAndPush(`[OUTPUT] Writing DOCX file: ${path.basename(outPathLocal)}`)
+                  logAndPush(`[OUTPUT] File path: ${outPathLocal}`)
                   try { jobLog(job.id, `outfile:${path.basename(outPathLocal)}`) } catch {}
                   fs.writeFileSync(outPathLocal, merged)
-                  logAndPush('[OUTPUT] Document generation complete!')
+                  logAndPush('[SUCCESS] Document generation complete!')
+                  logAndPush(`[SUCCESS] File saved: ${path.basename(outPathLocal)} (${merged.length} bytes)`)
                   
                   markJobDone(job.id, { path: outPathLocal, name: path.basename(outPathLocal) }, { usedWorkspace })
                   return res.status(201).json({ ok: true, file: { path: outPathLocal, name: path.basename(outPathLocal) }, ...(usedWorkspace ? { usedWorkspace } : {}), logs: [...logs, 'fullgen:ok'], jobId: job.id })
@@ -536,12 +662,15 @@ ${tsCode}
                     return res.status(502).json({ error: 'Full generator did not return sheets for Excel', jobId: job.id })
                   }
                   const sheetCount = Array.isArray((result as any).sheets) ? (result as any).sheets.length : 0
-                  logAndPush(`[MERGE] Merging ${sheetCount} sheet(s) into Excel template...`)
+                  logAndPush(`[MERGE] Starting Excel merge (${sheetCount} sheet(s))`)
+                  logAndPush('[MERGE] Applying sheet operations to template...')
                   if (isCancelled(job.id)) { logAndPush('cancelled'); return res.status(499).json({ error: 'cancelled', jobId: job.id }) }
                   
                   stepStartRec('merge')
+                  const mergeStartTime = Date.now()
                   const mergedBuf = await (await import('../services/excelComposeSheetJS')).mergeOpsIntoExcelTemplate(fs.readFileSync((tpl as any).templatePath), result)
-                  logAndPush(`[MERGE] Excel merge complete (${mergedBuf.length} bytes)`)
+                  const mergeDuration = Date.now() - mergeStartTime
+                  logAndPush(`[MERGE] Excel merge complete in ${(mergeDuration / 1000).toFixed(1)}s (${mergedBuf.length} bytes)`)
                   stepOkRec('merge')
                   
                   const dt = new Date()
@@ -552,14 +681,17 @@ ${tsCode}
                   const baseName = filename || defaultBase
                   const fnameLocal = baseName
                   const outPathLocal = path.join(docsDir, fnameLocal + '.xlsx')
-                  logAndPush(`[OUTPUT] Writing spreadsheet: ${path.basename(outPathLocal)}`)
+                  logAndPush(`[OUTPUT] Writing Excel file: ${path.basename(outPathLocal)}`)
+                  logAndPush(`[OUTPUT] File path: ${outPathLocal}`)
                   try { jobLog(job.id, `outfile:${path.basename(outPathLocal)}`) } catch {}
                   fs.writeFileSync(outPathLocal, mergedBuf)
-                  logAndPush('[OUTPUT] Spreadsheet generation complete!')
+                  logAndPush('[SUCCESS] Spreadsheet generation complete!')
+                  logAndPush(`[SUCCESS] File saved: ${path.basename(outPathLocal)} (${mergedBuf.length} bytes)`)
                   
                   markJobDone(job.id, { path: outPathLocal, name: path.basename(outPathLocal) }, { usedWorkspace })
                   return res.status(201).json({ ok: true, file: { path: outPathLocal, name: path.basename(outPathLocal) }, ...(usedWorkspace ? { usedWorkspace } : {}), logs: [...logs, 'fullgen:ok'], jobId: job.id })
                 } else {
+                  logAndPush('[ERROR] Unsupported template kind for generation')
                   markJobError(job.id, 'Unsupported template kind for generation')
                   return res.status(400).json({ error: 'Unsupported template kind for generation', jobId: job.id })
                 }
@@ -650,7 +782,16 @@ router.get("/stream", async (req, res) => {
       const stepStartRec = (n: string) => { stepStart(n); jobStepStart(job.id, n) }
       const stepOkRec = (n: string) => { stepOk(n); jobStepOk(job.id, n) }
 
+      logAndPush('[START] Document generation initiated')
+      logAndPush(`[CONFIG] Template: ${slug}`)
+      logAndPush(`[CONFIG] Customer: ${row.name} (ID: ${row.id})`)
+      logAndPush(`[CONFIG] Workspace: ${wsForGen}`)
+      if (filename) logAndPush(`[CONFIG] Custom filename: ${filename}`)
+      if (instructions) logAndPush(`[CONFIG] User instructions provided (${String(instructions).length} chars)`)
+      if (pinnedDocuments?.length) logAndPush(`[CONFIG] ${pinnedDocuments.length} document(s) pinned for this generation`)
+
       let tsCode = fs.readFileSync(fullGenPath, 'utf-8')
+      logAndPush(`[INIT] Generator loaded: generator.full.ts (${tsCode.length} chars)`)
       stepOkRec('readGenerator')
       
       const cacheDir = path.join((tpl as any).dir, '.cache')
@@ -663,13 +804,17 @@ router.get("/stream", async (req, res) => {
       const cacheUpToDate = !!(cacheStat && genStat && cacheStat.mtimeMs >= genStat.mtimeMs)
       if (isCancelled(job.id)) { jobLog(job.id, 'cancelled'); send({ type: 'error', error: 'cancelled' }); return res.end() }
       if (!refresh && cacheFresh && cacheUpToDate) {
-        try { tsCode = fs.readFileSync(cacheFile, 'utf-8'); logAndPush('ai-cache:hit') } catch {}
+        try { 
+          tsCode = fs.readFileSync(cacheFile, 'utf-8'); 
+          logAndPush('[CACHE] Using cached AI-enhanced generator (cache is fresh)')
+          logAndPush(`[CACHE] Cache age: ${Math.round((Date.now() - cacheStat!.mtimeMs) / 1000)}s (TTL: ${CACHE_TTL_MS / 1000}s)`)
+        } catch {}
         stepOkRec('aiUpdate')
       } else {
-        logAndPush('ai-modified:start')
+        logAndPush('[AI] Starting AI enhancement process (cache miss or force refresh)')
         stepStartRec('aiUpdate')
         try {
-          logAndPush('Analyzing template structure and workspace data...')
+          logAndPush('[ANALYSIS] Analyzing template structure and workspace data...')
           let documentAnalysis = ''
           try {
             if ((tpl as any).templatePath && fs.existsSync((tpl as any).templatePath)) {
@@ -688,18 +833,45 @@ router.get("/stream", async (req, res) => {
           const userAddendum = instructions && String(instructions).trim().length
             ? `\n\nUSER ADDITIONAL INSTRUCTIONS (prioritize when choosing workspace data):\n${String(instructions).trim()}\n`
             : ''
-          const modeGuidance = `\n\nHYBRID DYNAMIC MODE (ALWAYS ENABLED):\n- At runtime, toolkit.json/query/text ARE AVAILABLE for data fetching\n- PRESERVE the template's structure and formatting (static)\n- FETCH variable data dynamically using toolkit methods\n- Example: const data = await toolkit.json('Check workspace document index first. Then return all inventory items with columns: name, quantity, price')\n- The generator will be called fresh for each document generation\n- Use the metadata context below to write intelligent queries that target specific documents\n- ALWAYS reference the workspace document index first to discover available files\n\nIMPORTANT SEPARATION:\n1. STATIC PART (from template): Headers, titles, formatting, styles, table structure, fonts, colors\n2. DYNAMIC PART (from workspace): Actual data values, list items, table rows, variable content\n`
+          const modeGuidance = `\n\nHYBRID DYNAMIC MODE (ALWAYS ENABLED):\n- At runtime, toolkit.json/query/text ARE AVAILABLE for data fetching\n- PRESERVE the template's structure and formatting (static)\n- FETCH variable data dynamically using toolkit methods\n- The generator will be called fresh for each document generation\n- Use the metadata context below to write intelligent queries that target specific documents\n- Reference pinned or high-relevance documents explicitly in queries\n- ALWAYS reference the workspace document index first to discover available files\n\nQUERY OPTIMIZATION (CRITICAL FOR PERFORMANCE):\n- Construct toolkit.json() queries to be CONCISE and DIRECT - minimize query length while maintaining clarity\n- State requirements clearly: specify document source, data to extract, and desired output format (JSON with field names)\n- Avoid verbose explanations, redundant instructions, or excessive formatting details in queries\n- The LLM is intelligent - trust it to understand your intent without over-explanation\n- Optimize based on user requirements with best effort to reduce document generation time\n- Balance clarity with brevity - queries can be as long as needed but eliminate unnecessary words\n\nIMPORTANT SEPARATION:\n1. STATIC PART (from template): Headers, titles, formatting, styles, table structure, fonts, colors\n2. DYNAMIC PART (from workspace): Actual data values, list items, table rows, variable content\n`
           const aiPrompt = ((tpl as any).kind === 'excel')
             ? `You are a senior TypeScript engineer and spreadsheet specialist. Update the following DocSmith Excel generator function to use a HYBRID approach: preserve the template's structure/formatting (static) but fetch variable data dynamically. Keep the EXACT export signature. Compose the final output by returning { sheets } (sheet ops). Do not import external modules or do file I/O.${modeGuidance}\n\nSTRICT CONSTRAINTS:\n- PRESERVE EXISTING SHEET STRUCTURE AND FORMATTING from the CURRENT GENERATOR CODE: do not alter existing fonts, colors, fills, borders, number formats, alignment, merged ranges, column widths, or sheet order unless absolutely necessary.\n- SEPARATE CONCERNS:\n  * STATIC: Sheet names, header rows, column headers, formatting rules, merged cells, widths\n  * DYNAMIC: Data rows fetched via toolkit.json() - query workspace for actual values\n- DYNAMIC EXPANSION: Use toolkit.json() to fetch ALL data rows at runtime. If workspace has 500 items, fetch all 500.\n- You MAY append or insert new rows to accommodate variable-length data. Use insertRows with copyStyleFromRow when appropriate to preserve formatting.\n- If the template has a merged and centered header row, preserve it exactly - write data below it.\n- For variable data rows, use 'ranges' array for efficiency instead of individual cells.\n- EXPAND DYNAMICALLY: The template structure is preserved, but data is fetched fresh each generation.${documentAnalysis}${userAddendum}\n\nReturn type reminder:\nPromise<{ sheets: Array<{ name: string; insertRows?: Array<{ at: number; count: number; copyStyleFromRow?: number }>; cells?: Array<{ ref: string; v: string|number|boolean; numFmt?: string; bold?: boolean; italic?: boolean; underline?: boolean; strike?: boolean; color?: string; bg?: string; align?: 'left'|'center'|'right'; wrap?: boolean }>; ranges?: Array<{ start: string; values: any[][]; numFmt?: string }> }> }>;\n\nOnly output TypeScript code with the updated generate implementation.\n\nCURRENT GENERATOR CODE:\n\n\`\`\`ts\n${tsCode}\n\`\`\``
             : `You are a senior TypeScript engineer. Update the following DocSmith generator function to use a HYBRID approach: preserve the template's WML structure/styling (static) but fetch variable data dynamically. Keep the EXACT export signature. Compose the final output as raw WordprocessingML (WML) via return { wml }. Do not import external modules or do file I/O. Maintain formatting with runs (color/size/bold/italic/underline/strike/font) and paragraph props (align/spacing/indents).${modeGuidance}\n\nSTRICT CONSTRAINTS:\n- PRESERVE ALL EXISTING WML STRUCTURE AND STYLING from the CURRENT GENERATOR CODE: do not alter fonts, colors, sizes, spacing, numbering, table properties, headers/footers, or section settings.\n- SEPARATE CONCERNS:\n  * STATIC: Document structure, headers, titles, formatting tags, paragraph props, table structure, styles\n  * DYNAMIC: Text content values fetched via toolkit.json() - query workspace for actual data\n- DYNAMIC EXPANSION: Use toolkit.json() to fetch ALL data at runtime.\n  Example: const items = await toolkit.json('Check workspace document index first. Then from inventory.xlsx, return all items with columns: name, quantity, price')\n- For TABLES: Preserve WML table structure (<w:tbl>), replicate <w:tr> for each data row\n- For LISTS: Preserve numbering format, replicate <w:p> with list props for each item\n- For SECTIONS: Keep section structure from template, populate with workspace data\n- ONLY substitute <w:t> text content with workspace-derived values\n- DO NOT alter WML formatting tags unless expanding data requires it\n- EXPAND DYNAMICALLY: The template WML is the STRUCTURE, workspace data fills the VALUES.${documentAnalysis}${userAddendum}\n\nOnly output TypeScript code with the updated generate implementation.\n\nCURRENT GENERATOR CODE:\n\n\`\`\`ts\n${tsCode}\n\`\`\``
-          const r = await anythingllmRequest<any>(`/workspace/${encodeURIComponent(wsForGen)}/chat`, 'POST', { message: aiPrompt, mode: 'query' })
+          logAndPush(`[AI] Sending ${((tpl as any).kind === 'excel') ? 'Excel' : 'DOCX'} generation request to workspace: ${wsForGen}`)
+          logAndPush(`[AI] Prompt size: ${aiPrompt.length} chars`)
+          logAndPush(`[AI] Using session ID: ${job.id}`)
+          logAndPush('[AI] Waiting for LLM response...')
+          const aiStartTime = Date.now()
+          const r = await anythingllmRequest<any>(`/workspace/${encodeURIComponent(wsForGen)}/chat`, 'POST', { message: aiPrompt, mode: 'query', sessionId: `docsmith-job-${job.id}` })
+          const aiDuration = Date.now() - aiStartTime
+          
+          // Validate AI response
+          if (!r) {
+            throw new Error('AnythingLLM returned null/undefined response')
+          }
+          if (r.error) {
+            throw new Error(`AnythingLLM error: ${r.error}`)
+          }
+          
           const t = String(r?.textResponse || r?.message || r || '')
+          if (!t || t.trim().length === 0) {
+            throw new Error('AnythingLLM returned empty response - LLM may not be configured or workspace has no data')
+          }
+          
+          logAndPush(`[AI] Response received in ${(aiDuration / 1000).toFixed(1)}s (${t.length} chars)`)
           const m = t.match(/```[a-z]*\s*([\s\S]*?)```/i)
           const codeOut = (m && m[1]) ? m[1] : t
-          if (!codeOut || !/export\s+async\s+function\s+generate\s*\(/.test(codeOut)) throw new Error('AI did not return a valid generate function')
+          if (m && m[1]) {
+            logAndPush('[AI] Extracted code from markdown fence blocks')
+          }
+          if (!codeOut || !/export\s+async\s+function\s+generate\s*\(/.test(codeOut)) {
+            logAndPush('[AI] Response did not contain valid generator code')
+            throw new Error('AI did not return a valid generate function')
+          }
           tsCode = codeOut.trim()
           fs.writeFileSync(cacheFile, tsCode, 'utf-8')
-          logAndPush('ai-modified:ok')
+          logAndPush(`[AI] Enhanced generator ready (${tsCode.length} chars)`)
+          logAndPush('[GENERATION] AI enhancement complete')
           stepOkRec('aiUpdate')
         } catch (e:any) {
           const errMsg = `AI could not update generator: ${e?.message || e}`
@@ -711,10 +883,10 @@ router.get("/stream", async (req, res) => {
       }
 
       if (isCancelled(job.id)) { jobLog(job.id, 'cancelled'); send({ type: 'error', error: 'cancelled' }); return res.end() }
-      logAndPush('transpile:start')
+      logAndPush('[TRANSPILE] Compiling TypeScript generator to JavaScript...')
       stepStartRec('transpile')
       const jsOut = ts.transpileModule(tsCode, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2019 } })
-      logAndPush('transpile:ok')
+      logAndPush(`[TRANSPILE] Transpilation complete (${jsOut.outputText.length} chars JavaScript)`)
       stepOkRec('transpile')
       const sandbox: any = { module: { exports: {} }, console }
       // Ensure `exports` references `module.exports` like Node's wrapper
@@ -756,22 +928,44 @@ router.get("/stream", async (req, res) => {
       }
       const toolkit = {
         json: async (prompt: string) => {
-          log('[RUNTIME-QUERY] Executing toolkit.json query...')
-          const response = await anythingllmRequest<any>(
-            `/workspace/${encodeURIComponent(wsForGen)}/chat`,
-            'POST',
-            { message: String(prompt), mode: 'query' }
-          )
-          const text = String(response?.textResponse || response?.message || '')
+          const truncatedPrompt = prompt.length > 100 ? prompt.substring(0, 100) + '...' : prompt
+          logAndPush(`[RUNTIME-QUERY] toolkit.json called: "${truncatedPrompt}"`)
+          
           try {
-            const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/)
-            const jsonText = jsonMatch ? jsonMatch[1] : text
-            const parsed = JSON.parse(jsonText)
-            log('[RUNTIME-QUERY] Successfully parsed JSON response')
-            return parsed
-          } catch {
-            log('[RUNTIME-QUERY] Could not parse JSON, returning raw text')
-            return text
+            const response = await anythingllmRequest<any>(
+              `/workspace/${encodeURIComponent(wsForGen)}/chat`,
+              'POST',
+              { message: String(prompt), mode: 'query', sessionId: `docsmith-job-${job.id}` }
+            )
+            
+            // Validate response structure
+            if (!response) {
+              throw new Error('AnythingLLM returned null/undefined response')
+            }
+            if (response.error) {
+              throw new Error(`AnythingLLM error: ${response.error}`)
+            }
+            
+            const text = String(response?.textResponse || response?.message || '')
+            if (!text || text.trim().length === 0) {
+              throw new Error('AnythingLLM returned empty response - LLM may not be configured or workspace has no data')
+            }
+            
+            logAndPush(`[RUNTIME-QUERY] Response received: ${text.length} chars`)
+            
+            try {
+              const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/)
+              const jsonText = jsonMatch ? jsonMatch[1] : text
+              const parsed = JSON.parse(jsonText)
+              logAndPush('[RUNTIME-QUERY] Successfully parsed JSON response')
+              return parsed
+            } catch {
+              logAndPush('[RUNTIME-QUERY] Could not parse JSON, returning raw text')
+              return text
+            }
+          } catch (error: any) {
+            logAndPush(`[RUNTIME-QUERY] ERROR in toolkit.json: ${error?.message || error}`)
+            throw error
           }
         },
         query: async (prompt: string) => {
@@ -779,9 +973,22 @@ router.get("/stream", async (req, res) => {
           const response = await anythingllmRequest<any>(
             `/workspace/${encodeURIComponent(wsForGen)}/chat`,
             'POST',
-            { message: String(prompt), mode: 'query' }
+            { message: String(prompt), mode: 'query', sessionId: `docsmith-job-${job.id}` }
           )
+          
+          // Validate response structure
+          if (!response) {
+            throw new Error('AnythingLLM returned null/undefined response')
+          }
+          if (response.error) {
+            throw new Error(`AnythingLLM error: ${response.error}`)
+          }
+          
           const result = response?.textResponse || response?.message || ''
+          if (!result || String(result).trim().length === 0) {
+            throw new Error('AnythingLLM returned empty response - LLM may not be configured or workspace has no data')
+          }
+          
           log(`[RUNTIME-QUERY] Response received (${String(result).length} chars)`)
           return result
         },
@@ -790,9 +997,22 @@ router.get("/stream", async (req, res) => {
           const response = await anythingllmRequest<any>(
             `/workspace/${encodeURIComponent(wsForGen)}/chat`,
             'POST',
-            { message: String(prompt), mode: 'query' }
+            { message: String(prompt), mode: 'query', sessionId: `docsmith-job-${job.id}` }
           )
+          
+          // Validate response structure
+          if (!response) {
+            throw new Error('AnythingLLM returned null/undefined response')
+          }
+          if (response.error) {
+            throw new Error(`AnythingLLM error: ${response.error}`)
+          }
+          
           const result = String(response?.textResponse || response?.message || '')
+          if (!result || result.trim().length === 0) {
+            throw new Error('AnythingLLM returned empty response - LLM may not be configured or workspace has no data')
+          }
+          
           log(`[RUNTIME-QUERY] Response received (${result.length} chars)`)
           return result
         },
@@ -802,23 +1022,54 @@ router.get("/stream", async (req, res) => {
       }
 
       if (isCancelled(job.id)) { jobLog(job.id, 'cancelled'); send({ type: 'error', error: 'cancelled' }); return res.end() }
-      logAndPush('generate:start')
+      logAndPush('[EXECUTE] Running generator function with workspace toolkit...')
+      logAndPush(`[EXECUTE] Context: customer=${row.name}, workspace=${wsForGen}`)
+      if (pinnedDocuments?.length) {
+        logAndPush(`[EXECUTE] Using ${pinnedDocuments.length} pinned document(s)`)
+      }
       stepStartRec('execute')
       const context: any = { customer: { id: row.id, name: row.name }, now: new Date().toISOString() }
       if (instructions && String(instructions).trim().length) {
         context.userInstructions = String(instructions)
       }
-      const result = await generateFull(toolkit, builder, context)
-      logAndPush('generate:ok')
+      logAndPush('[EXECUTE] Invoking generator function...')
+      const executeStartTime = Date.now()
+      
+      // Add timeout to prevent hanging generators (10 minutes max)
+      const GENERATOR_TIMEOUT_MS = 10 * 60 * 1000 // 10 minutes
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Generator execution timeout (10 minutes)')), GENERATOR_TIMEOUT_MS)
+      })
+      
+      let result: any
+      try {
+        result = await Promise.race([
+          generateFull(toolkit, builder, context),
+          timeoutPromise
+        ])
+        const executeDuration = Date.now() - executeStartTime
+        logAndPush(`[EXECUTE] Generator completed in ${(executeDuration / 1000).toFixed(1)}s`)
+      } catch (executeError: any) {
+        const errorMsg = executeError?.message || String(executeError)
+        logAndPush(`[ERROR] Generator execution failed: ${errorMsg}`)
+        jobLog(job.id, `error:${errorMsg}`)
+        markJobError(job.id, `Generator execution failed: ${errorMsg}`)
+        send({ type: 'error', error: errorMsg })
+        return res.end()
+      }
+      
       stepOkRec('execute')
       if ((tpl as any).kind === 'docx') {
         if (!result || (!('wml' in (result as any)) && !('bodyXml' in (result as any)))) { jobLog(job.id, 'error:no-wml'); markJobError(job.id, 'Full generator did not return WML/bodyXml'); send({ type: 'error', error: 'Full generator did not return WML/bodyXml' }); return res.end() }
         const inner = String((result as any).wml || (result as any).bodyXml || '')
         if (isCancelled(job.id)) { jobLog(job.id, 'cancelled'); send({ type: 'error', error: 'cancelled' }); return res.end() }
-        logAndPush('merge:start')
+        logAndPush(`[MERGE] Starting DOCX merge (content: ${inner.length} chars)`)
+        logAndPush('[MERGE] Injecting generated content into template structure...')
         stepStartRec('mergeWrite')
+        const mergeStartTime = Date.now()
         const merged = (await import('../services/docxCompose')).mergeWmlIntoDocxTemplate(fs.readFileSync((tpl as any).templatePath), inner)
-        logAndPush('merge:ok')
+        const mergeDuration = Date.now() - mergeStartTime
+        logAndPush(`[MERGE] DOCX merge complete in ${(mergeDuration / 1000).toFixed(1)}s (${merged.length} bytes)`)
         const dt2 = new Date()
         const dtStr2 = `${dt2.getFullYear()}${String(dt2.getMonth()+1).padStart(2,'0')}${String(dt2.getDate()).padStart(2,'0')}_${String(dt2.getHours()).padStart(2,'0')}${String(dt2.getMinutes()).padStart(2,'0')}${String(dt2.getSeconds()).padStart(2,'0')}`
         const templateName2 = safeFileName(getTemplateDisplayName((tpl as any).dir, String(slug)))
@@ -828,18 +1079,26 @@ router.get("/stream", async (req, res) => {
         const fnameLocal = baseName2
         try { send({ type: 'info', templateName: templateName2, customerName: customerName2, outfile: fnameLocal + '.docx' }) } catch {}
         const outPathLocal = path.join(docsDir, fnameLocal + '.docx')
+        logAndPush(`[OUTPUT] Writing DOCX file: ${path.basename(outPathLocal)}`)
+        logAndPush(`[OUTPUT] File path: ${outPathLocal}`)
         try { jobLog(job.id, `outfile:${path.basename(outPathLocal)}`) } catch {}
         fs.writeFileSync(outPathLocal, merged)
         stepOkRec('mergeWrite')
+        logAndPush('[SUCCESS] Document generation complete!')
+        logAndPush(`[SUCCESS] File saved: ${path.basename(outPathLocal)} (${merged.length} bytes)`)
         markJobDone(job.id, { path: outPathLocal, name: path.basename(outPathLocal) }, { usedWorkspace: wsForGen })
         send({ type: 'done', file: { path: outPathLocal, name: path.basename(outPathLocal) }, usedWorkspace: wsForGen, jobId: job.id })
       } else if ((tpl as any).kind === 'excel') {
         if (!result || !('sheets' in (result as any))) { jobLog(job.id, 'error:no-sheets'); markJobError(job.id, 'Full generator did not return sheets for Excel'); send({ type: 'error', error: 'Full generator did not return sheets for Excel' }); return res.end() }
         if (isCancelled(job.id)) { jobLog(job.id, 'cancelled'); send({ type: 'error', error: 'cancelled' }); return res.end() }
-        logAndPush('merge:start')
+        const sheetCount = Array.isArray((result as any).sheets) ? (result as any).sheets.length : 0
+        logAndPush(`[MERGE] Starting Excel merge (${sheetCount} sheet(s))`)
+        logAndPush('[MERGE] Applying sheet operations to template...')
         stepStartRec('mergeWrite')
+        const mergeStartTime = Date.now()
         const mergedBuf = await (await import('../services/excelComposeSheetJS')).mergeOpsIntoExcelTemplate(fs.readFileSync((tpl as any).templatePath), result)
-        logAndPush('merge:ok')
+        const mergeDuration = Date.now() - mergeStartTime
+        logAndPush(`[MERGE] Excel merge complete in ${(mergeDuration / 1000).toFixed(1)}s (${mergedBuf.length} bytes)`)
         const dt2 = new Date()
         const dtStr2 = `${dt2.getFullYear()}${String(dt2.getMonth()+1).padStart(2,'0')}${String(dt2.getDate()).padStart(2,'0')}_${String(dt2.getHours()).padStart(2,'0')}${String(dt2.getMinutes()).padStart(2,'0')}${String(dt2.getSeconds()).padStart(2,'0')}`
         const templateName2 = safeFileName(getTemplateDisplayName((tpl as any).dir, String(slug)))
@@ -849,12 +1108,17 @@ router.get("/stream", async (req, res) => {
         const fnameLocal = baseName2
         try { send({ type: 'info', templateName: templateName2, customerName: customerName2, outfile: fnameLocal + '.xlsx' }) } catch {}
         const outPathLocal = path.join(docsDir, fnameLocal + '.xlsx')
+        logAndPush(`[OUTPUT] Writing Excel file: ${path.basename(outPathLocal)}`)
+        logAndPush(`[OUTPUT] File path: ${outPathLocal}`)
         try { jobLog(job.id, `outfile:${path.basename(outPathLocal)}`) } catch {}
         fs.writeFileSync(outPathLocal, mergedBuf)
         stepOkRec('mergeWrite')
+        logAndPush('[SUCCESS] Spreadsheet generation complete!')
+        logAndPush(`[SUCCESS] File saved: ${path.basename(outPathLocal)} (${mergedBuf.length} bytes)`)
         markJobDone(job.id, { path: outPathLocal, name: path.basename(outPathLocal) }, { usedWorkspace: wsForGen })
         send({ type: 'done', file: { path: outPathLocal, name: path.basename(outPathLocal) }, usedWorkspace: wsForGen, jobId: job.id })
       } else {
+        logAndPush('[ERROR] Unsupported template kind for generation')
         jobLog(job.id, 'error:template-kind'); markJobError(job.id, 'Unsupported template kind for generation'); send({ type: 'error', error: 'Unsupported template kind for generation' }); return res.end()
       }
       return res.end()

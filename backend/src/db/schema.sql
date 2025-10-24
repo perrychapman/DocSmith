@@ -41,7 +41,8 @@ CREATE TABLE IF NOT EXISTS gen_cards (
   aiContext TEXT,
   timestamp INTEGER,
   createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+  updatedAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (customerId) REFERENCES customers(id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_gen_cards_ws ON gen_cards(workspaceSlug);

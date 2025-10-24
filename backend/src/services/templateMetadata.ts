@@ -394,12 +394,14 @@ RESPOND WITH THE JSON OBJECT NOW:`
     logInfo(`[TEMPLATE-METADATA] Sending analysis request to workspace ${workspaceSlug}`)
     logInfo(`[TEMPLATE-METADATA] Prompt length: ${analysisPrompt.length} characters`)
     
+    // Use a system session ID to hide metadata extraction from user chat UI
     const result = await anythingllmRequest<any>(
       `/workspace/${encodeURIComponent(workspaceSlug)}/chat`,
       'POST',
       { 
         message: analysisPrompt, 
-        mode: 'query'
+        mode: 'query',
+        sessionId: 'system-metadata-extraction'
         // Note: temperature parameter removed - not supported by all models
       }
     )

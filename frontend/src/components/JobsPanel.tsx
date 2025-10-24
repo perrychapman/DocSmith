@@ -5,6 +5,7 @@ import { Button } from "./ui/Button";
 import { Icon } from "./icons";
 import { toast } from "sonner";
 import { apiFetch } from "../lib/api";
+import { useUserActivity } from "../lib/hooks";
 
 type Job = {
   id: string;
@@ -28,19 +29,21 @@ export function JobsPanel({ customerId, className, autoRefreshMs = 5000 }: { cus
   const [loading, setLoading] = React.useState(false);
   const [activeId, setActiveId] = React.useState<string | null>(null);
   const [active, setActive] = React.useState<Job | null>(null);
+  const [isUserActive] = useUserActivity(1000);
 
-  const formatDuration = (ms?: number) => {
+  const formatDuration = React.useCallback((ms?: number) => {
     if (!ms || !isFinite(ms) || ms < 0) return ''
     const totalSec = Math.floor(ms / 1000)
     const m = Math.floor(totalSec / 60)
     const s = totalSec % 60
     return `${m}:${String(s).padStart(2,'0')}`
-  }
+  }, []);
 
-  const isCompileJob = (j: Job) => {
+  const isCompileJob = React.useCallback((j: Job) => {
     return j.customerId === 0 || String(j.customerName||'').toLowerCase() === 'template' || String(j.file?.name||'') === 'generator.full.ts'
-  }
-  const statusLabel = (s: Job['status']) => (s === 'done' ? 'Completed' : (s.charAt(0).toUpperCase() + s.slice(1)))
+  }, []);
+  
+  const statusLabel = React.useCallback((s: Job['status']) => (s === 'done' ? 'Completed' : (s.charAt(0).toUpperCase() + s.slice(1))), []);
   const statusBadge = (s: Job['status']) => {
     const label = statusLabel(s)
     if (s === 'running') {
@@ -107,17 +110,30 @@ export function JobsPanel({ customerId, className, autoRefreshMs = 5000 }: { cus
   }
 
   React.useEffect(() => { loadJobs(); }, [customerId]);
+  
+  // Pause polling during user activity to improve text input responsiveness
   React.useEffect(() => {
     const t = setInterval(() => {
+      // Skip polling if user is actively typing
+      if (isUserActive) return;
+      
       loadJobs();
       if (activeId) openJob(activeId);
     }, Math.max(1000, autoRefreshMs));
     return () => clearInterval(t);
-  }, [activeId, autoRefreshMs]);
+  }, [activeId, autoRefreshMs, isUserActive]);
+  
   React.useEffect(() => { if (activeId) openJob(activeId); }, [activeId, jobs.length]);
 
-  const cancelActive = async () => { if (!activeId) return; try { await apiFetch(`/api/generate/jobs/${encodeURIComponent(activeId)}/cancel`, { method: 'POST' }); await openJob(activeId) } catch {} };
-  async function revealTemplateFolder(slug: string) {
+  const cancelActive = React.useCallback(async () => { 
+    if (!activeId) return; 
+    try { 
+      await apiFetch(`/api/generate/jobs/${encodeURIComponent(activeId)}/cancel`, { method: 'POST' }); 
+      await openJob(activeId) 
+    } catch {} 
+  }, [activeId]);
+  
+  const revealTemplateFolder = React.useCallback(async (slug: string) => {
     try {
       const r = await apiFetch(`/api/templates/${encodeURIComponent(slug)}/open-folder`, { method: 'POST' });
       const j = await r.json().catch(() => (null as any));
@@ -126,9 +142,35 @@ export function JobsPanel({ customerId, className, autoRefreshMs = 5000 }: { cus
     } catch (e:any) {
       toast.error(e?.message ? String(e.message) : 'Failed to open template folder');
     }
-  }
+  }, []);
 
-  const filtered = (customerId ? jobs.filter(j => j.customerId === customerId) : jobs);
+  // Parse log entries into structured format with category and message
+  const parseLogEntry = React.useCallback((log: string) => {
+    const match = log.match(/^\[([A-Z-]+)\]\s*(.*)$/);
+    if (match) {
+      return { category: match[1], message: match[2], raw: log };
+    }
+    return { category: null, message: log, raw: log };
+  }, []);
+
+  // Get color for log category - only highlight SUCCESS and ERROR
+  const getLogColor = React.useCallback((category: string | null) => {
+    if (!category) return 'text-muted-foreground';
+    switch (category) {
+      case 'SUCCESS':
+        return 'text-green-600 dark:text-green-400 font-semibold';
+      case 'ERROR':
+        return 'text-red-600 dark:text-red-400 font-semibold';
+      default:
+        return 'text-muted-foreground';
+    }
+  }, []);
+
+  // Memoize filtered jobs to avoid recalculating on every render
+  const filtered = React.useMemo(() => 
+    (customerId ? jobs.filter(j => j.customerId === customerId) : jobs),
+    [customerId, jobs]
+  );
 
   return (
     <div className={"grid grid-cols-12 gap-2 h-full min-h-0 " + (className||'')}>
@@ -242,7 +284,27 @@ export function JobsPanel({ customerId, className, autoRefreshMs = 5000 }: { cus
                 <div className="font-medium mb-1">Logs</div>
                 <div className="border rounded bg-muted/30 p-2 flex-1 min-h-0">
                   <ScrollArea className="flex-1 min-h-0">
-                    <pre className="whitespace-pre-wrap pr-2">{Array.isArray(active.logs) ? active.logs.join('\n') : ''}</pre>
+                    <div className="pr-2 space-y-0.5 text-xs font-mono">
+                      {Array.isArray(active.logs) && active.logs.length > 0 ? (
+                        active.logs.map((log, idx) => {
+                          const parsed = parseLogEntry(log);
+                          return (
+                            <div key={idx} className={getLogColor(parsed.category)}>
+                              {parsed.category ? (
+                                <>
+                                  <span className="font-semibold">[{parsed.category}]</span>{' '}
+                                  <span className="text-foreground/90">{parsed.message}</span>
+                                </>
+                              ) : (
+                                <span>{parsed.message}</span>
+                              )}
+                            </div>
+                          );
+                        })
+                      ) : (
+                        <div className="text-muted-foreground">No logs available</div>
+                      )}
+                    </div>
                   </ScrollArea>
                 </div>
               </div>

@@ -93,19 +93,21 @@ router.post("/", (req, res) => {
     async function (err) {
       if (err) return res.status(500).json({ error: err.message })
 
+      const id = this.lastID as number
+
       // Create LIBRARY_ROOT/customers/{CustomerName}_{Mon_Year}/(inputs|prompts|documents)
       let folderWarning: string | undefined
       let workspaceWarning: string | undefined
       let anythingLLMFolderWarning: string | undefined
       let workspace: { name?: string; slug?: string } | undefined
       try {
-        ensureCustomerLibrary(this.lastID, name!, new Date(createdAt))
+        ensureCustomerLibrary(id, name!, new Date(createdAt))
       } catch (e) {
         folderWarning = `Customer created, but failed to create folders: ${(e as Error).message}`
       }
 
-      const { customerDir } = resolveCustomerPaths(this.lastID, name!, new Date(createdAt))
-      const folderName = folderNameForCustomer(this.lastID, name!, new Date(createdAt))
+      const { customerDir } = resolveCustomerPaths(id, name!, new Date(createdAt))
+      const folderName = folderNameForCustomer(id, name!, new Date(createdAt))
 
       // Create AnythingLLM document folder for this customer
       try {
@@ -144,7 +146,7 @@ router.post("/", (req, res) => {
         workspaceWarning = `Customer created, but failed to create AnythingLLM workspace: ${(e as Error).message}`
       }
       return res.status(201).json({
-        id: this.lastID,
+        id: id, // Use the generated UUID instead of this.lastID
         name,
         createdAt,
         folder: customerDir,
@@ -160,7 +162,7 @@ router.post("/", (req, res) => {
 // DELETE /api/customers/:id  — cascade delete (documents, prompts, customer) + remove folder
 router.delete("/:id", (req, res) => {
   const id = Number(req.params.id)
-  if (!Number.isFinite(id) || id <= 0) {
+  if (!id || isNaN(id)) {
     return res.status(400).json({ error: "Invalid id" })
   }
 
@@ -213,6 +215,25 @@ router.delete("/:id", (req, res) => {
 
                 db.run("COMMIT", async (commitErr) => {
                   if (commitErr) return res.status(500).json({ error: commitErr.message })
+
+                  // Reset AUTOINCREMENT counter if customers table is now empty
+                  try {
+                    const db2 = getDB()
+                    db2.get<{ count: number }>("SELECT COUNT(*) as count FROM customers", [], (err, result) => {
+                      if (!err && result && result.count === 0) {
+                        // Table is empty, reset the AUTOINCREMENT counter
+                        db2.run("DELETE FROM sqlite_sequence WHERE name='customers'", (resetErr) => {
+                          if (resetErr) {
+                            console.error("[DELETE-CUSTOMER] Failed to reset AUTOINCREMENT counter:", resetErr)
+                          } else {
+                            console.log("[DELETE-CUSTOMER] AUTOINCREMENT counter reset - next customer will have id=1")
+                          }
+                        })
+                      }
+                    })
+                  } catch (e) {
+                    console.error("[DELETE-CUSTOMER] Error checking if customers table is empty:", e)
+                  }
 
                   // 3) Remove filesystem folder (best-effort)
                   let warning: string | undefined

@@ -7,7 +7,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, DialogDescription, DialogClose } from "../components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Icon } from "../components/icons";
-import { Maximize2, Minimize2, Search, ExternalLink, Download, FileText, FileSpreadsheet, FileCode, FileQuestion, FileType, Info, Loader2, Pin, PinOff, RefreshCw, Eye, AlertCircle, Trash, Upload, Zap } from "lucide-react";
+import { Maximize2, Minimize2, Search, ExternalLink, Download, FileText, FileSpreadsheet, FileCode, FileQuestion, FileType, Info, Loader2, Pin, PinOff, RefreshCw, Eye, AlertCircle, Trash, Upload, Zap, Sparkles } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "../components/ui/tooltip";
 import { A, apiFetch, apiEventSource } from "../lib/api";
 import WorkspaceChat from "../components/WorkspaceChat";
@@ -20,6 +20,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs"
 import JobsPanel from "../components/JobsPanel";
 import { MetadataModal, type DocumentMetadata } from "../components/MetadataModal";
 import { useMetadata } from "../contexts/MetadataContext";
+import { useDebouncedState, useUserActivity } from "../lib/hooks";
 
 type Customer = { id: number; name: string; createdAt: string };
 type UploadItem = { name: string; path: string; size: number; modifiedAt: string };
@@ -67,8 +68,6 @@ export function CustomersPage() {
   const [genDocuments, setGenDocuments] = React.useState<Array<{ name: string; relevance: number; reasoning: string; anythingllmPath?: string }>>([]);
   const [genPinnedDocs, setGenPinnedDocs] = React.useState<Set<string>>(new Set());
   const [loadingGenDocs, setLoadingGenDocs] = React.useState(false);
-  const [genDocQuery, setGenDocQuery] = React.useState<string>("");
-  const [genTemplateQuery, setGenTemplateQuery] = React.useState<string>("");
   const [showNoDocsWarning, setShowNoDocsWarning] = React.useState(false);
   // External chat cards to display generation metadata in chat
   const [chatCards, setChatCards] = React.useState<Array<{ id: string; template?: string; jobId?: string; jobStatus?: 'running' | 'done' | 'error' | 'cancelled'; filename?: string; aiContext?: string; timestamp?: number; side?: 'user' | 'assistant' }>>([]);
@@ -109,7 +108,20 @@ export function CustomersPage() {
 
   // No localStorage persistence; cards are saved to SQL via backend
   const [panelMode, setPanelMode] = React.useState<'split' | 'chat' | 'docs'>('split');
-  const [docQuery, setDocQuery] = React.useState<string>("");
+  
+  // Debounced search queries for better performance
+  const [debouncedDocQuery, docQuery, setDocQuery] = useDebouncedState<string>("", 300);
+  const [debouncedGenTemplateQuery, genTemplateQuery, setGenTemplateQuery] = useDebouncedState<string>("", 300);
+  const [debouncedGenDocQuery, genDocQuery, setGenDocQuery] = useDebouncedState<string>("", 300);
+  
+  // Use deferred values to allow input to update instantly while deferring expensive renders
+  const deferredDocQuery = React.useDeferredValue(debouncedDocQuery);
+  const deferredGenTemplateQuery = React.useDeferredValue(debouncedGenTemplateQuery);
+  const deferredGenDocQuery = React.useDeferredValue(debouncedGenDocQuery);
+  
+  // Track user activity to pause polling during input
+  const [isUserActive, signalUserActivity] = useUserActivity(2000);
+  
   const [docsTab, setDocsTab] = React.useState('uploaded'); // 'uploaded' or 'generated'
   
   // Regenerate dialog state
@@ -136,6 +148,34 @@ export function CustomersPage() {
     : (panelMode === 'chat'
       ? 'grid grid-rows-[minmax(0,1fr)_minmax(0,0fr)]'
       : 'grid grid-rows-[minmax(0,0fr)_minmax(0,1fr)]');
+
+  // Memoized filtered lists for better performance - using deferred values for smooth input
+  const filteredUploads = React.useMemo(() => {
+    if (!deferredDocQuery.trim()) return uploads;
+    const query = deferredDocQuery.trim().toLowerCase();
+    return uploads.filter((u) => u.name.toLowerCase().includes(query));
+  }, [uploads, deferredDocQuery]);
+
+  const filteredGeneratedDocs = React.useMemo(() => {
+    if (!deferredDocQuery.trim()) return generatedDocs;
+    const query = deferredDocQuery.trim().toLowerCase();
+    return generatedDocs.filter((d) => d.name.toLowerCase().includes(query));
+  }, [generatedDocs, deferredDocQuery]);
+
+  const filteredTemplates = React.useMemo(() => {
+    if (!deferredGenTemplateQuery.trim()) return templates;
+    const query = deferredGenTemplateQuery.trim().toLowerCase();
+    return templates.filter(t => (t.name || t.slug).toLowerCase().includes(query));
+  }, [templates, deferredGenTemplateQuery]);
+
+  const filteredGenDocuments = React.useMemo(() => {
+    if (!deferredGenDocQuery.trim()) return genDocuments;
+    const query = deferredGenDocQuery.trim().toLowerCase();
+    return genDocuments.filter(doc =>
+      doc.name.toLowerCase().includes(query) ||
+      doc.reasoning.toLowerCase().includes(query)
+    );
+  }, [genDocuments, deferredGenDocQuery]);
 
   // Fetch accepted file types when upload dialog opens
   React.useEffect(() => {
@@ -304,26 +344,44 @@ export function CustomersPage() {
   // Keep docs count in sync with selected customer's uploads list
   React.useEffect(() => {
     if (!selectedId) return;
-    setCounts((prev) => ({ ...prev, [selectedId]: { ...(prev[selectedId] || {}), docs: uploads.length } }));
+    setCounts((prev) => {
+      const prevCount = prev[selectedId]?.docs;
+      if (prevCount === uploads.length) return prev;
+      return { ...prev, [selectedId]: { ...(prev[selectedId] || {}), docs: uploads.length } };
+    });
   }, [uploads, selectedId]);
 
   // Live refresh chat count only for selected customer's workspace
+  // Pauses during active user input to prevent interruptions
   React.useEffect(() => {
     if (!selectedId || !wsSlug) return;
     let ignore = false;
     let timer: any;
     async function refreshChats() {
+      // Skip refresh if user is actively typing
+      if (isUserActive) {
+        if (!ignore) timer = setTimeout(refreshChats, 15000);
+        return;
+      }
       try {
         const data = await A.workspaceChats(wsSlug!, 200, 'desc').catch(() => null);
         const arr = Array.isArray((data as any)?.history) ? (data as any).history : (Array.isArray((data as any)?.chats) ? (data as any).chats : (Array.isArray(data) ? (data as any) : []));
         const count = Array.isArray(arr) ? arr.length : 0;
-        if (!ignore) setCounts((prev) => ({ ...prev, [selectedId!]: { ...(prev[selectedId!] || {}), chats: count } }));
+        
+        // Only update state if count actually changed (prevent unnecessary re-renders)
+        if (!ignore) {
+          setCounts((prev) => {
+            const prevCount = prev[selectedId!]?.chats;
+            if (prevCount === count) return prev;
+            return { ...prev, [selectedId!]: { ...(prev[selectedId!] || {}), chats: count } };
+          });
+        }
       } catch { }
       if (!ignore) timer = setTimeout(refreshChats, 15000);
     }
     refreshChats();
     return () => { ignore = true; if (timer) clearTimeout(timer); };
-  }, [selectedId, wsSlug]);
+  }, [selectedId, wsSlug, isUserActive]);
 
   // Resolve AnythingLLM workspace for selected customer
   React.useEffect(() => {
@@ -467,6 +525,7 @@ export function CustomersPage() {
   }, [wsSlug]);
 
   // Poll for gen_card updates when there are running jobs
+  // Pauses during active user input to prevent interruptions
   React.useEffect(() => {
     if (!wsSlug) {
       // Clear any existing polling when workspace changes
@@ -479,11 +538,28 @@ export function CustomersPage() {
     
     // Function to poll for updates
     const pollForUpdates = async () => {
+      // Skip polling if user is actively typing
+      if (isUserActive) {
+        return;
+      }
       try {
         const response = await A.genCardsByWorkspace(wsSlug);
         if (response?.cards) {
           const validCards = Array.isArray(response.cards) ? response.cards.filter((c: any) => c.id) : [];
-          setChatCards(validCards.sort((a: any, b: any) => (a.timestamp || 0) - (b.timestamp || 0)));
+          const sorted = validCards.sort((a: any, b: any) => (a.timestamp || 0) - (b.timestamp || 0));
+          
+          // Only update state if cards actually changed (prevent unnecessary re-renders)
+          setChatCards(prev => {
+            if (prev.length !== sorted.length) return sorted;
+            const changed = sorted.some((card: any, idx: number) => {
+              const prevCard = prev[idx];
+              return !prevCard || 
+                     prevCard.id !== card.id || 
+                     prevCard.jobStatus !== card.jobStatus ||
+                     prevCard.timestamp !== card.timestamp;
+            });
+            return changed ? sorted : prev;
+          });
           
           // Check if we should stop polling
           const hasRunningJobs = validCards.some((c: any) => c.jobStatus === 'running');
@@ -516,7 +592,7 @@ export function CustomersPage() {
         pollingIntervalRef.current = null;
       }
     };
-  }, [wsSlug, chatCards.some(c => c.jobStatus === 'running'), generating]);
+  }, [wsSlug, chatCards.some(c => c.jobStatus === 'running'), generating, isUserActive]);
 
   // Load templates once when opening generate modal
   React.useEffect(() => {
@@ -997,22 +1073,44 @@ export function CustomersPage() {
   }
 
   // Live refresh uploads list for the selected customer
+  // Pause polling during user input to improve responsiveness
   React.useEffect(() => {
     if (!selectedId) return;
     let ignore = false;
     let timer: any;
     async function refresh() {
+      // Skip polling if user is actively typing
+      if (isUserActive) {
+        if (!ignore) timer = setTimeout(refresh, 15000);
+        return;
+      }
+      
       try {
         const r = await apiFetch(`/api/uploads/${selectedId}`);
         if (!r.ok) throw new Error(String(r.status));
         const data: UploadItem[] = await r.json();
-        if (!ignore) setUploads(Array.isArray(data) ? data : []);
+        
+        // Only update state if uploads actually changed (prevent unnecessary re-renders)
+        if (!ignore) {
+          setUploads(prev => {
+            const newData = Array.isArray(data) ? data : [];
+            if (prev.length !== newData.length) return newData;
+            const changed = newData.some((item, idx) => {
+              const prevItem = prev[idx];
+              return !prevItem || 
+                     prevItem.name !== item.name || 
+                     prevItem.size !== item.size ||
+                     prevItem.modifiedAt !== item.modifiedAt;
+            });
+            return changed ? newData : prev;
+          });
+        }
       } catch { }
       if (!ignore) timer = setTimeout(refresh, 15000);
     }
     refresh();
     return () => { ignore = true; if (timer) clearTimeout(timer); };
-  }, [selectedId]);
+  }, [selectedId, isUserActive]);
 
   async function add() {
     const n = name.trim();
@@ -1515,6 +1613,13 @@ export function CustomersPage() {
         const r2 = await apiFetch(`/api/uploads/${selectedId}`);
         const d2: UploadItem[] = await r2.json();
         setUploads(d2);
+        
+        // Invalidate metadata cache for this file so it gets reloaded with isGenerated flag
+        setUploadMetadataCache(prev => {
+          const newCache = new Map(prev);
+          newCache.delete(uploadedFilename);
+          return newCache;
+        });
       } catch (err) {
         console.error('Failed to refresh uploads:', err);
       }
@@ -1817,7 +1922,13 @@ export function CustomersPage() {
                       <Input
                         placeholder={docsTab === 'uploaded' ? 'Search uploaded documents...' : 'Search generated documents...'}
                         value={docQuery}
-                        onChange={(e) => setDocQuery(e.target.value)}
+                        onChange={(e) => {
+                          const value = e.target.value;
+                          React.startTransition(() => {
+                            setDocQuery(value);
+                          });
+                          signalUserActivity();
+                        }}
                         className="pl-9 h-9 bg-background/50 border-border/50 focus:bg-background"
                       />
                     </div>
@@ -2016,10 +2127,10 @@ export function CustomersPage() {
                     <div className="p-4">
                       <div className="text-sm text-muted-foreground">Loading uploaded documents.</div>
                     </div>
-                  ) : (docQuery.trim() ? uploads.filter((u) => u.name.toLowerCase().includes(docQuery.trim().toLowerCase())).length : uploads.length) ? (
+                  ) : filteredUploads.length ? (
                     <ScrollArea className="flex-1 min-h-0 h-full">
                       <div className="px-4 pb-4 space-y-2">
-                        {(docQuery.trim() ? uploads.filter((u) => u.name.toLowerCase().includes(docQuery.trim().toLowerCase())) : uploads).map((u, idx) => {
+                        {filteredUploads.map((u, idx) => {
                           const { Icon: DocIcon, wrapper, label } = getDocumentIconMeta(u.name);
                           return (
                           <div key={idx} className="rounded-md border bg-card/50 transition px-3 py-2">
@@ -2039,7 +2150,8 @@ export function CustomersPage() {
                                       {u.name}
                                     </button>
                                     {uploadMetadataCache.get(u.name)?.isGenerated && (
-                                      <Badge variant="secondary" className="mt-1">
+                                      <Badge className="mt-1 bg-blue-500 text-white hover:bg-blue-600 flex items-center gap-1 w-fit">
+                                        <Sparkles className="h-3 w-3" />
                                         Generated
                                       </Badge>
                                     )}
@@ -2170,7 +2282,7 @@ export function CustomersPage() {
                     <div className="p-4">
                       <div className="text-sm text-muted-foreground">Loading generated documents.</div>
                     </div>
-                  ) : (docQuery.trim() ? generatedDocs.filter((d) => d.name.toLowerCase().includes(docQuery.trim().toLowerCase())).length : generatedDocs.length) ? (
+                  ) : filteredGeneratedDocs.length ? (
                     <>
                       {/* Generation Progress Indicator */}
                       {generating && genJobId && (
@@ -2205,7 +2317,7 @@ export function CustomersPage() {
                       )}
                       <ScrollArea className="flex-1 min-h-0 h-full">
                         <div className="px-4 pb-4 space-y-2">
-                          {(docQuery.trim() ? generatedDocs.filter((d) => d.name.toLowerCase().includes(docQuery.trim().toLowerCase())) : generatedDocs).map((d, idx) => {
+                          {filteredGeneratedDocs.map((d, idx) => {
                             const { Icon: DocIcon, wrapper, label } = getDocumentIconMeta(d.name);
                             return (
                             <div key={idx} className="rounded-md border bg-card/50 transition px-3 py-2">
@@ -2380,7 +2492,13 @@ export function CustomersPage() {
                         placeholder="Search templates..."
                         className="pl-8 h-9"
                         value={genTemplateQuery}
-                        onChange={(e) => setGenTemplateQuery(e.target.value)}
+                        onChange={(e) => {
+                          const value = e.target.value;
+                          React.startTransition(() => {
+                            setGenTemplateQuery(value);
+                          });
+                          signalUserActivity();
+                        }}
                         disabled={generating}
                       />
                     </div>
@@ -2410,39 +2528,31 @@ export function CustomersPage() {
                         </SelectValue>
                       </SelectTrigger>
                       <SelectContent className="max-h-[300px]">
-                        {(() => {
-                          const filteredTemplates = genTemplateQuery.trim()
-                            ? templates.filter(t => 
-                                (t.name || t.slug).toLowerCase().includes(genTemplateQuery.toLowerCase())
-                              )
-                            : templates;
-                          
-                          return filteredTemplates.length === 0 ? (
-                            <div className="p-2 text-sm text-muted-foreground text-center">
-                              No templates match your search
-                            </div>
-                          ) : (
-                            filteredTemplates.map((t) => (
-                              <SelectItem key={t.slug} value={t.slug}>
-                                <div className="flex items-center gap-2">
-                                  <span>{t.name || t.slug}</span>
-                                  {!t.hasFullGen && (
-                                    <TooltipProvider>
-                                      <Tooltip>
-                                        <TooltipTrigger asChild>
-                                          <AlertCircle className="h-4 w-4 text-amber-500" />
-                                        </TooltipTrigger>
-                                        <TooltipContent>
-                                          <p>Template not compiled yet</p>
-                                        </TooltipContent>
-                                      </Tooltip>
-                                    </TooltipProvider>
-                                  )}
-                                </div>
-                              </SelectItem>
-                            ))
-                          );
-                        })()}
+                        {filteredTemplates.length === 0 ? (
+                          <div className="p-2 text-sm text-muted-foreground text-center">
+                            No templates match your search
+                          </div>
+                        ) : (
+                          filteredTemplates.map((t) => (
+                            <SelectItem key={t.slug} value={t.slug}>
+                              <div className="flex items-center gap-2">
+                                <span>{t.name || t.slug}</span>
+                                {!t.hasFullGen && (
+                                  <TooltipProvider>
+                                    <Tooltip>
+                                      <TooltipTrigger asChild>
+                                        <AlertCircle className="h-4 w-4 text-amber-500" />
+                                      </TooltipTrigger>
+                                      <TooltipContent>
+                                        <p>Template not compiled yet</p>
+                                      </TooltipContent>
+                                    </Tooltip>
+                                  </TooltipProvider>
+                                )}
+                              </div>
+                            </SelectItem>
+                          ))
+                        )}
                       </SelectContent>
                     </Select>
                     
@@ -2554,7 +2664,13 @@ export function CustomersPage() {
                     placeholder="Search..."
                     className="pl-7 h-8 text-sm"
                     value={genDocQuery}
-                    onChange={(e) => setGenDocQuery(e.target.value)}
+                    onChange={(e) => {
+                      const value = e.target.value;
+                      React.startTransition(() => {
+                        setGenDocQuery(value);
+                      });
+                      signalUserActivity();
+                    }}
                     disabled={generating}
                   />
                 </div>
@@ -2569,21 +2685,13 @@ export function CustomersPage() {
                       <div className="p-4 text-sm text-muted-foreground text-center">
                         No documents with metadata found
                       </div>
-                    ) : (() => {
-                      const filteredDocs = genDocQuery.trim()
-                        ? genDocuments.filter(doc => 
-                            doc.name.toLowerCase().includes(genDocQuery.toLowerCase()) ||
-                            doc.reasoning.toLowerCase().includes(genDocQuery.toLowerCase())
-                          )
-                        : genDocuments;
-                      
-                      return filteredDocs.length === 0 ? (
-                        <div className="p-4 text-sm text-muted-foreground text-center">
-                          No matches
-                        </div>
-                      ) : (
-                        <div className="divide-y">
-                          {filteredDocs.map((doc) => {
+                    ) : filteredGenDocuments.length === 0 ? (
+                      <div className="p-4 text-sm text-muted-foreground text-center">
+                        No matches
+                      </div>
+                    ) : (
+                      <div className="divide-y">
+                        {filteredGenDocuments.map((doc) => {
                             const isPinned = genPinnedDocs.has(doc.name);
                             const scoreColor = doc.relevance >= 8 ? 'text-green-600' : doc.relevance >= 6 ? 'text-yellow-600' : 'text-gray-500';
                             const canPin = isPinned || genPinnedDocs.size < 3;
@@ -2633,8 +2741,7 @@ export function CustomersPage() {
                             );
                           })}
                         </div>
-                      );
-                    })()}
+                      )}
                   </ScrollArea>
                 </div>
               </div>
@@ -2901,6 +3008,7 @@ function RecentJobs({ selectedId }: { selectedId: number | null }) {
   const [jobs, setJobs] = React.useState<Array<any>>([])
   const [loading, setLoading] = React.useState(false)
   const [active, setActive] = React.useState<any | null>(null)
+  const [isUserActive] = useUserActivity(1000);
 
   const isCompileJob = (j: any) => {
     try {
@@ -2950,16 +3058,30 @@ function RecentJobs({ selectedId }: { selectedId: number | null }) {
     }
   }
 
+  // Pause polling during user input to improve text input responsiveness
   React.useEffect(() => {
     let ignore = false
     const load = async () => {
+      // Skip polling if user is actively typing
+      if (isUserActive) return;
+      
       try {
         setLoading(true)
         const r = await apiFetch('/api/generate/jobs')
         const j = await r.json().catch(() => ({}))
         if (!ignore) {
           const arr = Array.isArray(j?.jobs) ? j.jobs : []
-          setJobs(arr)
+          
+          // Only update state if jobs actually changed (prevent unnecessary re-renders)
+          setJobs(prev => {
+            if (prev.length !== arr.length) return arr;
+            const changed = arr.some((job: any, idx: number) => {
+              const prevJob = prev[idx];
+              return !prevJob || prevJob.id !== job.id || prevJob.status !== job.status;
+            });
+            return changed ? arr : prev;
+          });
+          
           const filtered = selectedId ? arr.filter((x: any) => x.customerId === selectedId) : arr
           if (!active && filtered.length) { try { await openJob(filtered[0].id) } catch { } }
         }
@@ -2968,7 +3090,7 @@ function RecentJobs({ selectedId }: { selectedId: number | null }) {
     load()
     const t = setInterval(load, 5000)
     return () => { ignore = true; clearInterval(t) }
-  }, [selectedId])
+  }, [selectedId, isUserActive])
 
   async function openJob(id: string) {
     try { const r = await apiFetch(`/api/generate/jobs/${encodeURIComponent(id)}`); const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(String(r.status)); setActive(j) } catch { setActive(null) }

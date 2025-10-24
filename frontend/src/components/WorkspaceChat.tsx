@@ -1,4 +1,6 @@
 import * as React from "react";
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { Card } from "./ui/card";
 import { Button } from "./ui/Button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "./ui/tooltip";
@@ -7,6 +9,8 @@ import { Icon } from "./icons";
 import { toast } from "sonner";
 import { A, apiFetch } from "../lib/api";
 import { readSSEStream, formatTimeAgo } from "../lib/utils";
+import { Copy, Check } from "lucide-react";
+import { useUserActivity } from "../lib/hooks";
 
 type Thread = { id?: number; slug?: string; name?: string };
 
@@ -57,6 +61,7 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
   };
   const [wsJobs, setWsJobs] = React.useState<Job[]>([]);
   const injectedRef = React.useRef<Record<string, number>>({});
+  const [isUserActive, signalActivity] = useUserActivity(1000);
 
   const listRef = React.useRef<HTMLDivElement | null>(null);
   const [atBottom, setAtBottom] = React.useState(true);
@@ -112,11 +117,14 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
             const have = new Set(items.filter((m:any)=>m && m.card).map((m:any)=>String(m.card.id)));
             const mapped = cards.filter((c:any)=>!have.has(String(c.id))).map((c:any)=>({ role: (c.side || 'user'), content: '', sentAt: Number(c.timestamp||0)||Date.now(), card: { ...c } }));
             items = [...items, ...mapped];
+            // Sort all messages and cards by timestamp
+            items = sortMessagesByTimestamp(items);
           }
         } catch {}
         setHistory(items);
       } else {
-        const data = await A.workspaceChats(slug, 50, 'asc');
+        // Fetch only user-interactive chats (not system metadata/generation operations)
+        const data = await A.workspaceChats(slug, 50, 'asc', 'user-interactive');
         const raw = Array.isArray(data?.history) ? data.history : (Array.isArray(data?.chats) ? data.chats : (Array.isArray(data) ? data : []));
         let items = sortOldestFirst(raw);
         try {
@@ -126,6 +134,8 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
             const have = new Set(items.filter((m:any)=>m && m.card).map((m:any)=>String(m.card.id)));
             const mapped = cards.filter((c:any)=>!have.has(String(c.id))).map((c:any)=>({ role: (c.side || 'user'), content: '', sentAt: Number(c.timestamp||0)||Date.now(), card: { ...c } }));
             items = [...items, ...mapped];
+            // Sort all messages and cards by timestamp
+            items = sortMessagesByTimestamp(items);
           }
         } catch {}
         setHistory(items);
@@ -166,13 +176,18 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
         map[key] = ts;
       }
       injectedRef.current = map;
-      return next;
+      // Sort all messages and cards by timestamp after injection
+      return sortMessagesByTimestamp(next);
     });
   }, [externalCards]);
   // Poll jobs and keep only those for this workspace
+  // Pause polling during user typing to improve input responsiveness
   React.useEffect(() => {
     let cancelled = false;
     async function loadJobsOnce() {
+      // Skip polling if user is actively typing
+      if (isUserActive) return;
+      
       try {
         const r = await apiFetch('/api/generate/jobs');
         const j = await r.json().catch(()=>({}));
@@ -185,32 +200,35 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
     loadJobsOnce();
     const t = setInterval(loadJobsOnce, 5000);
     return () => { cancelled = true; clearInterval(t) };
-  }, [slug]);
+  }, [slug, isUserActive]);
 
   // Detect prompts/responses originating from DocSmith generation jobs
-  const isGenJobPrompt = (txt: string) => {
+  const isGenJobPrompt = React.useCallback((txt: string) => {
     const s = String(txt || '').toLowerCase();
     if (!s) return false;
     return (
       (s.includes('current generator code:') && s.includes('docsmith')) ||
       (s.includes('you are a senior typescript engineer') && s.includes('docsmith'))
     );
-  };
-  const isGenJobResponse = (txt: string) => {
+  }, []);
+  const isGenJobResponse = React.useCallback((txt: string) => {
     const s = String(txt || '');
     if (!s) return false;
     if (/export\s+async\s+function\s+generate\s*\(/i.test(s)) return true;
     if (/```\s*ts[\s\S]*```/i.test(s)) return true;
     return false;
-  };
+  }, []);
 
+  // NOTE: Metadata extraction detection kept as safety net, but system operations now use 
+  // separate sessionIds (system-metadata-extraction, system-doc-generation, system-template-compile)
+  // and are filtered at the API level via apiSessionId='user-interactive' parameter
   // Detect prompts/responses from metadata extraction (hidden from UI)
-  const isMetadataPrompt = (txt: string) => {
+  const isMetadataPrompt = React.useCallback((txt: string) => {
     const s = String(txt || '').toLowerCase();
     if (!s) return false;
     // Must have multiple specific metadata indicators to avoid false positives
-    const hasAnalyzeDocument = s.includes('please analyze the document named');
-    const hasMetadataInstruction = s.includes('extract precise metadata') || s.includes('critical instructions');
+    const hasAnalyzeDocument = s.includes('please analyze the document named') || s.includes('please analyze all sheets from the excel file');
+    const hasMetadataInstruction = s.includes('critical instructions') || s.includes('critical requirements');
     const hasDocumentType = (
       s.includes('this is a spreadsheet file') ||
       s.includes('this is a presentation file') ||
@@ -218,9 +236,11 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
       s.includes('this is an image file') ||
       s.includes('this is a document file')
     );
-    return (hasAnalyzeDocument && hasMetadataInstruction) || (hasDocumentType && hasMetadataInstruction);
-  };
-  const isMetadataResponse = (txt: string) => {
+    const hasReturnJSON = s.includes('return only a valid json object') || s.includes('return only a json object');
+    // Match actual backend patterns: analyze + critical instructions/requirements + return JSON
+    return (hasAnalyzeDocument && hasMetadataInstruction && hasReturnJSON) || (hasDocumentType && hasMetadataInstruction && hasReturnJSON);
+  }, []);
+  const isMetadataResponse = React.useCallback((txt: string) => {
     const s = String(txt || '');
     if (!s) return false;
     // Must be valid JSON AND have ALL the metadata-specific fields
@@ -243,9 +263,9 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
     } catch {
       return false;
     }
-  };
+  }, []);
 
-  const looksLikeCode = (txt: string) => {
+  const looksLikeCode = React.useCallback((txt: string) => {
     const s = String(txt || '');
     if (!s) return false;
     if (/```/.test(s)) return true;
@@ -254,8 +274,278 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
     const punctScore = (s.match(/[{};<>]/g) || []).length;
     const keywordHits = lines.reduce((acc, l) => acc + (codeKeywords.test(l) ? 1 : 0), 0);
     return lines.length >= 6 && (keywordHits >= 3 || punctScore >= 6);
-  };
-  const latestRelevantJob = () => wsJobs[0];
+  }, []);
+  const latestRelevantJob = React.useCallback(() => wsJobs[0], [wsJobs]);
+
+  // Memoize ReactMarkdown components to avoid recreating on every render
+  // Memoize individual chat message to prevent unnecessary re-renders
+  const ChatMessage = React.memo(({ 
+    message, 
+    index, 
+    isMetadataPrompt, 
+    isMetadataResponse, 
+    isGenJobPrompt, 
+    isGenJobResponse, 
+    latestRelevantJob,
+    onOpenLogs,
+    markdownComponents 
+  }: { 
+    message: any; 
+    index: number; 
+    isMetadataPrompt: (txt: string) => boolean;
+    isMetadataResponse: (txt: string) => boolean;
+    isGenJobPrompt: (txt: string) => boolean;
+    isGenJobResponse: (txt: string) => boolean;
+    latestRelevantJob: () => Job | undefined;
+    onOpenLogs?: (jobId: string) => void;
+    markdownComponents: any;
+  }) => {
+    const m = message;
+    const isUser = (String(m.role || '')).toLowerCase() === 'user';
+    const text = String(m.content || m.message || m.text || '');
+    const card = (m as any).card as ExternalCard | undefined;
+    const shouldHideAsCode = (isGenJobPrompt(text) || isGenJobResponse(text));
+    const isMetadata = (isMetadataPrompt(text) || isMetadataResponse(text));
+    const job = shouldHideAsCode ? latestRelevantJob() : null;
+    const timestamp = m.sentAt ?? m.createdAt ?? m.created_at ?? m.timestamp ?? m.date;
+    const timeAgo = formatTimeAgo(timestamp);
+    
+    // Hide metadata extraction prompts and responses completely
+    if (isMetadata) return null;
+    
+    // Hide all generation job messages (prompts and responses)
+    if (shouldHideAsCode) return null;
+    
+    return (
+      <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
+        <div className="group flex flex-col gap-1 max-w-[75%]">
+          <div className={`whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 ${isUser ? 'bg-primary text-primary-foreground rounded-br-md' : 'bg-card border rounded-bl-md'}`}>
+            {card ? (
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <div className="font-medium flex-1">
+                    {isUser
+                      ? 'Document Requested'
+                      : (card.jobStatus === 'running' 
+                          ? 'Document Generating' 
+                          : card.jobStatus === 'done' 
+                            ? 'Document Generated'
+                            : card.jobStatus === 'error'
+                              ? 'Generation Failed'
+                              : 'Document Generation'
+                        )}
+                  </div>
+                  {/* Status Badge */}
+                  {card.jobStatus === 'running' && (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20 flex items-center gap-1 shrink-0">
+                      <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+                      Running
+                    </span>
+                  )}
+                  {card.jobStatus === 'done' && (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-green-500/10 text-green-600 dark:text-green-400 border border-green-500/20 flex items-center gap-1 shrink-0">
+                      <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
+                      Done
+                    </span>
+                  )}
+                  {card.jobStatus === 'error' && (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20 flex items-center gap-1 shrink-0">
+                      <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M15 9l-6 6"/><path d="M9 9l6 6"/></svg>
+                      Error
+                    </span>
+                  )}
+                  {card.jobStatus === 'cancelled' && (
+                    <span className="text-xs px-2 py-0.5 rounded-full bg-gray-500/10 text-gray-600 dark:text-gray-400 border border-gray-500/20 shrink-0">
+                      Cancelled
+                    </span>
+                  )}
+                </div>
+                <div className="text-sm opacity-90">
+                  {card.template ? (<div>Template: {card.template}</div>) : null}
+                  {!isUser && card.filename ? (<div>File: {card.filename}</div>) : null}
+                </div>
+                {isUser && card.aiContext ? (
+                  <div className="text-xs opacity-75">AI Context: {card.aiContext}</div>
+                ) : null}
+                <div className="flex items-center gap-2 pt-1">
+                  {card.jobId ? (
+                    isUser ? (
+                      <>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button asChild size="icon" variant="ghost" aria-label="View job details">
+                              <a href={`#jobs?id=${encodeURIComponent(card.jobId)}`}>
+                                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14L21 3"/></svg>
+                              </a>
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>View job details & logs</TooltipContent>
+                        </Tooltip>
+                        {onOpenLogs ? (
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <Button size="icon" variant="ghost" aria-label="View generation progress" onClick={(e)=>{ e.preventDefault(); onOpenLogs?.(card.jobId!) }}>
+                                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                              </Button>
+                            </TooltipTrigger>
+                            <TooltipContent>View generation progress</TooltipContent>
+                          </Tooltip>
+                        ) : null}
+                      </>
+                    ) : (
+                      <>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button asChild size="icon" variant="ghost" aria-label="Download">
+                              <a href={`/api/generate/jobs/${encodeURIComponent(card.jobId)}/file?download=true`}>
+                                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+                              </a>
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>Download</TooltipContent>
+                        </Tooltip>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button size="icon" variant="ghost" aria-label="Open folder" onClick={async (e)=>{ e.preventDefault(); try { await apiFetch(`/api/generate/jobs/${encodeURIComponent(card.jobId || '')}/reveal`) } catch {} }}>
+                              <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h5l2 3h9a1 1 0 0 1 1 1v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/></svg>
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>Open folder</TooltipContent>
+                        </Tooltip>
+                        <Tooltip>
+                          <TooltipTrigger asChild>
+                            <Button asChild size="icon" variant="ghost" aria-label="View job">
+                              <a href={`#jobs?id=${encodeURIComponent(card.jobId)}`}>
+                                <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14L21 3"/></svg>
+                              </a>
+                            </Button>
+                          </TooltipTrigger>
+                          <TooltipContent>View job</TooltipContent>
+                        </Tooltip>
+                      </>
+                    )
+                  ) : (
+                    <a className="underline" href="#jobs">View jobs</a>
+                  )}
+                </div>
+              </div>
+            ) : shouldHideAsCode ? (
+              null
+            ) : (
+              <div className="text-sm [&>*]:my-0 [&>ul]:mt-1 [&>ol]:mt-1 [&>h1]:mt-2 [&>h2]:mt-2 [&>h3]:mt-1.5" style={{ lineHeight: '1.6' }}>
+                <ReactMarkdown 
+                  remarkPlugins={[remarkGfm]}
+                  components={markdownComponents}
+                >
+                  {text}
+                </ReactMarkdown>
+              </div>
+            )}
+          </div>
+          {timeAgo && (
+            <div className={`text-xs text-muted-foreground px-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200 ${isUser ? 'text-right' : 'text-left'}`}>
+              {timeAgo}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  });
+
+  const markdownComponents = React.useMemo(() => ({
+    // Headings - minimal top spacing
+    h1: ({node, children, ...props}: any) => (
+      <h1 className="font-semibold text-base" {...props}>{children}</h1>
+    ),
+    h2: ({node, children, ...props}: any) => (
+      <h2 className="font-semibold text-sm" {...props}>{children}</h2>
+    ),
+    h3: ({node, children, ...props}: any) => (
+      <h3 className="font-medium text-sm" {...props}>{children}</h3>
+    ),
+    // Paragraphs - no margin
+    p: ({node, children, ...props}: any) => {
+      const isEmpty = !children || (typeof children === 'string' && !children.trim());
+      if (isEmpty) return null;
+      return <p {...props}>{children}</p>;
+    },
+    // Lists - tight spacing
+    ul: ({node, children, ...props}: any) => (
+      <ul className="list-disc pl-5" {...props}>{children}</ul>
+    ),
+    ol: ({node, children, ...props}: any) => (
+      <ol className="list-decimal pl-5" {...props}>{children}</ol>
+    ),
+    // List items - unwrap paragraphs and filter empty
+    li: ({node, children, ...props}: any) => {
+      const filtered = React.Children.toArray(children).filter((child: any) => {
+        if (typeof child === 'string') {
+          return child.trim().length > 0;
+        }
+        if (child?.type === 'p') {
+          const text = child.props?.children;
+          if (typeof text === 'string') {
+            return text.trim().length > 0;
+          }
+        }
+        return true;
+      });
+      
+      if (filtered.length === 0) {
+        return null;
+      }
+      
+      const unwrapped = React.Children.map(filtered, (child: any) => {
+        if (child?.type === 'p') {
+          return child.props.children;
+        }
+        return child;
+      });
+      
+      return <li {...props}>{unwrapped}</li>;
+    },
+    // Strong/Bold
+    strong: ({node, children, ...props}: any) => (
+      <strong className="font-semibold" {...props}>{children}</strong>
+    ),
+    // Code
+    code: ({node, children, ...props}: any) => {
+      const [copied, setCopied] = React.useState(false);
+      const codeString = String(children).replace(/\n$/, '');
+      const isInline = !props.className;
+      
+      const handleCopy = async () => {
+        await navigator.clipboard.writeText(codeString);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      };
+      
+      return isInline ? (
+        <code className="bg-muted text-foreground px-1.5 py-0.5 rounded text-xs font-mono" {...props}>
+          {children}
+        </code>
+      ) : (
+        <div className="relative group my-3">
+          <button
+            onClick={handleCopy}
+            className="absolute right-2 top-2 p-1.5 rounded bg-background hover:bg-muted border border-border opacity-0 group-hover:opacity-100 transition-opacity z-10"
+            aria-label="Copy code"
+          >
+            {copied ? (
+              <Check className="h-3.5 w-3.5 text-green-500" />
+            ) : (
+              <Copy className="h-3.5 w-3.5 text-muted-foreground" />
+            )}
+          </button>
+          <pre className="bg-muted border border-border rounded p-3 overflow-x-auto">
+            <code className="text-xs font-mono text-foreground" {...props}>
+              {children}
+            </code>
+          </pre>
+        </div>
+      );
+    },
+  }), []);
 
   function sortOldestFirst(arr: any[]): any[] {
     if (!Array.isArray(arr) || arr.length <= 1) return arr || [];
@@ -274,12 +564,24 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
     return arr.slice();
   }
 
+  // Sort messages and cards by timestamp (oldest first)
+  function sortMessagesByTimestamp(messages: any[]) {
+    return messages.slice().sort((a, b) => {
+      const getTime = (m: any) => {
+        const v = m?.sentAt ?? m?.createdAt ?? m?.created_at ?? m?.timestamp ?? m?.date;
+        return v ? new Date(v).getTime() : 0;
+      };
+      return getTime(a) - getTime(b);
+    });
+  }
+
   async function send() {
     const t = msg.trim(); if (!t) return;
     setMsg("");
     setHistory((h) => [...h, { role: 'user', content: t, sentAt: Date.now() }]);
     setReplying(true);
-    const body = { message: t, mode: 'chat' } as any;
+    // Tag user-interactive chats with a specific sessionId so they can be filtered from system operations
+    const body = { message: t, mode: 'chat', sessionId: 'user-interactive' } as any;
     const effectiveThread = threadSlug || (threads && threads[0]?.slug ? String(threads[0].slug) : undefined);
     if (!threadSlug && effectiveThread) setThreadSlug(effectiveThread);
 
@@ -516,156 +818,20 @@ return (
       <div className="relative flex-1 min-h-0 flex">
         <div className="text-sm text-muted-foreground sr-only">{loading ? 'Loading chats.' : `${history.length} message${history.length === 1 ? '' : 's'}`}</div>
         <div ref={listRef} onScroll={onListScroll} className="flex-1 min-h-0 overflow-y-auto px-3 py-0 space-y-2">
-            {history.map((m, idx) => {
-              const isUser = (String(m.role || '')).toLowerCase() === 'user';
-              const text = String(m.content || m.message || m.text || '');
-              const card = (m as any).card as ExternalCard | undefined;
-              const shouldHideAsCode = (isGenJobPrompt(text) || isGenJobResponse(text) || (!isUser && looksLikeCode(text)));
-              const isMetadata = (isMetadataPrompt(text) || isMetadataResponse(text));
-              const job = shouldHideAsCode ? latestRelevantJob() : null;
-              const jobStatus = job?.status;
-              
-              // Extract timestamp from message
-              const timestamp = m.sentAt ?? m.createdAt ?? m.created_at ?? m.timestamp ?? m.date;
-              const timeAgo = formatTimeAgo(timestamp);
-              
-              // Hide metadata extraction prompts and responses completely
-              if (isMetadata) return null;
-              
-              // Hide all generation job messages (prompts and responses)
-              // Only show cards for these, not the raw AI messages
-              if (shouldHideAsCode) return null;
-              
-              // Only show cards and genuine user messages
-              // Cards are injected separately, so messages without cards that aren't job-related are real user chats
-              return (
-                <div key={idx} className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
-                  <div className="group flex flex-col gap-1 max-w-[75%]">
-                    <div className={`whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 ${isUser ? 'bg-primary text-primary-foreground rounded-br-md' : 'bg-card border rounded-bl-md'}`}>
-                      {card ? (
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-2">
-                            <div className="font-medium flex-1">
-                              {isUser
-                                ? 'Document Requested'
-                                : (card.jobStatus === 'running' 
-                                    ? 'Document Generating' 
-                                    : card.jobStatus === 'done' 
-                                      ? 'Document Generated'
-                                      : card.jobStatus === 'error'
-                                        ? 'Generation Failed'
-                                        : 'Document Generation'
-                                  )}
-                            </div>
-                            {/* Status Badge */}
-                            {card.jobStatus === 'running' && (
-                              <span className="text-xs px-2 py-0.5 rounded-full bg-blue-500/10 text-blue-600 dark:text-blue-400 border border-blue-500/20 flex items-center gap-1 shrink-0">
-                                <svg className="h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
-                                Running
-                              </span>
-                            )}
-                            {card.jobStatus === 'done' && (
-                              <span className="text-xs px-2 py-0.5 rounded-full bg-green-500/10 text-green-600 dark:text-green-400 border border-green-500/20 flex items-center gap-1 shrink-0">
-                                <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M20 6L9 17l-5-5"/></svg>
-                                Done
-                              </span>
-                            )}
-                            {card.jobStatus === 'error' && (
-                              <span className="text-xs px-2 py-0.5 rounded-full bg-red-500/10 text-red-600 dark:text-red-400 border border-red-500/20 flex items-center gap-1 shrink-0">
-                                <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M15 9l-6 6"/><path d="M9 9l6 6"/></svg>
-                                Error
-                              </span>
-                            )}
-                            {card.jobStatus === 'cancelled' && (
-                              <span className="text-xs px-2 py-0.5 rounded-full bg-gray-500/10 text-gray-600 dark:text-gray-400 border border-gray-500/20 shrink-0">
-                                Cancelled
-                              </span>
-                            )}
-                          </div>
-                          <div className="text-sm opacity-90">
-                            {card.template ? (<div>Template: {card.template}</div>) : null}
-                            {!isUser && card.filename ? (<div>File: {card.filename}</div>) : null}
-                          </div>
-                          {isUser && card.aiContext ? (
-                            <div className="text-xs opacity-75">AI Context: {card.aiContext}</div>
-                          ) : null}
-                          <div className="flex items-center gap-2 pt-1">
-                            {card.jobId ? (
-                              isUser ? (
-                                <>
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <Button asChild size="icon" variant="ghost" aria-label="View job details">
-                                        <a href={`#jobs?id=${encodeURIComponent(card.jobId)}`}>
-                                          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14L21 3"/></svg>
-                                        </a>
-                                      </Button>
-                                    </TooltipTrigger>
-                                    <TooltipContent>View job details & logs</TooltipContent>
-                                  </Tooltip>
-                                  {onOpenLogs ? (
-                                    <Tooltip>
-                                      <TooltipTrigger asChild>
-                                        <Button size="icon" variant="ghost" aria-label="View generation progress" onClick={(e)=>{ e.preventDefault(); onOpenLogs?.(card.jobId!) }}>
-                                          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-                                        </Button>
-                                      </TooltipTrigger>
-                                      <TooltipContent>View generation progress</TooltipContent>
-                                    </Tooltip>
-                                  ) : null}
-                                </>
-                              ) : (
-                                <>
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <Button asChild size="icon" variant="ghost" aria-label="Download">
-                                        <a href={`/api/generate/jobs/${encodeURIComponent(card.jobId)}/file?download=true`}>
-                                          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
-                                        </a>
-                                      </Button>
-                                    </TooltipTrigger>
-                                    <TooltipContent>Download</TooltipContent>
-                                  </Tooltip>
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <Button size="icon" variant="ghost" aria-label="Open folder" onClick={async (e)=>{ e.preventDefault(); try { await apiFetch(`/api/generate/jobs/${encodeURIComponent(card.jobId || '')}/reveal`) } catch {} }}>
-                                        <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h5l2 3h9a1 1 0 0 1 1 1v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2z"/></svg>
-                                      </Button>
-                                    </TooltipTrigger>
-                                    <TooltipContent>Open folder</TooltipContent>
-                                  </Tooltip>
-                                  <Tooltip>
-                                    <TooltipTrigger asChild>
-                                      <Button asChild size="icon" variant="ghost" aria-label="View job">
-                                        <a href={`#jobs?id=${encodeURIComponent(card.jobId)}`}>
-                                          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14L21 3"/></svg>
-                                        </a>
-                                      </Button>
-                                    </TooltipTrigger>
-                                    <TooltipContent>View job</TooltipContent>
-                                  </Tooltip>
-                                </>
-                              )
-                            ) : (
-                              <a className="underline" href="#jobs">View jobs</a>
-                            )}
-                          </div>
-                        </div>
-                      ) : shouldHideAsCode ? (
-                        null
-                      ) : (
-                        <>{text}</>
-                      )}
-                    </div>
-                    {timeAgo && (
-                      <div className={`text-xs text-muted-foreground px-1 opacity-0 group-hover:opacity-100 transition-opacity duration-200 ${isUser ? 'text-right' : 'text-left'}`}>
-                        {timeAgo}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+            {history.map((m, idx) => (
+              <ChatMessage 
+                key={idx}
+                message={m}
+                index={idx}
+                isMetadataPrompt={isMetadataPrompt}
+                isMetadataResponse={isMetadataResponse}
+                isGenJobPrompt={isGenJobPrompt}
+                isGenJobResponse={isGenJobResponse}
+                latestRelevantJob={latestRelevantJob}
+                onOpenLogs={onOpenLogs}
+                markdownComponents={markdownComponents}
+              />
+            ))}
             {replying && (
               <div className="flex justify-start">
                 <div className="max-w-[75%] rounded-2xl px-3.5 py-2.5 bg-card border rounded-bl-md">
@@ -694,7 +860,7 @@ return (
           <Textarea
             placeholder="Type a message"
             value={msg}
-            onChange={(e) => setMsg(e.target.value)}
+            onChange={(e) => { signalActivity(); setMsg(e.target.value); }}
             onKeyDown={(e) => { if ((e.key === 'Enter' && (e.ctrlKey || e.metaKey))) { e.preventDefault(); send(); } }}
             className="flex-1 w-full pr-12 resize-none h-14 max-h-40"
           />

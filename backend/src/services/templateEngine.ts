@@ -33,22 +33,38 @@ export type TemplateMeta = {
 export function loadTemplate(slug: string, baseDir: string): LoadedTemplate | null {
   const dir = path.join(baseDir, slug)
   const hbs = path.join(dir, "template.hbs")
-  const docx = path.join(dir, "template.docx")
-  const xlsx = path.join(dir, "template.xlsx")
   const metaPath = path.join(dir, "template.json")
   let meta: TemplateMeta = {}
   try { if (fs.existsSync(metaPath)) meta = JSON.parse(fs.readFileSync(metaPath, "utf-8")) } catch {}
+  
+  // Check for handlebars template first
   if (fs.existsSync(hbs)) {
     const source = fs.readFileSync(hbs, "utf-8")
     const compiled = Handlebars.compile(source)
     return { kind: 'hbs', slug, dir, compiled, meta }
   }
-  if (fs.existsSync(docx)) {
-    return { kind: 'docx', slug, dir, templatePath: docx, meta }
+  
+  // Find any .docx or .xlsx file in the directory (not just hardcoded names)
+  try {
+    const files = fs.readdirSync(dir)
+    
+    // Check for DOCX files
+    const docxFile = files.find(f => f.toLowerCase().endsWith('.docx'))
+    if (docxFile) {
+      const docxPath = path.join(dir, docxFile)
+      return { kind: 'docx', slug, dir, templatePath: docxPath, meta }
+    }
+    
+    // Check for Excel files
+    const xlsxFile = files.find(f => f.toLowerCase().endsWith('.xlsx'))
+    if (xlsxFile) {
+      const xlsxPath = path.join(dir, xlsxFile)
+      return { kind: 'excel', slug, dir, templatePath: xlsxPath, meta }
+    }
+  } catch (err) {
+    console.error(`[TEMPLATE-ENGINE] Error reading template directory ${dir}:`, err)
   }
-  if (fs.existsSync(xlsx)) {
-    return { kind: 'excel', slug, dir, templatePath: xlsx, meta }
-  }
+  
   return null
 }
 

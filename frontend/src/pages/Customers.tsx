@@ -7,7 +7,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger, DialogDescription, DialogClose } from "../components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Icon } from "../components/icons";
-import { Maximize2, Minimize2, Search, ExternalLink, Download, FileText, FileSpreadsheet, FileCode, FileQuestion, FileType, Info, Loader2, Pin, PinOff, RefreshCw, Eye, AlertCircle, Trash, Upload, Zap, Sparkles } from "lucide-react";
+import { Maximize2, Minimize2, Search, ExternalLink, Download, FileText, FileSpreadsheet, FileCode, FileQuestion, FileType, Info, Loader2, Pin, PinOff, RefreshCw, Eye, AlertCircle, Trash, Upload, Zap, Sparkles, MessageSquare, Settings, Star, GripVertical } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipTrigger, TooltipProvider } from "../components/ui/tooltip";
 import { A, apiFetch, apiEventSource } from "../lib/api";
 import WorkspaceChat from "../components/WorkspaceChat";
@@ -21,6 +21,23 @@ import JobsPanel from "../components/JobsPanel";
 import { MetadataModal, type DocumentMetadata } from "../components/MetadataModal";
 import { useMetadata } from "../contexts/MetadataContext";
 import { useDebouncedState, useUserActivity } from "../lib/hooks";
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent,
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  useSortable,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 
 type Customer = { id: number; name: string; createdAt: string };
 type UploadItem = { name: string; path: string; size: number; modifiedAt: string };
@@ -33,6 +50,27 @@ export function CustomersPage() {
   const [loadingCustomers, setLoadingCustomers] = React.useState(true);
   const [name, setName] = React.useState("");
   const [selectedId, setSelectedId] = React.useState<number | null>(null);
+  
+  // Favorites persist across app runs via localStorage
+  const [favorites, setFavorites] = React.useState<Set<number>>(() => {
+    try {
+      const stored = localStorage.getItem('docsmith-favorite-customers');
+      return stored ? new Set(JSON.parse(stored)) : new Set();
+    } catch {
+      return new Set();
+    }
+  });
+  
+  // Custom sort order persists across app runs via localStorage
+  const [customOrder, setCustomOrder] = React.useState<number[]>(() => {
+    try {
+      const stored = localStorage.getItem('docsmith-customer-order');
+      return stored ? JSON.parse(stored) : [];
+    } catch {
+      return [];
+    }
+  });
+  
   const [uploads, setUploads] = React.useState<UploadItem[]>([]);
   const [loadingUploads, setLoadingUploads] = React.useState(false);
   const [generatedDocs, setGeneratedDocs] = React.useState<UploadItem[]>([]);
@@ -49,7 +87,7 @@ export function CustomersPage() {
   const [alsoDeleteWorkspace, setAlsoDeleteWorkspace] = React.useState<boolean>(false);
   const [uploadOpen, setUploadOpen] = React.useState(false);
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
-  const [counts, setCounts] = React.useState<Record<number, { docs?: number; chats?: number }>>({});
+  const [counts, setCounts] = React.useState<Record<number, { embedded?: number; generated?: number; chats?: number }>>({});
   const [pinningTest, setPinningTest] = React.useState<string | null>(null);
   const [pinnedDocs, setPinnedDocs] = React.useState<Set<string>>(new Set());
   const [countsLoading, setCountsLoading] = React.useState(false);
@@ -309,19 +347,48 @@ export function CustomersPage() {
         if (!r.ok) throw new Error(String(r.status));
         const data = await r.json().catch(() => ({}));
         const metrics: Array<{ id: number; docs: number; chats: number }> = Array.isArray(data?.metrics) ? data.metrics : [];
-        const map: Record<number, { docs?: number; chats?: number }> = {};
-        for (const m of metrics) map[m.id] = { docs: m.docs, chats: m.chats };
+        const map: Record<number, { embedded?: number; generated?: number; chats?: number }> = {};
+        
+        // First, populate with embedded docs and chats from metrics API
+        for (const m of metrics) {
+          map[m.id] = { embedded: m.docs, chats: m.chats };
+        }
+        
+        // Then fetch generated docs count for each customer
+        await Promise.allSettled(customers.map(async (c) => {
+          try {
+            const r = await apiFetch(`/api/documents/${c.id}/files`);
+            if (r.ok) {
+              const genDocs: UploadItem[] = await r.json();
+              const genCount = Array.isArray(genDocs) ? genDocs.length : 0;
+              map[c.id] = { ...(map[c.id] || {}), generated: genCount };
+            }
+          } catch {
+            // Silently fail, keep existing count
+          }
+        }));
+        
         if (!ignore) setCounts(map);
       } catch {
         // Fallback per-customer (limited to first 10 to reduce load)
         const list = customers.slice(0, 10);
-        const next: Record<number, { docs?: number; chats?: number }> = {};
+        const next: Record<number, { embedded?: number; generated?: number; chats?: number }> = {};
         await Promise.allSettled(list.map(async (c) => {
+          // Get embedded/uploaded documents
           try {
             const r = await apiFetch(`/api/uploads/${c.id}`);
             const items: UploadItem[] = await r.json().catch(() => []);
-            next[c.id] = { ...(next[c.id] || {}), docs: Array.isArray(items) ? items.length : 0 };
-          } catch { next[c.id] = { ...(next[c.id] || {}), docs: 0 } }
+            next[c.id] = { ...(next[c.id] || {}), embedded: Array.isArray(items) ? items.length : 0 };
+          } catch { next[c.id] = { ...(next[c.id] || {}), embedded: 0 } }
+          
+          // Get generated documents
+          try {
+            const r = await apiFetch(`/api/documents/${c.id}/files`);
+            const items: UploadItem[] = await r.json().catch(() => []);
+            next[c.id] = { ...(next[c.id] || {}), generated: Array.isArray(items) ? items.length : 0 };
+          } catch { next[c.id] = { ...(next[c.id] || {}), generated: 0 } }
+          
+          // Get chats
           try {
             const ws = await apiFetch(`/api/customers/${c.id}/workspace`).then((r) => r.ok ? r.json() : Promise.reject()).catch(() => null);
             const slug = ws?.slug as string | undefined;
@@ -341,15 +408,25 @@ export function CustomersPage() {
     return () => { ignore = true; };
   }, [customers]);
 
-  // Keep docs count in sync with selected customer's uploads list
+  // Keep embedded docs count in sync with selected customer's uploads list
   React.useEffect(() => {
     if (!selectedId) return;
     setCounts((prev) => {
-      const prevCount = prev[selectedId]?.docs;
+      const prevCount = prev[selectedId]?.embedded;
       if (prevCount === uploads.length) return prev;
-      return { ...prev, [selectedId]: { ...(prev[selectedId] || {}), docs: uploads.length } };
+      return { ...prev, [selectedId]: { ...(prev[selectedId] || {}), embedded: uploads.length } };
     });
   }, [uploads, selectedId]);
+
+  // Keep generated docs count in sync with selected customer's generated docs list
+  React.useEffect(() => {
+    if (!selectedId) return;
+    setCounts((prev) => {
+      const prevCount = prev[selectedId]?.generated;
+      if (prevCount === generatedDocs.length) return prev;
+      return { ...prev, [selectedId]: { ...(prev[selectedId] || {}), generated: generatedDocs.length } };
+    });
+  }, [generatedDocs, selectedId]);
 
   // Live refresh chat count only for selected customer's workspace
   // Pauses during active user input to prevent interruptions
@@ -1693,6 +1770,244 @@ export function CustomersPage() {
     }
   }
 
+  function toggleFavorite(customerId: number) {
+    setFavorites(prev => {
+      const newFavorites = new Set(prev);
+      if (newFavorites.has(customerId)) {
+        newFavorites.delete(customerId);
+      } else {
+        newFavorites.add(customerId);
+      }
+      // Persist to localStorage
+      localStorage.setItem('docsmith-favorite-customers', JSON.stringify(Array.from(newFavorites)));
+      return newFavorites;
+    });
+  }
+
+  // Sort customers: by custom order if exists, then favorites first, then alphabetically
+  const sortedCustomers = React.useMemo(() => {
+    const sorted = [...customers];
+    
+    // Create order map from customOrder array
+    const orderMap = new Map(customOrder.map((id, index) => [id, index]));
+    
+    sorted.sort((a, b) => {
+      // First check custom order
+      const aOrder = orderMap.has(a.id) ? orderMap.get(a.id)! : Infinity;
+      const bOrder = orderMap.has(b.id) ? orderMap.get(b.id)! : Infinity;
+      
+      if (aOrder !== bOrder) {
+        return aOrder - bOrder;
+      }
+      
+      // If no custom order, sort by favorites
+      const aFav = favorites.has(a.id);
+      const bFav = favorites.has(b.id);
+      if (aFav && !bFav) return -1;
+      if (!aFav && bFav) return 1;
+      
+      // Finally sort alphabetically
+      return a.name.localeCompare(b.name);
+    });
+    
+    return sorted;
+  }, [customers, favorites, customOrder]);
+
+  // Drag and drop sensors
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
+
+  // Handle drag end - saves new order to localStorage for persistence across app runs
+  function handleDragEnd(event: DragEndEvent) {
+    const { active, over } = event;
+
+    if (over && active.id !== over.id) {
+      const oldIndex = sortedCustomers.findIndex((c) => c.id === active.id);
+      const newIndex = sortedCustomers.findIndex((c) => c.id === over.id);
+      
+      const newOrder = arrayMove(sortedCustomers, oldIndex, newIndex).map(c => c.id);
+      setCustomOrder(newOrder);
+      // Persist order immediately to localStorage
+      localStorage.setItem('docsmith-customer-order', JSON.stringify(newOrder));
+    }
+  }
+
+  // Sortable Customer Card Component
+  function SortableCustomerCard({ customer }: { customer: Customer }) {
+    const {
+      attributes,
+      listeners,
+      setNodeRef,
+      transform,
+      transition,
+      isDragging,
+    } = useSortable({ id: customer.id });
+
+    const style = {
+      transform: CSS.Transform.toString(transform),
+      transition,
+      opacity: isDragging ? 0.5 : 1,
+    };
+
+    return (
+      <div ref={setNodeRef} style={style}>
+        <Card
+          className={
+            "group relative overflow-hidden transition-all duration-200 cursor-pointer hover:shadow-lg " +
+            (selectedId === customer.id 
+              ? "border-primary/70 shadow-md bg-gradient-to-br from-primary/5 to-primary/10" 
+              : "hover:border-primary/30 hover:bg-accent/30")
+          }
+          onClick={() => setSelectedId(customer.id)}
+        >
+          {/* Selection indicator bar */}
+          {selectedId === customer.id && (
+            <div className="absolute left-0 top-0 bottom-0 w-1 bg-gradient-to-b from-primary via-primary to-primary/50" />
+          )}
+          
+          <div className="p-2 sm:p-3 md:p-4 pl-3 sm:pl-4 md:pl-5">
+          {/* Header: Name and Action Buttons */}
+          <div className="flex items-start justify-between gap-1 sm:gap-2 mb-1.5 sm:mb-2">
+            <div className="min-w-0 flex-1 flex items-center gap-1 sm:gap-2">
+              {/* Drag Handle */}
+              <div
+                {...attributes}
+                {...listeners}
+                className="cursor-grab active:cursor-grabbing touch-none shrink-0"
+              >
+                <GripVertical className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-muted-foreground hover:text-foreground transition-colors" />
+              </div>
+              
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      toggleFavorite(customer.id);
+                    }}
+                    aria-label={favorites.has(customer.id) ? "Remove from favorites" : "Add to favorites"}
+                    className="h-5 w-5 sm:h-6 sm:w-6 shrink-0 hover:bg-accent"
+                  >
+                    <Star 
+                      className={`h-3 w-3 sm:h-3.5 sm:w-3.5 ${
+                        favorites.has(customer.id) 
+                          ? 'fill-yellow-500 text-yellow-500' 
+                          : 'text-muted-foreground'
+                      }`} 
+                    />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  {favorites.has(customer.id) ? "Remove from favorites" : "Add to favorites"}
+                </TooltipContent>
+              </Tooltip>
+              <h3 className="text-xs sm:text-sm md:text-base font-semibold truncate text-foreground">
+                {customer.name}
+              </h3>
+            </div>
+            
+            <div className="flex items-center gap-0.5 sm:gap-1">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      // TODO: Navigate to CustomerConfig page
+                      console.log('Navigate to config for:', customer.name);
+                    }}
+                    aria-label={`Settings for ${customer.name}`}
+                    className="h-6 w-6 sm:h-7 sm:w-7 hover:bg-accent"
+                  >
+                    <Settings className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Customer Settings</TooltipContent>
+              </Tooltip>
+              
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    size="icon"
+                    variant="ghost"
+                    disabled={deleting === customer.name}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      startDelete(customer);
+                    }}
+                    aria-label={`Delete ${customer.name}`}
+                    className="h-6 w-6 sm:h-7 sm:w-7 hover:bg-destructive/10 hover:text-destructive"
+                  >
+                    {deleting === customer.name ? (
+                      <Loader2 className="h-3 w-3 sm:h-3.5 sm:w-3.5 animate-spin" />
+                    ) : (
+                      <Icon.Trash className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>Delete Customer</TooltipContent>
+              </Tooltip>
+            </div>
+          </div>
+
+          {/* Compact Metrics */}
+          {counts[customer.id]?.embedded == null && counts[customer.id]?.generated == null && counts[customer.id]?.chats == null ? (
+            <div className="h-5 sm:h-6 rounded bg-muted/50 animate-pulse w-32 sm:w-48" />
+          ) : (
+            <div className="flex items-center gap-2 sm:gap-3 md:gap-4 text-xs sm:text-sm">
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div className="flex items-center gap-1 sm:gap-1.5">
+                    <Upload className="h-3 w-3 sm:h-3.5 sm:w-3.5 text-muted-foreground" />
+                    <span className="font-medium text-foreground">
+                      {counts[customer.id]?.embedded ?? "…"}
+                    </span>
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent>Embedded Documents</TooltipContent>
+              </Tooltip>
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div className="flex items-center gap-1 sm:gap-1.5">
+                    <Sparkles className="h-3 w-3 sm:h-3.5 sm:w-3.5 text-muted-foreground" />
+                    <span className="font-medium text-foreground">
+                      {counts[customer.id]?.generated ?? "…"}
+                    </span>
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent>Generated Documents</TooltipContent>
+              </Tooltip>
+
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <div className="flex items-center gap-1 sm:gap-1.5">
+                    <MessageSquare className="h-3 w-3 sm:h-3.5 sm:w-3.5 text-muted-foreground" />
+                    <span className="font-medium text-foreground">
+                      {counts[customer.id]?.chats ?? "…"}
+                    </span>
+                  </div>
+                </TooltipTrigger>
+                <TooltipContent>Chat Sessions</TooltipContent>
+              </Tooltip>
+            </div>
+          )}
+        </div>
+      </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6 animate-in fade-in-0 slide-in-from-top-2">
       <Breadcrumb>
@@ -1770,77 +2085,23 @@ export function CustomersPage() {
 
                   {loadingCustomers ? (
                     <div className="text-muted-foreground text-xs sm:text-sm">Loading...</div>
-                  ) : customers.length ? (
-                    <div className="space-y-1.5 sm:space-y-2">
-                      {customers.map((c) => (
-                        <div
-                          key={c.id}
-                          role="button"
-                          tabIndex={0}
-                          className={
-                            "group relative rounded-lg border p-2 sm:p-3 transition-all duration-200 cursor-pointer hover:shadow-md " +
-                            (selectedId === c.id 
-                              ? "bg-primary/10 border-primary/50 shadow-sm" 
-                              : "hover:bg-accent/50 hover:border-accent")
-                          }
-                          onClick={() => setSelectedId(c.id)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter" || e.key === " ") setSelectedId(c.id);
-                          }}
-                        >
-                          {/* Selection indicator */}
-                          {selectedId === c.id && (
-                            <div className="absolute left-0 top-1/2 -translate-y-1/2 w-0.5 sm:w-1 h-6 sm:h-8 bg-primary rounded-r" />
-                          )}
-                          
-                          {/* Left: name + counts */}
-                          <div className="flex items-center justify-between">
-                            <div className="min-w-0 flex-1">
-                              <div className="text-sm sm:text-base font-medium truncate">{c.name}</div>
-                              {counts[c.id]?.docs == null && counts[c.id]?.chats == null ? (
-                                <div className="flex items-center gap-1.5 sm:gap-2 mt-0.5">
-                                  <div className="h-2 w-12 sm:w-16 rounded bg-muted animate-pulse" />
-                                  <div className="h-2 w-12 sm:w-16 rounded bg-muted animate-pulse" />
-                                </div>
-                              ) : (
-                                <div className="text-xs text-muted-foreground">
-                                  {(() => {
-                                    const d = counts[c.id]?.docs;
-                                    const cm = counts[c.id]?.chats;
-                                    const dText = d == null ? "… docs" : `${d} doc${d === 1 ? "" : "s"}`;
-                                    const cText = cm == null ? "… chats" : `${cm} chat${cm === 1 ? "" : "s"}`;
-                                    return `${dText} • ${cText}`;
-                                  })()}
-                                </div>
-                              )}
-                            </div>
-
-                            {/* Right: actions (delete) */}
-                            <div className="opacity-60 group-hover:opacity-100 transition-opacity duration-200 ml-2 flex items-center gap-1">
-                              <Tooltip>
-                                <TooltipTrigger asChild>
-                                  <Button
-                                    size="icon"
-                                    variant="destructive"
-                                    disabled={deleting === c.name}
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      e.preventDefault();
-                                      startDelete(c);
-                                    }}
-                                    aria-label={`Delete ${c.name}`}
-                                    className="h-7 w-7 sm:h-9 sm:w-9"
-                                  >
-                                    {deleting === c.name ? "." : <Icon.Trash className="h-3 w-3 sm:h-4 sm:w-4" />}
-                                  </Button>
-                                </TooltipTrigger>
-                                <TooltipContent>Delete Customer</TooltipContent>
-                              </Tooltip>
-                            </div>
-                          </div>
+                  ) : sortedCustomers.length ? (
+                    <DndContext
+                      sensors={sensors}
+                      collisionDetection={closestCenter}
+                      onDragEnd={handleDragEnd}
+                    >
+                      <SortableContext
+                        items={sortedCustomers.map(c => c.id)}
+                        strategy={verticalListSortingStrategy}
+                      >
+                        <div className="space-y-2 sm:space-y-3">
+                          {sortedCustomers.map((c) => (
+                            <SortableCustomerCard key={c.id} customer={c} />
+                          ))}
                         </div>
-                      ))}
-                    </div>
+                      </SortableContext>
+                    </DndContext>
                   ) : (
                     <div className="text-muted-foreground text-xs sm:text-sm">No customers yet.</div>
                   )}
@@ -1928,8 +2189,26 @@ export function CustomersPage() {
                 <div className="p-4 border-b border-border/40 bg-muted/20">
                   <div className="flex items-center gap-3">
                     <TabsList className="inline-flex h-10 items-center justify-start rounded-md bg-muted p-1 text-muted-foreground">
-                      <TabsTrigger value="uploaded">Uploaded</TabsTrigger>
-                      <TabsTrigger value="generated">Generated</TabsTrigger>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <div>
+                            <TabsTrigger value="uploaded">Uploaded</TabsTrigger>
+                          </div>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          Documents uploaded and embedded to the customer workspace
+                        </TooltipContent>
+                      </Tooltip>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <div>
+                            <TabsTrigger value="generated">Generated</TabsTrigger>
+                          </div>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          Documents generated using templates and AI content generation
+                        </TooltipContent>
+                      </Tooltip>
                     </TabsList>
                     <div className="relative flex-1">
                       <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />

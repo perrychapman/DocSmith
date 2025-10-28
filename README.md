@@ -37,41 +37,63 @@ DocSmith streamlines document generation workflows by combining customer data ma
 
 ---
 
+
+
 ## Key Features
 
+### Identity Governance & SailPoint Integration
+- Automated document provisioning triggered by SailPoint events (onboarding, offboarding, access changes)
+- Identity-driven templates: populate documents using SailPoint attributes (roles, entitlements, access requests)
+- Seamless workflow integration: connect document jobs to SailPoint lifecycle events (joiner, mover, leaver)
+- Secure API integration and audit logging for compliance
+- Configurable mapping of SailPoint events to templates and delivery targets
+
+### AI-Powered Workspace Integration (AnythingLLM)
+- Native integration with AnythingLLM for context-aware document generation
+- Automatic workspace creation and document upload for semantic search
+- Embedding updates and document pinning to prioritize key files
+- AI-assisted template enhancement using workspace data
+- Metadata extraction and workspace indexing for improved search and automation
+- Chat-based document queries and template enhancement
+
 ### Customer Management
-- Comprehensive CRUD operations for customer records
-- Workspace linking with AnythingLLM for context-aware generation
+- CRUD operations for customer records
+- Workspace linking for context-aware generation
 - Customer-specific file storage and organization
 - Bulk document processing per customer
 
 ### Template System
 - TypeScript-based template generators with full type safety
-- Dynamic and static template modes for flexibility
+- Dynamic and static template modes for flexible document creation
 - Support for DOCX and Excel output formats
-- AI-assisted template enhancement using workspace context
 - Version-controlled template caching with automatic invalidation
 
-### Document Generation
+### Document Generation & Job Tracking
 - Asynchronous job queue with real-time status tracking
 - Pandoc integration for high-fidelity document assembly
 - Fallback HTML-to-DOCX conversion for portability
 - Comprehensive error handling and logging
 - Progress monitoring via Server-Sent Events
+- Detailed audit logs and exportable job history
 
-### AI Integration
-- Native AnythingLLM workspace integration
-- Document indexing for semantic search
-- Template enhancement with workspace-specific data
-- Metadata extraction from uploaded documents
-- Chat-based document queries
+### Database & Migration System
+- Local SQLite database with migration support
+- Versioned schema migrations and status API
 
 ### Desktop Features
 - Cross-platform Electron application (Windows, macOS, Linux)
 - Auto-update system with delta downloads
 - Native file system integration
-- Local SQLite database with migration support
 - System tray integration and background processing
+
+### Security & Compliance
+- SQL injection prevention with parameterized queries
+- Path traversal protection and sanitized file operations
+- Electron IPC channel whitelisting
+- Input validation and sandboxed template execution
+- Data isolation per customer and workspace
+- Secrets management and dependency security
+
 
 ---
 
@@ -389,18 +411,40 @@ Response:
 
 ---
 
-## AnythingLLM Integration
+
+## AnythingLLM & SailPoint Integration
+
+DocSmith integrates deeply with AnythingLLM for AI-powered features and now supports SailPoint identity governance workflows.
+
 
 DocSmith integrates deeply with AnythingLLM for AI-powered features.
 
-### Workspace Management
+
+### Workspace & Identity Management
+
+**AnythingLLM**
+- Automatic workspace creation per customer
+- Document upload and semantic search
+- Embedding updates and document pinning
+
+**SailPoint**
+- Identity-driven document generation
+- Event-based triggers for onboarding/offboarding
+- Secure API integration and audit logging
+
 
 - **Create Workspaces**: Automatic workspace creation per customer
 - **Document Upload**: Upload customer files to workspaces for semantic search
 - **Embedding Updates**: Refresh embeddings after document changes
 - **Document Pinning**: Prioritize important documents for queries
 
-### Chat Integration
+
+### Chat & Identity Event Integration
+
+**AnythingLLM chat** powers template enhancement, metadata extraction, and workspace indexing.
+
+**SailPoint events** trigger document jobs and inject identity context into templates.
+
 
 AnythingLLM chat powers multiple features:
 - **Template Enhancement**: AI modifies generators with workspace data
@@ -408,7 +452,12 @@ AnythingLLM chat powers multiple features:
 - **Workspace Indexing**: Generate searchable indexes of customer documents
 - **Query Mode**: One-off questions without polluting chat history
 
-### API Proxy
+
+### API Proxy & Identity Hooks
+
+All AnythingLLM requests route through `/api/anythingllm/*` proxy.
+SailPoint events are received via webhook endpoints and processed securely.
+
 
 All AnythingLLM requests route through `/api/anythingllm/*` proxy:
 - Centralized API key management
@@ -416,7 +465,11 @@ All AnythingLLM requests route through `/api/anythingllm/*` proxy:
 - Error handling and logging
 - Frontend accessibility
 
-### Auto-Discovery
+
+### Auto-Discovery & Identity Sync
+
+DocSmith auto-discovers AnythingLLM instances and synchronizes with SailPoint identity events for real-time document workflows.
+
 
 DocSmith automatically discovers AnythingLLM instances:
 - Scans common ports (3001, 3002, 50000-70000)

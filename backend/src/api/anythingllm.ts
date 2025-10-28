@@ -1272,7 +1272,7 @@ Provide a natural, conversational response that's easy to read.`;
           
           res.write(`data: ${JSON.stringify({ 
             type: 'status',
-            textResponse: `\n🔄 [ITERATION ${refinementIteration}/${MAX_REFINEMENT_ITERATIONS}]\n💭 ${refinementCheck.reasoning}\n🔍 Executing ${refinementCheck.followUpPlan.steps.length} additional ${refinementCheck.followUpPlan.steps.length === 1 ? 'query' : 'queries'}...\n\n` 
+            textResponse: `\n[ITERATION ${refinementIteration}/${MAX_REFINEMENT_ITERATIONS}]\n${refinementCheck.reasoning}\nExecuting ${refinementCheck.followUpPlan.steps.length} additional ${refinementCheck.followUpPlan.steps.length === 1 ? 'query' : 'queries'}...\n\n`
           })}\n\n`);
 
           // Execute follow-up plan
@@ -1398,37 +1398,42 @@ ${synthesisPrompt.split('FORMATTING INSTRUCTIONS:')[1] || ''}`;
           await new Promise(resolve => setTimeout(resolve, 20));
         }
 
-        // Step 7: Store locally
+        // Step 7: Store locally with retry logic
         const conversationId = generateConversationId();
         
-        await storeChatMessage({
-          workspaceSlug: slug,
-          customerId: sailpointContext.customerId,
-          role: 'user',
-          content: message,
-          conversationId,
-          messageIndex: 0,
-          sessionId: sessionId || 'user-interactive',
-          isVisible: 1
-        });
-        
-        await storeChatMessage({
-          workspaceSlug: slug,
-          customerId: sailpointContext.customerId,
-          role: 'assistant',
-          content: finalText,
-          conversationId,
-          messageIndex: 1,
-          sessionId: sessionId || 'user-interactive',
-          isVisible: 1,
-          sailpointContext: JSON.stringify({
-            plan: plan.userIntent,
-            stepsExecuted: execution.metadata.completedSteps,
-            totalItemsFetched: execution.metadata.totalItemsFetched
-          })
-        });
+        try {
+          await storeChatMessage({
+            workspaceSlug: slug,
+            customerId: sailpointContext.customerId,
+            role: 'user',
+            content: message,
+            conversationId,
+            messageIndex: 0,
+            sessionId: sessionId || 'user-interactive',
+            isVisible: 1
+          });
+          
+          await storeChatMessage({
+            workspaceSlug: slug,
+            customerId: sailpointContext.customerId,
+            role: 'assistant',
+            content: finalText,
+            conversationId,
+            messageIndex: 1,
+            sessionId: sessionId || 'user-interactive',
+            isVisible: 1,
+            sailpointContext: JSON.stringify({
+              plan: plan.userIntent,
+              stepsExecuted: execution.metadata.completedSteps,
+              totalItemsFetched: execution.metadata.totalItemsFetched
+            })
+          });
 
-        logInfo(`[SAILPOINT_STREAM] Conversation stored locally: ${conversationId}`);
+          logInfo(`[SAILPOINT_STREAM] Conversation stored locally: ${conversationId}`);
+        } catch (storeError: any) {
+          logError('[SAILPOINT_STREAM] Failed to store conversation:', storeError);
+          // Don't fail the stream if storage fails, but log it clearly
+        }
 
         // Close stream
         res.write(`data: ${JSON.stringify({ 

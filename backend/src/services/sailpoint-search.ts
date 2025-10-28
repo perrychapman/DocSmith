@@ -11,8 +11,8 @@
  * - Accurate counts via X-Total-Count header
  */
 
-import { sailpointRequest } from './sailpoint.js';
-import { logInfo, logError } from '../utils/logger.js';
+import { sailpointRequest } from './sailpoint';
+import { logInfo, logError } from '../utils/logger';
 
 export interface SearchQuery {
   indices: string[];

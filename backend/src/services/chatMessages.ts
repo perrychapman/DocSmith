@@ -48,6 +48,11 @@ export function storeChatMessage(message: ChatMessage): Promise<number> {
       ? new Date(message.sentAt).toISOString() 
       : new Date().toISOString();
     
+    const contentLength = message.content?.length || 0;
+    const contextLength = message.sailpointContext?.length || 0;
+    
+    logInfo(`[CHAT_MESSAGES] Storing ${message.role} message (content: ${contentLength} chars, context: ${contextLength} chars)`);
+    
     const params = [
       message.workspaceSlug,
       message.customerId || null,
@@ -63,10 +68,10 @@ export function storeChatMessage(message: ChatMessage): Promise<number> {
     
     db.run(sql, params, function(err) {
       if (err) {
-        logError('[CHAT_MESSAGES] Failed to store message:', err);
+        logError(`[CHAT_MESSAGES] Failed to store ${message.role} message (${contentLength} chars):`, err);
         reject(err);
       } else {
-        logInfo(`[CHAT_MESSAGES] Stored message ${this.lastID} for workspace ${message.workspaceSlug}`);
+        logInfo(`[CHAT_MESSAGES] ✓ Stored message ${this.lastID} for workspace ${message.workspaceSlug} (${message.role})`);
         resolve(this.lastID);
       }
     });

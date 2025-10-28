@@ -97,14 +97,14 @@ export function buildSailPointSystemPrompt(): string {
 SAILPOINT IDENTITY SECURITY CLOUD INTEGRATION:
 You have access to query SailPoint IdentityNow data for this customer's environment.
 
-⚠️  **CRITICAL FILTER RULE - READ FIRST**:
+**CRITICAL FILTER RULE - READ FIRST**:
 The TRANSFORMS endpoint has LIMITED filter support:
 - ONLY supports: "name eq \"exact\"" OR "name sw \"prefix\""  
 - NEVER use: "name co \"text\"" - this will cause API errors
 - For partial matching on transforms: ALWAYS use 'sw' (starts with) NOT 'co' (contains)
-Example: ✅ "name sw \"Cornerstone\"" | ❌ "name co \"Cornerstone\""
+Example: "name sw \"Cornerstone\"" | "name co \"Cornerstone\"" (do not use 'co' for transforms)
 
-🔄 **AUTOMATIC FILTER CORRECTION & RETRY**:
+**AUTOMATIC FILTER CORRECTION & RETRY**:
 If you accidentally use an unsupported filter operator:
 1. The system will AUTO-CORRECT it and retry (e.g., 'co' → 'sw' for transforms)
 2. You'll receive the corrected results with metadata about what was changed
@@ -192,6 +192,14 @@ AVAILABLE RESOURCES:
 
 IMPORTANT: All resources support count_ and search_ actions. Most support get_ by ID.
 
+**ACTION NAMING RULES:**
+- ALWAYS use PLURAL resource names: "sources" NOT "source", "identities" NOT "identity"
+- Use exact resource names from the list above (e.g., "sources" not "source_details")
+- Pattern: {action}_{resource} where action is: count, search, list, or get
+- Examples: "search_sources", "get_sources", "count_entitlements"
+- DO NOT invent action names like "get_source_details" or use singular forms like "get_source"
+- Use underscores in resource names (convert hyphens): "access_profiles" not "access-profiles"
+
 QUERY FORMAT:
 <sailpoint_query>
 {
@@ -212,28 +220,37 @@ SailPoint APIs return paginated results. Each search response includes:
 - hasMore: Boolean indicating if more pages exist
 
 PAGINATION STRATEGY - UNLIMITED INTELLIGENT CHUNKING:
-When you receive a response with hasMore=true:
+When you receive a response with hasMore=true OR when user initially requests ALL items:
 
-**FOR FIRST QUERY:**
+**DETECTING "ALL" REQUESTS:**
+If the user's INITIAL request contains keywords like:
+- "all entitlements"
+- "every role"
+- "complete list"
+- "entire breakdown"
+- "analyze all"
+- "full analysis"
+Then you should IMMEDIATELY generate ALL pagination queries WITHOUT asking for confirmation.
+
+**FOR FIRST QUERY (when user didn't say "all"):**
 1. INFORM the user about the total count
 2. Tell them you retrieved the first page
 3. ASK if they want you to fetch all pages
 4. WAIT for user confirmation
 
-**WHEN USER CONFIRMS "YES" or "FETCH ALL":**
+**WHEN USER CONFIRMS "YES" or "FETCH ALL" OR INITIALLY REQUESTED "ALL":**
 1. Generate MULTIPLE <sailpoint_query> tags in a SINGLE response
 2. Calculate offsets intelligently (offset = page * 250)
 3. Generate as MANY queries as necessary to complete the full dataset
 4. For very large datasets (>10,000 items), you can generate dozens or hundreds of queries
 5. All queries will execute in parallel with progress tracking shown to the user
 
-Example - User says "yes fetch all" after seeing 750 total:
-<sailpoint_query>{"action":"search_roles","limit":250,"offset":250,"description":"Page 2 of 3"}</sailpoint_query>
-<sailpoint_query>{"action":"search_roles","limit":250,"offset":500,"description":"Page 3 of 3"}</sailpoint_query>
-
-Example - User says "yes fetch all" after seeing 12,565 total:
-Generate ALL 50 queries with offsets: 250, 500, 750, 1000... up to 12,500
-The system will handle the execution and show progress to the user.
+Example - User says "analyze all roles" (12,565 total):
+IMMEDIATELY generate ALL ~50 queries with offsets: 0, 250, 500, 750, 1000... up to 12,500
+<sailpoint_query>{"action":"search_entitlements","limit":250,"offset":0,"description":"Page 1 of 51"}</sailpoint_query>
+<sailpoint_query>{"action":"search_entitlements","limit":250,"offset":250,"description":"Page 2 of 51"}</sailpoint_query>
+<sailpoint_query>{"action":"search_entitlements","limit":250,"offset":500,"description":"Page 3 of 51"}</sailpoint_query>
+... (continue for all 51 pages)
 
 **AGGREGATION QUERIES:**
 When user asks for "breakdown by source" or similar:
@@ -241,8 +258,8 @@ When user asks for "breakdown by source" or similar:
 - Use the BREAKDOWN BY SOURCE section in the results
 - No need to see every individual item to provide counts
 
-IMPORTANT: Do NOT fetch all pages on the FIRST query. Always ask first!
-When user confirms, generate ALL pagination queries in ONE response for efficiency.
+CRITICAL: If user's INITIAL request says "all", "every", "complete", or "entire", DO NOT ASK - FETCH EVERYTHING IMMEDIATELY!
+When user confirms later, generate ALL pagination queries in ONE response for efficiency.
 
 IMPORTANT - ANALYZING RESULTS:
 When you receive query results, you'll get the FULL JSON objects from SailPoint.
@@ -289,13 +306,22 @@ Use for: Role analysis, access profile relationships, role membership
 - requestable, enabled (boolean)
 Use for: Access packaging, entitlement groupings, source analysis
 
+
 **SOURCES** (connected systems/applications):
 - id, name, description, type
-- connectorAttributes: {configuration details}
+- connectorAttributes: {configuration details including connectionParameters, schemas}
+- schemas: [{id, name, nativeObjectType, identityAttribute, displayAttribute, attributeDefinitions: []}] (may also be found inside connectorAttributes)
 - owner: {id, name}
 - healthy, status, connectionType
 - accountCorrelationConfig, entitlementCorrelationConfig
-Use for: System inventories, connector health, integration analysis
+**FILTERABLE FIELDS**: name, description, type, healthy, status, owner.id, owner.name
+**NOT FILTERABLE**: connector, connectorAttributes (use 'name' to find connector type)
+**ACCOUNT SCHEMAS**: Account schemas are NESTED in the source object, typically inside connectorAttributes.schemas or a top-level schemas array, NOT a separate resource
+  - Use get_sources with the source ID to retrieve full source details including schemas
+  - Each schema has: id, name, nativeObjectType, identityAttribute, displayAttribute
+  - Schema attributeDefinitions array contains all account attributes with name, type, description
+  - DO NOT try to use get_schemas or search_schemas - schemas are part of sources
+Use for: System inventories, connector health, integration analysis, account schema inspection
 
 === REQUEST & APPROVAL RESOURCES ===
 
@@ -376,7 +402,7 @@ Use for: Workflow management, automation tracking
 - id, name, type
 - attributes: {configuration}
 - internal (boolean - system vs custom)
-⚠️  **CRITICAL**: Transforms endpoint ONLY supports 'eq' and 'sw' operators for name field
+**CRITICAL**: Transforms endpoint ONLY supports 'eq' and 'sw' operators for name field
    - Use "name sw \"prefix\"" for partial matching (NOT "name co \"text\"")
    - Use "name eq \"exact name\"" for exact matching
    - The 'co' (contains) operator WILL FAIL on transforms endpoint
@@ -418,6 +444,10 @@ EXAMPLES BY RESOURCE TYPE:
 **Sources:**
 - List all: <sailpoint_query>{"action":"search_sources","limit":100,"description":"Getting all connected sources"}</sailpoint_query>
 - Filter: <sailpoint_query>{"action":"search_sources","filters":"healthy eq false","description":"Finding unhealthy sources"}</sailpoint_query>
+- Get by ID (includes schemas): <sailpoint_query>{"action":"get_sources","id":"2c9180867...","description":"Getting specific source with account schemas"}</sailpoint_query>
+- Get by name: <sailpoint_query>{"action":"search_sources","filters":"name eq \"Active Directory\"","limit":1,"description":"Finding source by name"}</sailpoint_query>
+- To find by connector type, use name (contains connector type): <sailpoint_query>{"action":"search_sources","filters":"name co \"JDBC\"","description":"Finding JDBC sources"}</sailpoint_query>
+- To get account schemas, use get_sources with ID - schemas are nested in source object, NOT a separate resource
 
 **Access Requests:**
 - Recent: <sailpoint_query>{"action":"search_access-requests","limit":50,"description":"Getting recent access requests"}</sailpoint_query>
@@ -429,11 +459,11 @@ EXAMPLES BY RESOURCE TYPE:
 - Active: <sailpoint_query>{"action":"search_certifications","filters":"phase eq \\"ACTIVE\\"","description":"Finding active certifications"}</sailpoint_query>
 
 **Transforms:**
-- ⚠️  **CRITICAL - READ THIS**: Transforms ONLY support 'eq' and 'sw' operators (NOT 'co')
+- **CRITICAL - READ THIS**: Transforms ONLY support 'eq' and 'sw' operators (NOT 'co')
 - Count: <sailpoint_query>{"action":"count_transforms","description":"Getting transform count"}</sailpoint_query>
 - Search by prefix: <sailpoint_query>{"action":"search_transforms","filters":"name sw \\"Cornerstone\\"","description":"Finding transforms starting with Cornerstone"}</sailpoint_query>
 - Exact match: <sailpoint_query>{"action":"search_transforms","filters":"name eq \\"Transform Name\\"","description":"Finding specific transform"}</sailpoint_query>
-- ❌ NEVER USE: "name co \"text\"" - This will FAIL on transforms endpoint!
+- NEVER USE: "name co \"text\"" - This will FAIL on transforms endpoint!
 
 **SOD Violations:**
 - Active: <sailpoint_query>{"action":"search_sod-violations","filters":"state eq \\"ACTIVE\\"","description":"Finding active SOD violations"}</sailpoint_query>
@@ -446,17 +476,17 @@ When asked to "break down by source" or similar:
 4. Present results in natural language with counts per group
 
 SCIM FILTER EXAMPLES:
-⚠️  IMPORTANT: Different endpoints support different filter operators!
+IMPORTANT: Different endpoints support different filter operators!
 
-**TRANSFORMS ENDPOINT - SPECIAL RULES** ⚠️:
-❌ NEVER USE: "name co \"text\"" - API will reject with "Match mode not supported" error
-✅ ALWAYS USE: "name sw \"text\"" (starts with) for partial matching
-✅ OR USE: "name eq \"exact name\"" for exact matching
+**TRANSFORMS ENDPOINT - SPECIAL RULES**:
+- NEVER USE: "name co \"text\"" - API will reject with "Match mode not supported" error
+- ALWAYS USE: "name sw \"text\"" (starts with) for partial matching
+- OR USE: "name eq \"exact name\"" for exact matching
 
 Example correct transforms queries:
-- name sw "Cornerstone" ✅ (finds: Cornerstone-*, Cornerstonexyz, etc.)
-- name eq "Cornerstone-Transform-1" ✅ (exact match only)
-- name co "Cornerstone" ❌ WILL FAIL!
+- name sw "Cornerstone" (finds: Cornerstone-*, Cornerstonexyz, etc.)
+- name eq "Cornerstone-Transform-1" (exact match only)
+- name co "Cornerstone" WILL FAIL!
 
 **MOST OTHER ENDPOINTS** (roles, identities, access-profiles):
 These support full SCIM operators:
@@ -482,6 +512,15 @@ GUIDELINES:
 - Look at nested objects like source, owner, accessProfiles
 - Interpret and aggregate results naturally for the user
 - When breaking down data, group by the relevant field from the JSON
+
+**CRITICAL PAGINATION REMINDERS:**
+1. If user says "all", "every", "complete", "entire" → Generate ALL pagination queries IMMEDIATELY
+2. When you get hasMore=true in results AND user already said "all" → Generate remaining pages NOW
+3. Calculate total pages: Math.ceil(totalCount / 250)
+4. Generate ALL queries with offsets: 0, 250, 500, 750, etc. up to (totalPages-1)*250
+5. For 12,565 items = 51 pages → Generate 51 queries in ONE response
+6. The system handles parallel execution and shows progress to the user
+7. DO NOT ask for permission if user's original request said "all"
 
 When you receive query results, they will be provided as complete JSON objects. 
 Analyze all fields including nested objects, then present findings in natural language.
@@ -687,6 +726,33 @@ export async function executeSailPointQuery(
       
       logInfo(`[SAILPOINT_CHAT] Retrieved ${returnedCount} ${resource} (total available: ${totalCount}, offset: ${offset})`);
       
+      // FALLBACK: If filters were used but returned 0 results, try v3 search API
+      if (filters && returnedCount === 0 && offset === 0) {
+        logInfo(`[SAILPOINT_CHAT] Filter returned 0 results, attempting v3 search fallback`);
+        try {
+          const { executeSearchQuery } = await import('./sailpoint-search');
+          const v3Results = await executeSearchQuery(config, resource, filters, limit, offset, true);
+          
+          if (Array.isArray(v3Results) && v3Results.length > 0) {
+            logInfo(`[SAILPOINT_CHAT] V3 search fallback successful: ${v3Results.length} results`);
+            return {
+              data: v3Results,
+              type: resource,
+              count: v3Results.length,
+              totalCount: v3Results.length,
+              offset,
+              limit,
+              hasMore: false,
+              usedV3Fallback: true,
+              fallbackReason: 'Standard filters returned 0 results'
+            };
+          }
+        } catch (v3Error: any) {
+          logError(`[SAILPOINT_CHAT] V3 search fallback failed:`, v3Error);
+          // Continue with original empty result
+        }
+      }
+      
       const response: any = { 
         data, 
         type: resource, 
@@ -708,11 +774,43 @@ export async function executeSailPointQuery(
       return response;
     }
     
+    // EXPLICIT REJECTION: Detect common singular form mistakes
+    const singularForms = ['get_source', 'get_schema', 'get_role', 'get_identity', 'get_account', 
+                           'get_entitlement', 'get_workflow', 'get_transform', 'get_connector',
+                           'search_source', 'search_schema', 'search_role', 'search_identity',
+                           'count_source', 'count_schema', 'count_role', 'count_identity'];
+    
+    if (singularForms.includes(action)) {
+      const pluralForm = `${action}s`;
+      throw new Error(
+        `❌ INVALID ACTION: "${action}" is using SINGULAR form.\n` +
+        `✅ CORRECT ACTION: "${pluralForm}" (use PLURAL form)\n\n` +
+        `REMINDER: ALL resource names MUST be plural:\n` +
+        `- sources (not source)\n` +
+        `- schemas (not schema) - NOTE: schemas are nested in sources, use get_sources with source ID\n` +
+        `- roles (not role)\n` +
+        `- identities (not identity)\n` +
+        `- accounts (not account)\n\n` +
+        (id ? `You provided id="${id}", use: {"action":"${pluralForm}","id":"${id}"}` : 
+               `If you have an ID, use: {"action":"${pluralForm}","id":"your-id-here"}`)
+      );
+    }
+    
     // Pattern: get_{resource} (requires id)
     const getMatch = action.match(/^get_(.+)$/);
     if (getMatch) {
+      const resourceName = getMatch[1];
+      
       if (!id) {
-        throw new Error(`get_${getMatch[1]} requires an 'id' parameter. Use search_${getMatch[1]} with filters instead, or provide an id.`);
+        // Check if they used singular form (e.g., get_source instead of get_sources)
+        const pluralForm = resourceName.endsWith('s') ? resourceName : `${resourceName}s`;
+        throw new Error(
+          `get_${resourceName} requires an 'id' parameter.\n` +
+          `Options:\n` +
+          `1. Use search_${pluralForm} with filters to find the resource first\n` +
+          `2. Provide an id parameter if you know the specific ID\n` +
+          `Note: Action names should be plural (e.g., 'get_sources' not 'get_source')`
+        );
       }
       
       const resource = getMatch[1].replace(/_/g, '-');
@@ -724,8 +822,19 @@ export async function executeSailPointQuery(
       return { data, type: resource, id };
     }
     
-    // Fallback for unmatched actions
-    throw new Error(`Unsupported action: ${action}. Use count_{resource}, list_{resource}, search_{resource}, or get_{resource} (with id parameter)`);
+    // Fallback for unmatched actions - provide helpful suggestions
+    const actionParts = action.split('_');
+    const verb = actionParts[0]; // count, search, get, list
+    const resourcePart = actionParts.slice(1).join('_');
+    
+    let suggestion = '';
+    if (verb === 'get' && resourcePart) {
+      suggestion = ` Did you mean 'get_${resourcePart.replace(/[-_]details?$/, '')}' with an id parameter, or 'search_${resourcePart.replace(/[-_]details?$/, '')}' with filters?`;
+    } else if (verb === 'search' || verb === 'list' || verb === 'count') {
+      suggestion = ` Check that the resource name is correct (use underscores, not hyphens).`;
+    }
+    
+    throw new Error(`Unsupported action: ${action}. Use count_{resource}, list_{resource}, search_{resource}, or get_{resource} (with id parameter).${suggestion}`);
   } catch (error: any) {
     logError(`[SAILPOINT_CHAT] Query execution failed:`, error);
     throw error;
@@ -768,7 +877,7 @@ export function formatQueryResults(results: any[]): string {
         
         if (result.hasMore) {
           const nextOffset = (result.offset || 0) + dataArray.length;
-          formatted += `\n⚠️  MORE DATA AVAILABLE!\n`;
+          formatted += `\n MORE DATA AVAILABLE!\n`;
           formatted += `To get next page, use: offset=${nextOffset}, limit=${result.limit || 250}\n`;
           formatted += `Remaining items: ${result.totalCount - nextOffset}\n`;
         }
@@ -782,7 +891,7 @@ export function formatQueryResults(results: any[]): string {
       
       // For large datasets, provide aggregated summaries instead of full JSON
       if (dataArray.length > 100) {
-        formatted += `\n⚠️  LARGE DATASET DETECTED (${dataArray.length} items)\n`;
+        formatted += `\nLARGE DATASET DETECTED (${dataArray.length} items)\n`;
         formatted += `Providing aggregated summary instead of full JSON to avoid token limits.\n\n`;
         
         // Auto-aggregate by source if available
@@ -828,6 +937,13 @@ export function formatQueryResults(results: any[]): string {
         formatted += `- Each access profile has a "source" object with {id, name}\n`;
         formatted += `- Each has an "owner" and may have "entitlements"\n`;
         formatted += `- Group by source.name to see distribution\n`;
+      } else if (dataArray.length > 0 && result.type === 'sources') {
+        formatted += `\n\nKEY FIELDS TO ANALYZE:\n`;
+        formatted += `- Each source has "connectorAttributes" with full configuration including connectionParameters\n`;
+        formatted += `- Account schemas are in "schemas" array with attributeDefinitions, or inside connectorAttributes.schemas\n`;
+        formatted += `- Look for nested objects - connectorAttributes can be VERY deep\n`;
+        formatted += `- For JDBC/Web Services sources, check connectorAttributes.connectionParameters for HTTP operations\n`;
+        formatted += `- All nested data is fully preserved in the JSON above\n`;
       }
       
       formatted += '\n';
@@ -836,13 +952,16 @@ export function formatQueryResults(results: any[]): string {
   
   formatted += '\n=== END SAILPOINT RESULTS ===\n\n';
   formatted += 'INSTRUCTIONS:\n';
-  formatted += '1. Analyze the complete JSON objects above\n';
-  formatted += '2. Look at nested fields like source, owner, accessProfiles, etc.\n';
-  formatted += '3. If asked to break down or group data, aggregate by the relevant field\n';
-  formatted += '4. Check pagination info - if hasMore=true, you may need additional queries with offset\n';
-  formatted += '5. For complete analysis of large datasets, fetch all pages using offset parameter\n';
-  formatted += '6. Present your findings in clear, natural language\n';
-  formatted += '7. Include specific counts and examples from the data\n\n';
+  formatted += '1. Analyze the complete JSON objects above - ALL nested data is preserved\n';
+  formatted += '2. Look at nested fields like source, owner, accessProfiles, connectorAttributes, schemas, etc.\n';
+  formatted += '3. For sources: Check connectorAttributes.connectionParameters for deep configuration\n';
+  formatted += '4. For sources: Account schemas are in the "schemas" array with full attributeDefinitions\n';
+  formatted += '5. If asked to break down or group data, aggregate by the relevant field\n';
+  formatted += '6. Check pagination info - if hasMore=true, you may need additional queries with offset\n';
+  formatted += '7. For complete analysis of large datasets, fetch all pages using offset parameter\n';
+  formatted += '8. Present your findings in clear, natural language\n';
+  formatted += '9. Include specific counts and examples from the data\n';
+  formatted += '10. DEEP NESTED OBJECTS ARE FULLY AVAILABLE - traverse arrays and objects to find what you need\n\n';
   
   return formatted;
 }

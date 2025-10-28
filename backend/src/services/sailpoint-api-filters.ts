@@ -339,7 +339,7 @@ export function getFilterDocumentation(endpoint: string): string {
   let doc = `FILTER SUPPORT FOR /${endpoint}:\n\n`;
   
   if (config.notes) {
-    doc += `⚠️  ${config.notes}\n\n`;
+  doc += `${config.notes}\n\n`;
   }
 
   doc += `Available Filters:\n`;
@@ -377,6 +377,13 @@ export function correctFilter(endpoint: string, filterString: string): {
   const changes: string[] = [];
   let corrected = filterString;
   let wasModified = false;
+
+  // Special case: sources endpoint with 'connector' field (not supported)
+  if (endpoint === 'sources' && /\bconnector\s+(eq|co|sw)\s+/i.test(corrected)) {
+    wasModified = true;
+    corrected = corrected.replace(/\bconnector\s+(eq|co|sw)\s+/gi, 'name co ');
+    changes.push(`Changed 'connector' field to 'name' (connector field not filterable on sources - use name which contains connector type)`);
+  }
 
   // Parse filter (simple regex-based for common cases)
   // Format: "field operator value" or "field operator \"value\""

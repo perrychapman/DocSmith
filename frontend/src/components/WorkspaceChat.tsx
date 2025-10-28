@@ -9,7 +9,7 @@ import { Icon } from "./icons";
 import { toast } from "sonner";
 import { A, apiFetch } from "../lib/api";
 import { readSSEStream, formatTimeAgo } from "../lib/utils";
-import { Copy, Check, Download } from "lucide-react";
+import { Copy, Check, Download, FileText } from "lucide-react";
 import { useUserActivity } from "../lib/hooks";
 
 type Thread = { id?: number; slug?: string; name?: string };
@@ -414,6 +414,173 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
     toast.success('Response exported successfully');
   }, [customerName]);
 
+  // Export single message to Word
+  const handleExportMessageToWord = React.useCallback(async (message: any) => {
+    if (!slug) {
+      toast.error('No workspace selected');
+      return;
+    }
+
+    try {
+      const messageId = message.id ?? message._id ?? message.uuid;
+      if (!messageId) {
+        toast.error('Message ID not found');
+        return;
+      }
+
+      // Call the export API for a single message
+      const response = await fetch(`/api/anythingllm/workspace/${slug}/export-chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          sessionId: 'user-interactive',
+          messageIds: [messageId],
+          includeMetadata: false, // No SailPoint metadata for individual exports
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Export failed');
+      }
+
+      // Download the file
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      
+      const timestamp = message.sentAt ?? message.createdAt ?? new Date();
+      const date = new Date(timestamp);
+      const dateStr = date.toISOString().replace(/[:.]/g, '-').split('T')[0];
+      const timeStr = date.toTimeString().split(' ')[0].replace(/:/g, '-');
+      const filename = `ai-response-${dateStr}-${timeStr}.docx`;
+      
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      toast.success('Response exported to Word');
+    } catch (error) {
+      console.error('Export error:', error);
+      toast.error('Failed to export response to Word');
+    }
+  }, [slug]);
+
+  // Export entire conversation handler
+  const handleExportConversation = React.useCallback(() => {
+    if (history.length === 0) {
+      toast.error('No messages to export');
+      return;
+    }
+
+    // Build export content
+    let exportContent = '# Chat Conversation Export\n\n';
+    
+    const date = new Date();
+    exportContent += `**Workspace:** ${slug}\n`;
+    exportContent += `**Export Date:** ${date.toLocaleString()}\n`;
+    if (customerName) {
+      exportContent += `**Customer:** ${customerName}\n`;
+    }
+    exportContent += `**Messages:** ${history.length}\n\n`;
+    exportContent += '---\n\n';
+
+    // Export all messages
+    history.forEach((message, index) => {
+      const role = message.role === 'user' ? '👤 **User**' : '🤖 **Assistant**';
+      const timestamp = message.sentAt ? new Date(message.sentAt).toLocaleString() : '';
+      
+      exportContent += `## ${role}`;
+      if (timestamp) {
+        exportContent += ` - ${timestamp}`;
+      }
+      exportContent += '\n\n';
+      
+      // Add SailPoint metadata if available
+      if (message.sailpointContext) {
+        try {
+          const sailpointMeta = JSON.parse(message.sailpointContext);
+          if (sailpointMeta.stepsExecuted || sailpointMeta.totalItemsFetched) {
+            exportContent += `*SailPoint Query: ${sailpointMeta.stepsExecuted || 0} steps, ${sailpointMeta.totalItemsFetched || 0} items*\n\n`;
+          }
+        } catch (e) {
+          // Ignore parse errors
+        }
+      }
+      
+      exportContent += message.content + '\n\n';
+      
+      if (index < history.length - 1) {
+        exportContent += '---\n\n';
+      }
+    });
+
+    // Create blob and download
+    const blob = new Blob([exportContent], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    const filename = `chat-conversation-${slug}-${date.toISOString().split('T')[0]}.md`;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+
+    toast.success(`Exported ${history.length} messages to Markdown`);
+  }, [history, slug, customerName]);
+
+  // Export chat to Word document
+  const handleExportToWord = React.useCallback(async () => {
+    if (history.length === 0) {
+      toast.error('No messages to export');
+      return;
+    }
+
+    setExporting(true);
+    try {
+      const messageIds = history.map((msg: any) => msg.id).filter(Boolean);
+      
+      const response = await apiFetch(`/api/anythingllm/workspace/${slug}/export-chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          sessionId: 'user-interactive',
+          messageIds: messageIds.length > 0 ? messageIds : undefined,
+          includeMetadata: true
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`Export failed: ${response.statusText}`);
+      }
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      const filename = `chat-export-${slug}-${new Date().toISOString().split('T')[0]}.docx`;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+
+      toast.success(`Exported ${history.length} messages to Word`);
+    } catch (error) {
+      console.error('Failed to export to Word:', error);
+      toast.error('Failed to export chat to Word');
+    } finally {
+      setExporting(false);
+    }
+  }, [history, slug]);
+
   const latestRelevantJob = React.useCallback(() => wsJobs[0], [wsJobs]);
 
   // PERFORMANCE: Memoize the displayed messages to prevent unnecessary re-computations
@@ -429,7 +596,8 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
     markdownComponents,
     getMessageKey,
     onCopyMessage,
-    onExportMessage
+    onExportMessage,
+    onExportMessageToWord
   }: {
     messages: any[];
     latestRelevantJob: () => Job | undefined;
@@ -438,6 +606,7 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
     getMessageKey: (m: any, idx: number) => string;
     onCopyMessage: (message: any) => void;
     onExportMessage: (message: any) => void;
+    onExportMessageToWord: (message: any) => void;
   }) => {
     return (
       <>
@@ -451,6 +620,7 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
             markdownComponents={markdownComponents}
             onCopyMessage={onCopyMessage}
             onExportMessage={onExportMessage}
+            onExportMessageToWord={onExportMessageToWord}
           />
         ))}
       </>
@@ -467,7 +637,8 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
     onOpenLogs,
     markdownComponents,
     onCopyMessage,
-    onExportMessage
+    onExportMessage,
+    onExportMessageToWord
   }: { 
     message: any; 
     index: number; 
@@ -476,6 +647,7 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
     markdownComponents: any;
     onCopyMessage: (message: any) => void;
     onExportMessage: (message: any) => void;
+    onExportMessageToWord: (message: any) => void;
   }) => {
     const m = message;
     const isUser = (String(m.role || '')).toLowerCase() === 'user';
@@ -592,12 +764,26 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
                       variant="ghost"
                       className="h-7 w-7"
                       onClick={() => onExportMessage(m)}
-                      aria-label="Export response"
+                      aria-label="Export response (Markdown)"
                     >
                       <Download className="h-3.5 w-3.5" />
                     </Button>
                   </TooltipTrigger>
-                  <TooltipContent>Export response</TooltipContent>
+                  <TooltipContent>Export to Markdown</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-7 w-7"
+                      onClick={() => onExportMessageToWord(m)}
+                      aria-label="Export response to Word"
+                    >
+                      <FileText className="h-3.5 w-3.5" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Export to Word</TooltipContent>
                 </Tooltip>
               </div>
             )}
@@ -1034,6 +1220,24 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
         setStreamingProgress(''); // Clear progress when done
         activeStreamRef.current = false; // Stream complete
         activeResponseRef.current = null; // Clear response reference
+        
+        // Reload messages from backend to get proper IDs for export functionality
+        try {
+          const data = await A.workspaceChats(slug, 10, 'desc', 'user-interactive', 0);
+          const raw = Array.isArray(data?.history) ? data.history : (Array.isArray(data?.chats) ? data.chats : (Array.isArray(data) ? data : []));
+          if (raw.length > 0) {
+            // Update history with messages that have proper database IDs
+            setHistory((prev) => {
+              const updated = sortOldestFirst(raw);
+              // Keep any cards or other items that might not be in the database
+              const cards = prev.filter(m => m.card);
+              return sortMessagesByTimestamp([...updated, ...cards]);
+            });
+          }
+        } catch (reloadErr) {
+          console.error('[WorkspaceChat] Failed to reload messages after chat:', reloadErr);
+          // Don't fail the chat if reload fails
+        }
       } catch (err) {
         console.error('[WorkspaceChat] Streaming error:', err);
         activeStreamRef.current = false; // Clear active flag on error
@@ -1174,20 +1378,62 @@ async function exportHistory() {
     segments.push(safeWorkspace);
     const safeThread = sanitizeSegment(effectiveThread);
     if (safeThread) segments.push(safeThread);
-    const filename = `${segments.join("-")}-${stamp}.json`;
+    const filenameBase = `${segments.join("-")}-${stamp}`;
 
-    const payload = JSON.stringify(metadata, null, 2);
+    // Create user-friendly markdown export
+    let markdownContent = '# Chat Conversation Export\n\n';
+    
+    markdownContent += `**Workspace:** ${slug}\n`;
+    if (effectiveThread) {
+      const threadName = threads.find(t => String(t.slug) === effectiveThread)?.name;
+      markdownContent += `**Thread:** ${threadName || effectiveThread}\n`;
+    }
+    if (customerName) {
+      markdownContent += `**Customer:** ${customerName}\n`;
+    }
+    markdownContent += `**Export Date:** ${new Date().toLocaleString()}\n`;
+    markdownContent += `**Messages:** ${exportMessages.length}\n\n`;
+    markdownContent += '---\n\n';
+
+    // Export all messages
+    exportMessages.forEach((msg, index) => {
+      const role = msg.role === 'user' ? '👤 **User**' : '🤖 **Assistant**';
+      const timestamp = msg.timestamp ? new Date(msg.timestamp).toLocaleString() : '';
+      
+      markdownContent += `## ${role}`;
+      if (timestamp) {
+        markdownContent += ` - ${timestamp}`;
+      }
+      markdownContent += '\n\n';
+      
+      // Add sources/context if available
+      if (msg.sources) {
+        markdownContent += `*Sources/Context: ${JSON.stringify(msg.sources)}*\n\n`;
+      }
+      
+      // Add card info if available
+      if (msg.card) {
+        markdownContent += `*Card: ${msg.card.title || 'Untitled'}*\n\n`;
+      }
+      
+      markdownContent += msg.text + '\n\n';
+      
+      if (index < exportMessages.length - 1) {
+        markdownContent += '---\n\n';
+      }
+    });
 
     if (typeof window === "undefined" || typeof document === "undefined") {
       throw new Error("Export is only supported in a browser environment");
     }
 
-    const blob = new Blob([payload], { type: "application/json" });
+    // Create markdown file
+    const blob = new Blob([markdownContent], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     try {
       const link = document.createElement("a");
       link.href = url;
-      link.download = filename;
+      link.download = `${filenameBase}.md`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -1231,7 +1477,28 @@ return (
                 )}
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Export chat</TooltipContent>
+            <TooltipContent>Export chat (Markdown)</TooltipContent>
+          </Tooltip>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                size="icon"
+                variant="ghost"
+                aria-label="Export to Word document"
+                disabled={exporting || loading}
+                onClick={(e) => {
+                  e.preventDefault();
+                  void handleExportToWord();
+                }}
+              >
+                {exporting ? (
+                  <Icon.Refresh className="h-4 w-4 animate-spin" />
+                ) : (
+                  <FileText className="h-4 w-4" />
+                )}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Export to Word</TooltipContent>
           </Tooltip>
           {headerActions}
         </div>
@@ -1268,6 +1535,7 @@ return (
               getMessageKey={getMessageKey}
               onCopyMessage={handleCopyMessage}
               onExportMessage={handleExportMessage}
+              onExportMessageToWord={handleExportMessageToWord}
             />
             {/* Show streaming progress above the bubble */}
             {streamingProgress && (

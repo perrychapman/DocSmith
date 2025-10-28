@@ -2,6 +2,21 @@
 import { Router } from "express";
 import { anythingllmRequest } from "../services/anythingllm";
 import { readSettings } from "../services/settings";
+import { 
+  getCustomerFromWorkspace, 
+  buildSailPointSystemPrompt, 
+  extractSailPointQueries,
+  executeSailPointQuery,
+  formatQueryResults
+} from "../services/sailpointChatIntegration";
+import { 
+  analyzeAndPlanQuery,
+  executeQueryPlan,
+  executeWithRefinement,
+  aggregateForSynthesis
+} from "../services/sailpointQueryOrchestrator";
+import { storeChatMessage, generateConversationId, getChatMessages } from "../services/chatMessages";
+import { logInfo, logError } from "../utils/logger";
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const multer = require("multer");
 
@@ -395,14 +410,15 @@ router.post("/workspace/:slug/update", async (req, res) => {
 /**
  * WORKSPACES: Chats by slug
  * Proxies: GET /api/v1/workspace/:slug/chats
- * Query (optional): apiSessionId, limit, orderBy (asc|desc)
+ * Query (optional): apiSessionId, limit, orderBy (asc|desc), offset
  */
 router.get("/workspace/:slug/chats", async (req, res) => {
   const { slug } = req.params;
-  const { apiSessionId, limit, orderBy } = req.query as {
+  const { apiSessionId, limit, orderBy, offset } = req.query as {
     apiSessionId?: string;
     limit?: string | number;
     orderBy?: string;
+    offset?: string | number;
   };
 
   try {
@@ -410,6 +426,7 @@ router.get("/workspace/:slug/chats", async (req, res) => {
     if (apiSessionId) q.set("apiSessionId", String(apiSessionId));
     if (limit) q.set("limit", String(limit));
     if (orderBy) q.set("orderBy", String(orderBy));
+    if (offset) q.set("offset", String(offset));
     const qs = q.toString() ? `?${q.toString()}` : "";
 
     const data = await anythingllmRequest<{ history: any[] }>(
@@ -425,6 +442,49 @@ router.get("/workspace/:slug/chats", async (req, res) => {
     if (isForbidden) return res.status(403).json({ message: "Invalid API Key" });
     if (isBadReq) return res.status(400).json({ message: "Bad Request" });
     res.status(502).json({ message: msg });
+  }
+});
+
+/**
+ * WORKSPACES: Get chats from local database
+ * GET /api/anythingllm/workspace/:slug/chats/local
+ * Query (optional): sessionId, limit, offset, onlyVisible
+ * Returns chat messages stored in our local DB with better control over visibility
+ */
+router.get("/workspace/:slug/chats/local", async (req, res) => {
+  const { slug } = req.params;
+  const { sessionId, limit, offset, onlyVisible } = req.query as {
+    sessionId?: string;
+    limit?: string | number;
+    offset?: string | number;
+    onlyVisible?: string;
+  };
+
+  try {
+    const { getChatMessages } = await import("../services/chatMessages");
+    
+    const messages = await getChatMessages(slug, {
+      sessionId: sessionId || 'user-interactive',
+      limit: limit ? Number(limit) : 100,
+      offset: offset ? Number(offset) : 0,
+      onlyVisible: onlyVisible !== 'false' // Default to true
+    });
+    
+    // Format to match AnythingLLM's response structure
+    const history = messages.map((msg: any) => ({
+      role: msg.role,
+      content: msg.content,
+      sentAt: msg.sentAt,
+      id: msg.id,
+      conversationId: msg.conversationId,
+      messageIndex: msg.messageIndex,
+      ...(msg.sailpointContext ? { sailpointMetadata: JSON.parse(msg.sailpointContext) } : {})
+    }));
+    
+    res.json({ history });
+  } catch (err: any) {
+    logError('[LOCAL_CHATS] Failed to fetch local chat messages:', err);
+    res.status(500).json({ error: err.message || 'Failed to fetch chat messages' });
   }
 });
 
@@ -493,10 +553,259 @@ router.post("/workspace/:slug/update-pin", async (req, res) => {
  * WORKSPACES: Chat
  * Proxies: POST /api/v1/workspace/:slug/chat
  * Body: { message, mode: "query"|"chat", sessionId?, attachments?, reset? }
+ * 
+ * ENHANCED: Integrates SailPoint function calling for customer workspaces
  */
 router.post("/workspace/:slug/chat", async (req, res) => {
   const { slug } = req.params;
+  const { message, mode, sessionId, useSailPoint, customerId, customerName } = req.body || {};
+  
   try {
+    // Only use SailPoint orchestration if explicitly requested via @sailpoint prefix
+    const sailpointContext = useSailPoint ? await getCustomerFromWorkspace(slug) : null;
+    
+    if (sailpointContext && useSailPoint && mode !== 'query') {
+      logInfo(`[SAILPOINT_CHAT] SailPoint query requested for workspace: ${slug} (Customer: ${sailpointContext.customerName})`);
+      
+      // Get recent conversation history for context (last 3 messages to avoid token limits)
+      const recentMessages = await getChatMessages(slug, {
+        sessionId: 'user-interactive',
+        onlyVisible: true,
+        limit: 3,
+        orderBy: 'desc'
+      });
+      
+      // Build COMPACT conversation context (truncate long responses)
+      const conversationContext = recentMessages.reverse().map((msg: any) => {
+        const content = msg.content.length > 500 
+          ? msg.content.substring(0, 500) + '...[truncated]'
+          : msg.content;
+        return `${msg.role === 'user' ? 'User' : 'Assistant'}: ${content}`;
+      }).join('\n');
+      
+      // Simple approach: Add system prompt, get response with queries, execute queries, 
+      // then send FINAL message through normal chat flow
+      const systemPrompt = buildSailPointSystemPrompt();
+      const enhancedMessage = conversationContext 
+        ? `${systemPrompt}\n\nRecent Context (last ${recentMessages.length} messages):\n${conversationContext}\n\nCurrent User Question: ${message}`
+        : `${systemPrompt}\n\nUser Question: ${message}`;
+      
+      // Get LLM response with chat mode but using a system sessionId so it's hidden from user
+      logInfo(`[SAILPOINT_CHAT] Querying LLM with SailPoint context (with ${recentMessages.length} messages of compact history)`);
+      const llmResponse = await anythingllmRequest<{
+        id: string;
+        type: "abort" | "textResponse";
+        textResponse?: string;
+        sources?: Array<{ title: string; chunk: string }>;
+        close?: boolean;
+        error?: string | null;
+      }>(`/workspace/${encodeURIComponent(slug)}/chat`, "POST", {
+        message: enhancedMessage,
+        mode: 'chat',
+        sessionId: 'system-sailpoint-internal' // Hidden from user chat history
+      });
+      
+      const llmText = llmResponse.textResponse || '';
+      
+      // Extract SailPoint queries
+      const queries = extractSailPointQueries(llmText);
+      
+      if (queries.length === 0) {
+        // No SailPoint queries - just pass through to normal chat
+        logInfo(`[SAILPOINT_CHAT] No SailPoint queries detected, using normal chat flow`);
+        // Let normal flow handle it below (fall through)
+      } else {
+        // Execute SailPoint queries with auto-correction and retry
+        logInfo(`[SAILPOINT_CHAT] Executing ${queries.length} SailPoint ${queries.length === 1 ? 'query' : 'queries'}`);
+        
+        let results = await Promise.all(
+          queries.map(async (query) => {
+            try {
+              logInfo(`[SAILPOINT_CHAT] Executing: ${query.action}`);
+              // executeSailPointQuery has built-in filter auto-correction
+              return await executeSailPointQuery(sailpointContext, query);
+            } catch (error: any) {
+              logError('[SAILPOINT_CHAT] Query failed:', error);
+              return { error: error.message };
+            }
+          })
+        );
+        
+        // Intelligent retry: If we got 0 results and used a filter, ask AI to analyze and suggest better query
+        const hasEmptyResults = results.some(r => r.data && Array.isArray(r.data) && r.data.length === 0);
+        const hasErrors = results.some(r => r.error);
+        let retryAttempted = false;
+        
+        if (hasEmptyResults && queries.length === 1 && queries[0].filters) {
+          logInfo(`[SAILPOINT_CHAT] Got 0 results with filter "${queries[0].filters}". Asking AI to analyze...`);
+          
+          try {
+            // Ask AI why the query might have failed and suggest alternative
+            const analysisPrompt = `The user asked: "${message}"
+            
+We executed this SailPoint query:
+Action: ${queries[0].action}
+Filter: ${queries[0].filters}
+
+Result: 0 items found
+
+This could mean:
+1. The filter is too specific (e.g., looking for exact start "Cornerstone" when items start with "Fortitude-")
+2. The search term should be in a different field
+3. The data doesn't exist
+
+Analyze why this query returned 0 results and suggest 1-2 alternative queries to try. Consider:
+- If searching by name with "sw" (starts with), maybe items don't start with that text
+- Could try removing filters to get all items first
+- Could try a different field or approach
+
+Respond with ONLY a JSON array of alternative SailPoint queries to try, or empty array [] if no alternatives make sense.`;
+
+            const analysisResponse = await anythingllmRequest<{
+              textResponse?: string;
+            }>(`/workspace/${encodeURIComponent(slug)}/chat`, "POST", {
+              message: analysisPrompt,
+              mode: 'chat',
+              sessionId: 'system-sailpoint-analysis'
+            });
+            
+            const analysisText = analysisResponse.textResponse || '';
+            logInfo(`[SAILPOINT_CHAT] Analysis response: ${analysisText.substring(0, 200)}...`);
+            
+            // Try to extract alternative queries
+            const altQueries = extractSailPointQueries(analysisText);
+            
+            if (altQueries.length > 0) {
+              logInfo(`[SAILPOINT_CHAT] Retrying with ${altQueries.length} alternative ${altQueries.length === 1 ? 'query' : 'queries'}`);
+              retryAttempted = true;
+              
+              const retryResults = await Promise.all(
+                altQueries.map(async (query) => {
+                  try {
+                    logInfo(`[SAILPOINT_CHAT] Retry executing: ${query.action}`);
+                    return await executeSailPointQuery(sailpointContext, query);
+                  } catch (error: any) {
+                    logError('[SAILPOINT_CHAT] Retry query failed:', error);
+                    return { error: error.message };
+                  }
+                })
+              );
+              
+              // Use retry results if they're better (have data)
+              const retryHasData = retryResults.some(r => r.data && Array.isArray(r.data) && r.data.length > 0);
+              if (retryHasData) {
+                logInfo(`[SAILPOINT_CHAT] Retry succeeded! Using retry results.`);
+                results = retryResults;
+              } else {
+                logInfo(`[SAILPOINT_CHAT] Retry also returned 0 results. Using original.`);
+              }
+            }
+          } catch (analysisError: any) {
+            logError('[SAILPOINT_CHAT] Analysis/retry failed:', analysisError);
+            // Continue with original results
+          }
+        }
+        
+        // Format results - but limit size to avoid token issues
+        const resultsText = formatQueryResults(results);
+        
+        // Add context about what happened
+        let refinementInfo = '';
+        if (retryAttempted) {
+          const finalHasData = results.some(r => r.data && Array.isArray(r.data) && r.data.length > 0);
+          refinementInfo = finalHasData 
+            ? '\n\n[System Note: Initial query returned 0 results. Automatically retried with alternative approach and found data.]'
+            : '\n\n[System Note: Initial query returned 0 results. Tried alternative queries but still found no matching data.]';
+        } else if (hasEmptyResults || hasErrors) {
+          refinementInfo = '\n\n[Note: Query returned no results or errors.]';
+        }
+        
+        // Get final synthesis from LLM (hidden session)
+        const synthesisPrompt = `Based on the following SailPoint query results, provide a clear answer to the user's question: "${message}"\n\n${resultsText}${refinementInfo}`;
+        
+        const finalResponse = await anythingllmRequest<{
+          id: string;
+          type: "abort" | "textResponse";
+          textResponse?: string;
+          sources?: Array<{ title: string; chunk: string }>;
+          close?: boolean;
+          error?: string | null;
+        }>(`/workspace/${encodeURIComponent(slug)}/chat`, "POST", {
+          message: synthesisPrompt,
+          mode: 'chat',
+          sessionId: 'system-sailpoint-internal' // Hidden from user chat history
+        });
+        
+        const finalText = finalResponse.textResponse || llmText;
+        
+        // Store the conversation in local DB for better control
+        const conversationId = generateConversationId();
+        
+        try {
+          // Store user message
+          await storeChatMessage({
+            workspaceSlug: slug,
+            customerId: sailpointContext.customerId,
+            role: 'user',
+            content: message,
+            conversationId,
+            messageIndex: 0,
+            sessionId: sessionId || 'user-interactive',
+            isVisible: 1 // 1 = visible to user
+          });
+          
+          // Store assistant response with SailPoint metadata
+          await storeChatMessage({
+            workspaceSlug: slug,
+            customerId: sailpointContext.customerId,
+            role: 'assistant',
+            content: finalText,
+            conversationId,
+            messageIndex: 1,
+            sessionId: sessionId || 'user-interactive',
+            isVisible: 1, // 1 = visible to user
+            sailpointContext: JSON.stringify({
+              queriesExecuted: queries.length,
+              queryActions: queries.map(q => q.action),
+              results: results
+            })
+          });
+          
+          logInfo(`[SAILPOINT_CHAT] Conversation stored locally: ${conversationId}`);
+        } catch (storeErr: any) {
+          logError('[SAILPOINT_CHAT] Failed to store conversation locally:', storeErr);
+          // Don't fail the request if storage fails
+        }
+        
+        // Now store the complete conversation: user message + assistant response
+        // Use normal chat mode with user sessionId which will store both properly
+        const chatResponse = await anythingllmRequest<{
+          id: string;
+          type: "abort" | "textResponse";
+          textResponse?: string;
+          sources?: Array<{ title: string; chunk: string }>;
+          close?: boolean;
+          error?: string | null;
+        }>(`/workspace/${encodeURIComponent(slug)}/chat`, "POST", {
+          ...req.body,
+          message: message, // Original user message
+          mode: mode || 'chat',
+          sessionId: sessionId || 'user-interactive'
+        });
+        
+        // Return the synthesized answer but with the chat response structure
+        return res.json({
+          ...chatResponse,
+          textResponse: finalText,
+          sailpointMetadata: {
+            queriesExecuted: queries.length,
+            queryActions: queries.map(q => q.action)
+          }
+        });
+      }
+    }
+    
+    // Normal chat (no SailPoint integration)
     const data = await anythingllmRequest<{
       id: string;
       type: "abort" | "textResponse";
@@ -505,6 +814,47 @@ router.post("/workspace/:slug/chat", async (req, res) => {
       close?: boolean;
       error?: string | null;
     }>(`/workspace/${encodeURIComponent(slug)}/chat`, "POST", req.body ?? {});
+    
+    // Store normal chat messages in local DB if they're user-interactive
+    const effectiveSessionId = sessionId || 'user-interactive';
+    if (effectiveSessionId === 'user-interactive' && message && data.textResponse) {
+      try {
+        const conversationId = generateConversationId();
+        
+        // Try to get customer ID from workspace
+        const customerContext = await getCustomerFromWorkspace(slug).catch(() => null);
+        
+        // Store user message
+        await storeChatMessage({
+          workspaceSlug: slug,
+          customerId: customerContext?.customerId,
+          role: 'user',
+          content: message,
+          conversationId,
+          messageIndex: 0,
+          sessionId: effectiveSessionId,
+          isVisible: 1 // 1 = visible to user
+        });
+        
+        // Store assistant response
+        await storeChatMessage({
+          workspaceSlug: slug,
+          customerId: customerContext?.customerId,
+          role: 'assistant',
+          content: data.textResponse,
+          conversationId,
+          messageIndex: 1,
+          sessionId: effectiveSessionId,
+          isVisible: 1 // 1 = visible to user
+        });
+        
+        logInfo(`[CHAT] Normal conversation stored locally: ${conversationId}`);
+      } catch (storeErr: any) {
+        logError('[CHAT] Failed to store conversation locally:', storeErr);
+        // Don't fail the request if storage fails
+      }
+    }
+    
     res.json(data);
   } catch (err: any) {
     const msg = String(err?.message || "Workspace chat failed");
@@ -595,11 +945,21 @@ router.delete("/workspace/:slug/thread/:threadSlug", async (req, res) => {
 /**
  * WORKSPACES: Get Thread Chats
  * Proxies: GET /api/v1/workspace/:slug/thread/:threadSlug/chats
+ * Query (optional): limit, offset
  */
 router.get("/workspace/:slug/thread/:threadSlug/chats", async (req, res) => {
   const { slug, threadSlug } = req.params;
+  const { limit, offset } = req.query as {
+    limit?: string | number;
+    offset?: string | number;
+  };
 
   try {
+    const q = new URLSearchParams();
+    if (limit) q.set("limit", String(limit));
+    if (offset) q.set("offset", String(offset));
+    const qs = q.toString() ? `?${q.toString()}` : "";
+
     const data = await anythingllmRequest<{
       history: Array<{
         role: "user" | "assistant" | string;
@@ -608,7 +968,7 @@ router.get("/workspace/:slug/thread/:threadSlug/chats", async (req, res) => {
         sources?: Array<Record<string, any>>;
       }>;
     }>(
-      `/workspace/${encodeURIComponent(slug)}/thread/${encodeURIComponent(threadSlug)}/chats`,
+      `/workspace/${encodeURIComponent(slug)}/thread/${encodeURIComponent(threadSlug)}/chats${qs}`,
       "GET"
     );
     res.json(data);
@@ -660,62 +1020,610 @@ router.post("/workspace/:slug/thread/:threadSlug/chat", async (req, res) => {
  * WORKSPACES: Stream Chat (SSE passthrough)
  * Proxies: POST /api/v1/workspace/:slug/stream-chat
  * Body: { message, mode: "query"|"chat", userId?, attachments? }
+ * 
+ * ENHANCED: Integrates SailPoint function calling for customer workspaces
  */
 router.post("/workspace/:slug/stream-chat", async (req, res) => {
   const { slug } = req.params;
+  const { message, mode, sessionId, useSailPoint, customerId, customerName } = req.body || {};
 
   try {
-    // Build upstream URL from configured API root and ensure /api/v1 prefix
-    const s = readSettings();
-    const apiRoot = (String(s.anythingLLMUrl || "http://localhost:3001").trim()).replace(/\/+$/, "");
-    const base = `${apiRoot}/api/v1`;
-    const apiKey = String(s.anythingLLMKey || "").trim();
+    // Only use SailPoint orchestration if explicitly requested via @sailpoint prefix
+    const sailpointContext = useSailPoint ? await getCustomerFromWorkspace(slug) : null;
+    
+    if (sailpointContext && useSailPoint && mode !== 'query') {
+      logInfo(`[SAILPOINT_STREAM] SailPoint query requested for workspace: ${slug}`);
+      
+      // Set up SSE headers
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+      res.flushHeaders();
 
-    // Abort upstream if client disconnects
-    const controller = new AbortController();
-    req.on("close", () => controller.abort());
-    const upstream = await fetch(
-      `${base}/workspace/${encodeURIComponent(slug)}/stream-chat`,
-      {
-        method: "POST",
-        headers: {
-          Accept: "text/event-stream",
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${apiKey}`,
-        },
-        body: JSON.stringify(req.body ?? {}),
-        signal: controller.signal,
+      try {
+        // Get recent conversation history for context (last 3 messages to avoid token limits)
+        const recentMessages = await getChatMessages(slug, {
+          sessionId: 'user-interactive',
+          onlyVisible: true,
+          limit: 3,
+          orderBy: 'desc'
+        });
+        
+        // Build COMPACT conversation context (truncate long responses)
+        const conversationContext = recentMessages.reverse().map((msg: any) => {
+          const content = msg.content.length > 500 
+            ? msg.content.substring(0, 500) + '...[truncated]'
+            : msg.content;
+          return `${msg.role === 'user' ? 'User' : 'Assistant'}: ${content}`;
+        }).join('\n');
+
+        // Step 1: Analyze and create intelligent query plan
+        logInfo(`[SAILPOINT_STREAM] Creating intelligent query plan`);
+        res.write(`data: ${JSON.stringify({ 
+          type: 'status',
+          textResponse: '[ANALYSIS] Analyzing your request...\n\n' 
+        })}\n\n`);
+
+        const plan = await analyzeAndPlanQuery(
+          message,
+          conversationContext,
+          slug
+        );
+
+        logInfo(`[SAILPOINT_STREAM] Plan created: ${plan.estimatedSteps} steps`);
+        res.write(`data: ${JSON.stringify({ 
+          type: 'status',
+          textResponse: `[PLAN] **Query Plan:** ${plan.userIntent}\n\n**Strategy:** ${plan.strategy}\n\n**Steps:** ${plan.estimatedSteps}\n\n` 
+        })}\n\n`);
+
+        // Step 2: Execute the plan with progress updates
+        logInfo(`[SAILPOINT_STREAM] Executing plan`);
+        
+        const execution = await executeQueryPlan(
+          plan,
+          sailpointContext,
+          (progress) => {
+            // Send real-time progress updates
+            switch (progress.type) {
+              case 'step_started':
+                res.write(`data: ${JSON.stringify({ 
+                  type: 'status',
+                  textResponse: `[STEP] Step ${progress.stepNumber}/${progress.totalSteps}: ${progress.description}\n\n` 
+                })}\n\n`);
+                break;
+              
+              case 'step_progress':
+                res.write(`data: ${JSON.stringify({ 
+                  type: 'status',
+                  textResponse: `[STEP] ${progress.description}\n\n` 
+                })}\n\n`);
+                break;
+              
+              case 'step_completed':
+                res.write(`data: ${JSON.stringify({ 
+                  type: 'status',
+                  textResponse: `[COMPLETE] Step ${progress.stepNumber}/${progress.totalSteps}: ${progress.description}\n   Fetched: ${progress.data?.itemsFetched || 0} items (Total: ${progress.data?.totalSoFar || 0})\n\n` 
+                })}\n\n`);
+                break;
+              
+              case 'step_failed':
+                res.write(`data: ${JSON.stringify({ 
+                  type: 'status',
+                  textResponse: `[ERROR] Step ${progress.stepNumber}/${progress.totalSteps}: ${progress.description}\n\n` 
+                })}\n\n`);
+                break;
+            }
+          }
+        );
+
+        if (!execution.success) {
+          res.write(`data: ${JSON.stringify({ 
+            type: 'status',
+            textResponse: `\n[WARNING] ${execution.summary}\n\n` 
+          })}\n\n`);
+        } else {
+          res.write(`data: ${JSON.stringify({ 
+            type: 'status',
+            textResponse: `\n[SUCCESS] ${execution.summary}\n\n` 
+          })}\n\n`);
+        }
+
+        // Step 3: Aggregate results intelligently
+        logInfo(`[SAILPOINT_STREAM] Aggregating ${execution.results.length} results`);
+        res.write(`data: ${JSON.stringify({ 
+          type: 'status',
+          textResponse: `[AGGREGATE] Analyzing data...\n\n` 
+        })}\n\n`);
+
+        const aggregatedData = aggregateForSynthesis(execution.results, plan.userIntent);
+
+        // Step 4: Get LLM synthesis
+        logInfo(`[SAILPOINT_STREAM] Getting LLM synthesis`);
+        
+        // Data is now pre-filtered to only required fields by the orchestrator
+        // Trust the AI's field selection - no truncation needed
+        // Modern LLMs have 128k+ token context windows (aggregated data is typically <10k tokens)
+        logInfo(`[SAILPOINT_STREAM] Aggregated data size: ${aggregatedData.length} chars`);
+        
+        res.write(`data: ${JSON.stringify({ 
+          type: 'status',
+          textResponse: `[SYNTHESIS] Generating response...\n\n` 
+        })}\n\n`);
+
+        // Include discovered schema and required fields if available
+        let schemaContext = '';
+        if (execution.discoveredSchema) {
+          const fieldNames = Object.keys(execution.discoveredSchema);
+          schemaContext = `\n\nAvailable fields discovered (${fieldNames.length} total):\n${fieldNames.slice(0, 20).join(', ')}${fieldNames.length > 20 ? ', ...' : ''}`;
+        }
+        
+        if (plan.requiredFields && plan.requiredFields.length > 0) {
+          schemaContext += `\n\nFields being used for response (pre-filtered): ${plan.requiredFields.join(', ')}\n\nNote: Data has been pre-filtered to only include these ${plan.requiredFields.length} relevant fields.`;
+        }
+
+        // Build a summary of what was queried
+        const querySummary = plan.steps
+          .filter(s => s.status === 'completed')
+          .map(s => `  - ${s.description}`)
+          .join('\n');
+
+        const synthesisPrompt = `User question: "${message}"
+
+QUERY EXECUTION SUMMARY:
+- Executed ${execution.metadata.completedSteps} query step${execution.metadata.completedSteps > 1 ? 's' : ''}
+- Retrieved ${execution.metadata.totalItemsFetched} total items
+${execution.metadata.failedSteps > 0 ? `- ${execution.metadata.failedSteps} step(s) failed\n` : ''}
+Queries executed:
+${querySummary}
+
+IMPORTANT: The data below represents the COMPLETE results from all executed queries above. All the information needed to answer the user's question is provided below. Do not suggest running additional queries for data that has already been retrieved.
+
+SailPoint query results:
+${aggregatedData}${schemaContext}
+
+FORMATTING INSTRUCTIONS:
+Your response should be clear, natural, and easy to read. Follow these guidelines:
+
+1. **Start with a summary**: Begin with the key finding or count (e.g., "Found 45 identities matching your criteria")
+
+2. **Use appropriate formatting**:
+   - For 5+ items of similar data → Use a Markdown table
+   - For 2-4 items → Use bullet points
+   - For single items → Use descriptive paragraphs with **bold** labels
+   - For grouped data → Use headings (##) to separate sections
+
+3. **Keep it scannable**:
+   - Use **bold** for important values, names, or labels
+   - Use line breaks between different topics
+   - Don't force tables when a simple list is clearer
+
+4. **Focus on relevant fields**:
+   - If schema information is provided, use it to identify the most relevant fields for the user's question
+   - Don't overwhelm with all available fields - pick the 3-5 most relevant ones
+   - For example, if asked about "accounts", focus on: name, source, status, owner (not all 50+ fields)
+
+4. **Example responses**:
+
+For a list of users:
+"Found **12 active identities** in the Engineering department:
+
+| Name | Email | Status |
+|------|-------|--------|
+| John Smith | john.smith@company.com | Active |
+| Jane Doe | jane.doe@company.com | Active |"
+
+For a single item:
+"Found identity **John Smith**:
+- **Email**: john.smith@company.com
+- **Department**: Engineering
+- **Status**: Active
+- **Last Login**: 2025-10-25"
+
+For grouped data:
+"## Active Users (8)
+- John Smith, Jane Doe, Bob Johnson...
+
+## Inactive Users (4)
+- Alice Brown, Charlie Davis..."
+
+Provide a natural, conversational response that's easy to read.`;
+        
+        logInfo(`[SAILPOINT_STREAM] Synthesis prompt length: ${synthesisPrompt.length} chars`);
+        
+        const finalResponse = await anythingllmRequest<{
+          textResponse?: string;
+        }>(`/workspace/${encodeURIComponent(slug)}/chat`, "POST", {
+          message: synthesisPrompt,
+          mode: 'chat',
+          sessionId: 'system-sailpoint-internal'
+        });
+
+        let finalText = finalResponse.textResponse || 'Query completed successfully.';
+
+        // Step 5: Iterative refinement loop - keep trying until AI is satisfied with the answer
+        const { detectNeedForAdditionalQueries } = await import('../services/sailpointQueryOrchestrator');
+        const MAX_REFINEMENT_ITERATIONS = 20; // Safety limit to prevent infinite loops (should rarely be hit)
+        let allResults = [...execution.results];
+        let refinementIteration = 0;
+        let consecutiveNoDataIterations = 0;
+        const MAX_CONSECUTIVE_NO_DATA = 2; // Stop if we get no data twice in a row
+
+        while (refinementIteration < MAX_REFINEMENT_ITERATIONS) {
+          refinementIteration++;
+          
+          const refinementCheck = await detectNeedForAdditionalQueries(
+            plan.userIntent,
+            finalText,
+            allResults,
+            slug
+          );
+
+          if (!refinementCheck.needsAdditionalQueries || !refinementCheck.followUpPlan) {
+            logInfo(`[SAILPOINT_STREAM] AI determined response is complete after ${refinementIteration - 1} refinement(s)`);
+            res.write(`data: ${JSON.stringify({ 
+              type: 'status',
+              textResponse: `\n[COMPLETE] Response validated as complete after ${refinementIteration - 1} refinement iteration(s)\n\n` 
+            })}\n\n`);
+            break;
+          }
+
+          logInfo(`[SAILPOINT_STREAM] Refinement iteration ${refinementIteration}: AI needs ${refinementCheck.followUpPlan.steps.length} additional queries`);
+          logInfo(`[SAILPOINT_STREAM] Reasoning: ${refinementCheck.reasoning}`);
+          
+          res.write(`data: ${JSON.stringify({ 
+            type: 'status',
+            textResponse: `\n🔄 [ITERATION ${refinementIteration}/${MAX_REFINEMENT_ITERATIONS}]\n💭 ${refinementCheck.reasoning}\n🔍 Executing ${refinementCheck.followUpPlan.steps.length} additional ${refinementCheck.followUpPlan.steps.length === 1 ? 'query' : 'queries'}...\n\n` 
+          })}\n\n`);
+
+          // Execute follow-up plan
+          const followUpExecution = await executeQueryPlan(
+            refinementCheck.followUpPlan,
+            sailpointContext,
+            (progress) => {
+              // Send real-time progress updates for follow-up
+              switch (progress.type) {
+                case 'step_started':
+                case 'step_progress':
+                  res.write(`data: ${JSON.stringify({ 
+                    type: 'status',
+                    textResponse: `[ITERATION ${refinementIteration}] ${progress.description}\n\n` 
+                  })}\n\n`);
+                  break;
+                
+                case 'step_completed':
+                  res.write(`data: ${JSON.stringify({ 
+                    type: 'status',
+                    textResponse: `[COMPLETE] ${progress.description}\n\n` 
+                  })}\n\n`);
+                  break;
+                
+                case 'step_failed':
+                  res.write(`data: ${JSON.stringify({ 
+                    type: 'status',
+                    textResponse: `[ERROR] ${progress.description}\n\n` 
+                  })}\n\n`);
+                  break;
+              }
+            }
+          );
+
+          // Check if follow-up queries actually returned data
+          if (!followUpExecution.success || followUpExecution.results.length === 0) {
+            consecutiveNoDataIterations++;
+            logInfo(`[SAILPOINT_STREAM] Iteration ${refinementIteration}: No new data (${consecutiveNoDataIterations}/${MAX_CONSECUTIVE_NO_DATA})`);
+            
+            if (consecutiveNoDataIterations >= MAX_CONSECUTIVE_NO_DATA) {
+              logInfo(`[SAILPOINT_STREAM] Stopping: ${MAX_CONSECUTIVE_NO_DATA} consecutive iterations with no data`);
+              res.write(`data: ${JSON.stringify({ 
+                type: 'status',
+                textResponse: `\n[STOPPING] Multiple queries returned no new data. Proceeding with available information.\n\n` 
+              })}\n\n`);
+              break;
+            }
+            
+            res.write(`data: ${JSON.stringify({ 
+              type: 'status',
+              textResponse: `[INFO] Query returned no new data. Will try alternative approach if needed.\n\n` 
+            })}\n\n`);
+            continue; // Try again with AI suggesting different queries
+          }
+
+          // Reset consecutive no-data counter since we got data
+          consecutiveNoDataIterations = 0;
+          
+          logInfo(`[SAILPOINT_STREAM] Iteration ${refinementIteration}: Retrieved ${followUpExecution.results.length} additional items (${allResults.length} → ${allResults.length + followUpExecution.results.length} total)`);
+          
+          // Combine all results
+          allResults = [...allResults, ...followUpExecution.results];
+          const combinedData = aggregateForSynthesis(allResults, plan.userIntent);
+
+          // Re-synthesize with accumulated data
+          res.write(`data: ${JSON.stringify({ 
+            type: 'status',
+            textResponse: `[SYNTHESIS] Generating response with ${allResults.length} total items...\n\n` 
+          })}\n\n`);
+
+          const iterativeSynthesisPrompt = `User question: "${message}"
+
+SailPoint query results (${allResults.length} total items after ${refinementIteration} refinement iteration(s)):
+${combinedData}
+
+${refinementIteration > 1 ? `Previous response (was incomplete):\n${finalText}\n\n` : ''}
+
+TASK: Provide a complete, comprehensive answer using ALL available data. If you now have enough information to fully answer the question, provide a complete response.
+
+${synthesisPrompt.split('FORMATTING INSTRUCTIONS:')[1] || ''}`;
+
+          const iterativeResponse = await anythingllmRequest<{
+            textResponse?: string;
+          }>(`/workspace/${encodeURIComponent(slug)}/chat`, "POST", {
+            message: iterativeSynthesisPrompt,
+            mode: 'chat',
+            sessionId: 'system-sailpoint-internal'
+          });
+
+          finalText = iterativeResponse.textResponse || finalText;
+        }
+
+        // Log refinement summary
+        if (refinementIteration > 1) {
+          logInfo(`[SAILPOINT_STREAM] Refinement complete: ${refinementIteration - 1} iteration(s), ${allResults.length} total items`);
+          res.write(`data: ${JSON.stringify({ 
+            type: 'status',
+            textResponse: `\n✓ Refinement complete: ${refinementIteration - 1} iteration(s), ${allResults.length} total items\n\n` 
+          })}\n\n`);
+        }
+        
+        if (refinementIteration === MAX_REFINEMENT_ITERATIONS) {
+          logInfo(`[SAILPOINT_STREAM] WARNING: Hit safety limit of ${MAX_REFINEMENT_ITERATIONS} iterations`);
+          res.write(`data: ${JSON.stringify({ 
+            type: 'status',
+            textResponse: `\n[NOTE] Reached safety limit of ${MAX_REFINEMENT_ITERATIONS} iterations. Providing best available answer.\n\n` 
+          })}\n\n`);
+        }
+
+        // Step 6: Stream the final response
+        logInfo(`[SAILPOINT_STREAM] Streaming final response`);
+        
+        // Split response into words for smoother streaming
+        const words = finalText.split(' ');
+        for (let i = 0; i < words.length; i++) {
+          const word = words[i] + (i < words.length - 1 ? ' ' : '');
+          res.write(`data: ${JSON.stringify({ 
+            type: 'chunk',
+            textResponse: word 
+          })}\n\n`);
+          
+          // Small delay for natural streaming
+          await new Promise(resolve => setTimeout(resolve, 20));
+        }
+
+        // Step 7: Store locally
+        const conversationId = generateConversationId();
+        
+        await storeChatMessage({
+          workspaceSlug: slug,
+          customerId: sailpointContext.customerId,
+          role: 'user',
+          content: message,
+          conversationId,
+          messageIndex: 0,
+          sessionId: sessionId || 'user-interactive',
+          isVisible: 1
+        });
+        
+        await storeChatMessage({
+          workspaceSlug: slug,
+          customerId: sailpointContext.customerId,
+          role: 'assistant',
+          content: finalText,
+          conversationId,
+          messageIndex: 1,
+          sessionId: sessionId || 'user-interactive',
+          isVisible: 1,
+          sailpointContext: JSON.stringify({
+            plan: plan.userIntent,
+            stepsExecuted: execution.metadata.completedSteps,
+            totalItemsFetched: execution.metadata.totalItemsFetched
+          })
+        });
+
+        logInfo(`[SAILPOINT_STREAM] Conversation stored locally: ${conversationId}`);
+
+        // Close stream
+        res.write(`data: ${JSON.stringify({ 
+          type: 'close',
+          close: true,
+          textResponse: '' 
+        })}\n\n`);
+        res.end();
+
+        logInfo(`[SAILPOINT_STREAM] Response streamed successfully`);
+        return;
+
+      } catch (error: any) {
+        logError('[SAILPOINT_STREAM] Error:', error);
+        res.write(`data: ${JSON.stringify({ 
+          type: 'abort',
+          textResponse: null,
+          close: true,
+          error: error.message 
+        })}\n\n`);
+        res.end();
+        return;
       }
-    );
-
-    if (upstream.status === 403) {
-      return res.status(403).json({ message: "Invalid API Key" });
     }
-    if (!upstream.ok) {
-      const detail = await upstream.text().catch(() => "");
-      return res.status(502).json({
-        message: `Stream chat failed: ${upstream.status} ${upstream.statusText}`,
-        detail,
-      });
-    }
+    
+    // Normal streaming (no SailPoint or no queries detected)
+    // Use non-streaming request to AnythingLLM, then stream the response ourselves
+    // This avoids browser disconnection issues when piping streaming responses
+    
+    logInfo(`[STREAM_CHAT] Fetching response from AnythingLLM (non-streaming)`);
 
-    // SSE headers
+    // Set SSE headers FIRST
     res.setHeader("Content-Type", "text/event-stream");
     res.setHeader("Cache-Control", "no-cache");
     res.setHeader("Connection", "keep-alive");
-    // @ts-ignore (flushHeaders exists in Express types depending on version)
-    res.flushHeaders?.();
-
-    // Pipe upstream web stream -> Express response
-    const reader = upstream.body!.getReader();
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      if (value) res.write(Buffer.from(value));
+    
+    // Flush headers to establish connection immediately
+    if (typeof res.flushHeaders === 'function') {
+      res.flushHeaders();
+      logInfo('[STREAM_CHAT] Headers flushed');
     }
-    res.end();
-  } catch (_err) {
-    res.status(502).json({ message: "Stream chat failed: Upstream error" });
+
+    // Small delay before first write (mimicking SailPoint's async operations before first write)
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    // Send an immediate status message (not just a comment) to establish the stream
+    // This is critical - the frontend needs to receive actual data, not just comments
+    res.write(`data: ${JSON.stringify({ 
+      type: 'status',
+      textResponse: '' 
+    })}\n\n`);
+
+    // Abort if client disconnects
+    const controller = new AbortController();
+    const requestStartTime = Date.now();
+    let clientDisconnected = false;
+    
+    req.on("close", () => {
+      const elapsed = Date.now() - requestStartTime;
+      logInfo(`[STREAM_CHAT] Client disconnected after ${elapsed}ms`);
+      clientDisconnected = true;
+      controller.abort();
+    });
+
+    // Send keepalives every 50ms while waiting for AnythingLLM response
+    // IMPORTANT: Must send actual data messages, not just SSE comments
+    const keepaliveInterval = setInterval(() => {
+      if (!clientDisconnected && !res.writableEnded) {
+        res.write(`data: ${JSON.stringify({ 
+          type: 'status',
+          textResponse: '' 
+        })}\n\n`);
+      }
+    }, 50); // Every 50ms to prevent any timeout
+    
+    // Send first keepalive immediately (don't wait for interval)
+    res.write(`data: ${JSON.stringify({ 
+      type: 'status',
+      textResponse: '' 
+    })}\n\n`);
+
+    try {
+      // Make non-streaming request to AnythingLLM
+      const chatResponse = await anythingllmRequest<{
+        textResponse?: string;
+        error?: string;
+      }>(`/workspace/${encodeURIComponent(slug)}/chat`, "POST", req.body ?? {});
+
+      // Clear keepalive interval now that we have the response
+      clearInterval(keepaliveInterval);
+
+      const fetchElapsed = Date.now() - requestStartTime;
+      logInfo(`[STREAM_CHAT] Got response from AnythingLLM in ${fetchElapsed}ms`);
+
+      // Check if client already disconnected
+      if (clientDisconnected) {
+        logInfo('[STREAM_CHAT] Client already disconnected, aborting');
+        return;
+      }
+
+      if (chatResponse.error) {
+        res.write(`data: ${JSON.stringify({ 
+          type: 'abort', 
+          error: chatResponse.error 
+        })}\n\n`);
+        res.end();
+        return;
+      }
+
+      const fullText = chatResponse.textResponse || '';
+      
+      // Stream the response word-by-word for natural typing effect
+      const words = fullText.split(' ');
+      for (let i = 0; i < words.length; i++) {
+        // Check if client disconnected
+        if (controller.signal.aborted) {
+          logInfo('[STREAM_CHAT] Client disconnected during streaming');
+          return;
+        }
+
+        const word = words[i] + (i < words.length - 1 ? ' ' : '');
+        res.write(`data: ${JSON.stringify({ 
+          type: 'chunk',
+          textResponse: word 
+        })}\n\n`);
+        
+        // Small delay for natural streaming effect
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+
+      // Store conversation locally
+      const effectiveSessionId = sessionId || 'user-interactive';
+      if (effectiveSessionId === 'user-interactive' && message && fullText) {
+        try {
+          const conversationId = generateConversationId();
+          // Only query for customer context if this was a SailPoint query
+          // For regular chat, use the customerId from request body if available
+          const effectiveCustomerId = useSailPoint 
+            ? (await getCustomerFromWorkspace(slug).catch(() => null))?.customerId
+            : customerId;
+          
+          await storeChatMessage({
+            workspaceSlug: slug,
+            customerId: effectiveCustomerId,
+            role: 'user',
+            content: message,
+            conversationId,
+            messageIndex: 0,
+            sessionId: effectiveSessionId,
+            isVisible: 1
+          });
+          
+          await storeChatMessage({
+            workspaceSlug: slug,
+            customerId: effectiveCustomerId,
+            role: 'assistant',
+            content: fullText,
+            conversationId,
+            messageIndex: 1,
+            sessionId: effectiveSessionId,
+            isVisible: 1
+          });
+          
+          logInfo(`[STREAM_CHAT] Conversation stored locally: ${conversationId}`);
+        } catch (storeErr: any) {
+          logError('[STREAM_CHAT] Failed to store conversation locally:', storeErr);
+        }
+      }
+
+      // Close stream
+      res.write(`data: ${JSON.stringify({ 
+        type: 'close',
+        close: true,
+        textResponse: '' 
+      })}\n\n`);
+      res.end();
+
+      logInfo(`[STREAM_CHAT] Response streamed successfully`);
+      
+    } catch (err: any) {
+      clearInterval(keepaliveInterval); // Clear interval on error
+      logError('[STREAM_CHAT] Error:', err);
+      if (!controller.signal.aborted && !clientDisconnected) {
+        res.write(`data: ${JSON.stringify({ 
+          type: 'abort', 
+          error: err.message || 'Failed to get response from AnythingLLM' 
+        })}\n\n`);
+        res.end();
+      }
+    }
+  } catch (outerErr: any) {
+    logError('[STREAM_CHAT] Route error:', outerErr);
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Internal server error' });
+    }
   }
 });
 

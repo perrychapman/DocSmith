@@ -19,11 +19,13 @@ async function resetApp(req: Request, res: Response) {
       DELETE FROM prompts;
       DELETE FROM customers;
       DELETE FROM document_metadata;
+      DELETE FROM customer_sailpoint_config;
+      DELETE FROM chat_messages;
     `);
     
     // Reset auto-increment counters
     db.exec(`
-      DELETE FROM sqlite_sequence WHERE name IN ('customers', 'prompts', 'documents', 'gen_cards', 'document_metadata');
+      DELETE FROM sqlite_sequence WHERE name IN ('customers', 'prompts', 'documents', 'gen_cards', 'document_metadata', 'chat_messages');
     `);
     
     console.log('Database tables cleared');

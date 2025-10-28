@@ -207,198 +207,226 @@ router.delete("/:id", (req, res) => {
                   return
                 }
 
-                db.run("DELETE FROM customers WHERE id = ?", [id], (d4Err) => {
+                // Delete SailPoint configuration for this customer
+                db.run("DELETE FROM customer_sailpoint_config WHERE customerId = ?", [id], (d4Err) => {
                   if (d4Err) {
                     db.run("ROLLBACK", () => res.status(500).json({ error: d4Err.message }))
                     return
                   }
 
-                db.run("COMMIT", async (commitErr) => {
-                  if (commitErr) return res.status(500).json({ error: commitErr.message })
-
-                  // Reset AUTOINCREMENT counter if customers table is now empty
-                  try {
-                    const db2 = getDB()
-                    db2.get<{ count: number }>("SELECT COUNT(*) as count FROM customers", [], (err, result) => {
-                      if (!err && result && result.count === 0) {
-                        // Table is empty, reset the AUTOINCREMENT counter
-                        db2.run("DELETE FROM sqlite_sequence WHERE name='customers'", (resetErr) => {
-                          if (resetErr) {
-                            console.error("[DELETE-CUSTOMER] Failed to reset AUTOINCREMENT counter:", resetErr)
-                          } else {
-                            console.log("[DELETE-CUSTOMER] AUTOINCREMENT counter reset - next customer will have id=1")
-                          }
-                        })
-                      }
-                    })
-                  } catch (e) {
-                    console.error("[DELETE-CUSTOMER] Error checking if customers table is empty:", e)
+                  // Delete chat messages for this customer (by both customerId AND workspaceSlug to prevent orphaned messages)
+                  // This ensures messages are deleted even if customer is recreated with same name/month
+                  const chatDeleteParams: (number | string)[] = [id]
+                  let chatDeleteSql = "DELETE FROM chat_messages WHERE customerId = ?"
+                  
+                  if (row.workspaceSlug) {
+                    chatDeleteSql += " OR workspaceSlug = ?"
+                    chatDeleteParams.push(row.workspaceSlug)
                   }
-
-                  // 3) Remove filesystem folder (best-effort)
-                  let warning: string | undefined
-                  try {
-                    rmrf(customerDir)
-                  } catch (e) {
-                    warning = `Deleted from DB, but failed to remove folder: ${(e as Error).message}`
-                  }
-
-                  // 4) Remove documents from the workspace, then permanently remove them; optionally delete the workspace
-                  let workspaceWarning: string | undefined
-                  let documentsWarning: string | undefined
-                  let anythingLLMFolderWarning: string | undefined
-                  let wsSlugToClean: string | undefined
-                  try {
-                    const slug = (row as any)?.workspaceSlug
-                    let resolvedSlug: string | undefined = slug || undefined
-                    if (!resolvedSlug) {
-                      const list = await anythingllmRequest<{ workspaces: Array<{ name: string; slug: string }> }>(
-                        "/workspaces",
-                        "GET"
-                      )
-                      const ws = Array.isArray((list as any)?.workspaces) ? (list as any).workspaces : Array.isArray(list) ? (list as any) : []
-                      resolvedSlug = ws.find((w: any) => (w?.name || "") === folderName)?.slug
+                  
+                  db.run(chatDeleteSql, chatDeleteParams, function(d5Err) {
+                    if (d5Err) {
+                      db.run("ROLLBACK", () => res.status(500).json({ error: d5Err.message }))
+                      return
                     }
 
-                    if (resolvedSlug) {
-                      wsSlugToClean = resolvedSlug
-                      try {
-                        // Delete uploaded documents one by one using the same logic as per-file deletion
-                        if (fs.existsSync(uploadsDir)) {
-                          const entries = fs.readdirSync(uploadsDir, { withFileTypes: true })
-                          console.log(`[DELETE-CUSTOMER] Found ${entries.length} items in uploads folder`)
-                          let deletedCount = 0
-                          let failedCount = 0
-                          for (const ent of entries) {
-                            if (!ent.isFile()) continue
-                            const fname = ent.name
-                            if (fname.toLowerCase().endsWith('.allm.json')) continue // skip sidecars
-                            console.log(`[DELETE-CUSTOMER] Attempting to delete document: ${fname}`)
+                    const deletedMessageCount = this.changes;
+                    console.log(`[CUSTOMER_DELETE] Deleted ${deletedMessageCount} chat messages for customer ${id} (workspace: ${row.workspaceSlug})`);
+
+                    db.run("DELETE FROM customers WHERE id = ?", [id], (d6Err) => {
+                      if (d6Err) {
+                        db.run("ROLLBACK", () => res.status(500).json({ error: d6Err.message }))
+                        return
+                      }
+
+                      db.run("COMMIT", async (commitErr) => {
+                        if (commitErr) return res.status(500).json({ error: commitErr.message })
+
+                        // Reset AUTOINCREMENT counter if customers table is now empty
+                        try {
+                          const db2 = getDB()
+                          db2.get<{ count: number }>("SELECT COUNT(*) as count FROM customers", [], (err, result) => {
+                            if (!err && result && result.count === 0) {
+                              // Table is empty, reset the AUTOINCREMENT counter
+                              db2.run("DELETE FROM sqlite_sequence WHERE name='customers'", (resetErr) => {
+                                if (resetErr) {
+                                  console.error("[DELETE-CUSTOMER] Failed to reset AUTOINCREMENT counter:", resetErr)
+                                } else {
+                                  console.log("[DELETE-CUSTOMER] AUTOINCREMENT counter reset - next customer will have id=1")
+                                }
+                              })
+                            }
+                          })
+                        } catch (e) {
+                          console.error("[DELETE-CUSTOMER] Error checking if customers table is empty:", e)
+                        }
+
+                        // 3) Remove filesystem folder (best-effort)
+                        let warning: string | undefined
+                        try {
+                          rmrf(customerDir)
+                        } catch (e) {
+                          warning = `Deleted from DB, but failed to remove folder: ${(e as Error).message}`
+                        }
+
+                        // 4) Remove documents from the workspace, then permanently remove them; optionally delete the workspace
+                        let workspaceWarning: string | undefined
+                        let documentsWarning: string | undefined
+                        let anythingLLMFolderWarning: string | undefined
+                        let wsSlugToClean: string | undefined
+                        try {
+                          const slug = (row as any)?.workspaceSlug
+                          let resolvedSlug: string | undefined = slug || undefined
+                          if (!resolvedSlug) {
+                            const list = await anythingllmRequest<{ workspaces: Array<{ name: string; slug: string }> }>(
+                              "/workspaces",
+                              "GET"
+                            )
+                            const ws = Array.isArray((list as any)?.workspaces) ? (list as any).workspaces : Array.isArray(list) ? (list as any) : []
+                            resolvedSlug = ws.find((w: any) => (w?.name || "") === folderName)?.slug
+                          }
+
+                          if (resolvedSlug) {
+                            wsSlugToClean = resolvedSlug
                             try {
-                              const result = await removeUploadAndAnythingLLM({ id, name: row.name, createdAt: row.createdAt, workspaceSlug: resolvedSlug }, fname)
-                              console.log(`[DELETE-CUSTOMER] Delete result for ${fname}:`, result)
-                              if (result.removedNames && result.removedNames.length > 0) {
-                                deletedCount++
+                              // Delete uploaded documents one by one using the same logic as per-file deletion
+                              if (fs.existsSync(uploadsDir)) {
+                                const entries = fs.readdirSync(uploadsDir, { withFileTypes: true })
+                                console.log(`[DELETE-CUSTOMER] Found ${entries.length} items in uploads folder`)
+                                let deletedCount = 0
+                                let failedCount = 0
+                                for (const ent of entries) {
+                                  if (!ent.isFile()) continue
+                                  const fname = ent.name
+                                  if (fname.toLowerCase().endsWith('.allm.json')) continue // skip sidecars
+                                  console.log(`[DELETE-CUSTOMER] Attempting to delete document: ${fname}`)
+                                  try {
+                                    const result = await removeUploadAndAnythingLLM({ id, name: row.name, createdAt: row.createdAt, workspaceSlug: resolvedSlug }, fname)
+                                    console.log(`[DELETE-CUSTOMER] Delete result for ${fname}:`, result)
+                                    if (result.removedNames && result.removedNames.length > 0) {
+                                      deletedCount++
+                                    } else {
+                                      failedCount++
+                                    }
+                                  } catch (e) {
+                                    console.error(`[DELETE-CUSTOMER] Error deleting ${fname}:`, e)
+                                    failedCount++
+                                  }
+                                }
+                                console.log(`[DELETE-CUSTOMER] Deletion summary: ${deletedCount} succeeded, ${failedCount} failed`)
                               } else {
-                                failedCount++
+                                console.log(`[DELETE-CUSTOMER] Uploads directory does not exist: ${uploadsDir}`)
                               }
                             } catch (e) {
-                              console.error(`[DELETE-CUSTOMER] Error deleting ${fname}:`, e)
-                              failedCount++
+                              console.error(`[DELETE-CUSTOMER] Error in document deletion loop:`, e)
+                              documentsWarning = `Failed to remove AnythingLLM documents: ${(e as Error).message}`
                             }
+                            
+                            // Also delete workspace index documents
+                            try {
+                              console.log(`[DELETE-CUSTOMER] Searching for workspace index documents...`)
+                              const data = await anythingllmRequest<any>('/documents', 'GET')
+                              const items = (data?.localFiles?.items ?? []) as any[]
+                              
+                              // Flatten the document tree
+                              const allDocs: any[] = []
+                              function flatten(nodes: any[], output: any[]) {
+                                for (const node of nodes) {
+                                  if (node.type === 'file') output.push(node)
+                                  if (node.items && Array.isArray(node.items)) flatten(node.items, output)
+                                }
+                              }
+                              flatten(items, allDocs)
+                              
+                              // Find workspace index documents for this workspace
+                              const indexMatches = allDocs.filter((doc: any) => {
+                                const title = String(doc?.title || "").trim()
+                                const name = String(doc?.name || "").trim()
+                                return title.includes(`workspace-document-index-${resolvedSlug}`) || 
+                                       name.includes(`workspace-document-index-${resolvedSlug}`)
+                              })
+                              
+                              console.log(`[DELETE-CUSTOMER] Found ${indexMatches.length} workspace index document(s)`)
+                              
+                              for (const doc of indexMatches) {
+                                const name = String(doc?.name || "")
+                                const qualifiedName = String(doc?.qualifiedName || "")
+                                const docPath = qualifiedName || (name.startsWith('raw-') ? `custom-documents/${name}` : name)
+                                console.log(`[DELETE-CUSTOMER] Deleting workspace index: ${docPath}`)
+                                
+                                try {
+                                  const wsPath = `/workspace/${encodeURIComponent(resolvedSlug)}/update-embeddings`
+                                  const sysPath = `/system/remove-documents`
+                                  await anythingllmRequest(wsPath, "POST", { deletes: [docPath] })
+                                  await anythingllmRequest(sysPath, "DELETE", { names: [docPath] })
+                                  console.log(`[DELETE-CUSTOMER] Deleted workspace index: ${docPath}`)
+                                } catch (e) {
+                                  console.error(`[DELETE-CUSTOMER] Failed to delete workspace index ${docPath}:`, e)
+                                }
+                              }
+                            } catch (e) {
+                              console.error(`[DELETE-CUSTOMER] Error deleting workspace indexes:`, e)
+                            }
+
+                            if (shouldDeleteWorkspace) {
+                              console.log(`[DELETE-CUSTOMER] Deleting workspace: ${resolvedSlug}`)
+                              try {
+                                await anythingllmRequest(`/workspace/${encodeURIComponent(resolvedSlug)}`, "DELETE")
+                                console.log(`[DELETE-CUSTOMER] Workspace deleted successfully`)
+                              } catch (e) {
+                                console.error(`[DELETE-CUSTOMER] Failed to delete workspace:`, e)
+                                workspaceWarning = `Failed to delete AnythingLLM workspace: ${(e as Error).message}`
+                              }
+                            }
+                          } else if (shouldDeleteWorkspace) {
+                            workspaceWarning = `No AnythingLLM workspace named '${folderName}' found`
                           }
-                          console.log(`[DELETE-CUSTOMER] Deletion summary: ${deletedCount} succeeded, ${failedCount} failed`)
-                        } else {
-                          console.log(`[DELETE-CUSTOMER] Uploads directory does not exist: ${uploadsDir}`)
-                        }
-                      } catch (e) {
-                        console.error(`[DELETE-CUSTOMER] Error in document deletion loop:`, e)
-                        documentsWarning = `Failed to remove AnythingLLM documents: ${(e as Error).message}`
-                      }
-                      
-                      // Also delete workspace index documents
-                      try {
-                        console.log(`[DELETE-CUSTOMER] Searching for workspace index documents...`)
-                        const data = await anythingllmRequest<any>('/documents', 'GET')
-                        const items = (data?.localFiles?.items ?? []) as any[]
-                        
-                        // Flatten the document tree
-                        const allDocs: any[] = []
-                        function flatten(nodes: any[], output: any[]) {
-                          for (const node of nodes) {
-                            if (node.type === 'file') output.push(node)
-                            if (node.items && Array.isArray(node.items)) flatten(node.items, output)
-                          }
-                        }
-                        flatten(items, allDocs)
-                        
-                        // Find workspace index documents for this workspace
-                        const indexMatches = allDocs.filter((doc: any) => {
-                          const title = String(doc?.title || "").trim()
-                          const name = String(doc?.name || "").trim()
-                          return title.includes(`workspace-document-index-${resolvedSlug}`) || 
-                                 name.includes(`workspace-document-index-${resolvedSlug}`)
-                        })
-                        
-                        console.log(`[DELETE-CUSTOMER] Found ${indexMatches.length} workspace index document(s)`)
-                        
-                        for (const doc of indexMatches) {
-                          const name = String(doc?.name || "")
-                          const qualifiedName = String(doc?.qualifiedName || "")
-                          const docPath = qualifiedName || (name.startsWith('raw-') ? `custom-documents/${name}` : name)
-                          console.log(`[DELETE-CUSTOMER] Deleting workspace index: ${docPath}`)
-                          
+
+                          // Remove AnythingLLM document folder for this customer
+                          console.log(`[DELETE-CUSTOMER] Removing AnythingLLM folder: ${folderName}`)
                           try {
-                            const wsPath = `/workspace/${encodeURIComponent(resolvedSlug)}/update-embeddings`
-                            const sysPath = `/system/remove-documents`
-                            await anythingllmRequest(wsPath, "POST", { deletes: [docPath] })
-                            await anythingllmRequest(sysPath, "DELETE", { names: [docPath] })
-                            console.log(`[DELETE-CUSTOMER] Deleted workspace index: ${docPath}`)
+                            const result = await anythingllmRequest<{ success: boolean; message: string }>(
+                              "/document/remove-folder",
+                              "DELETE",
+                              { name: folderName }
+                            )
+                            console.log(`[DELETE-CUSTOMER] Folder removal result:`, result)
                           } catch (e) {
-                            console.error(`[DELETE-CUSTOMER] Failed to delete workspace index ${docPath}:`, e)
+                            console.error(`[DELETE-CUSTOMER] Failed to remove folder:`, e)
+                            anythingLLMFolderWarning = `Failed to remove AnythingLLM folder: ${(e as Error).message}`
                           }
-                        }
-                      } catch (e) {
-                        console.error(`[DELETE-CUSTOMER] Error deleting workspace indexes:`, e)
-                      }
-
-                      if (shouldDeleteWorkspace) {
-                        console.log(`[DELETE-CUSTOMER] Deleting workspace: ${resolvedSlug}`)
-                        try {
-                          await anythingllmRequest(`/workspace/${encodeURIComponent(resolvedSlug)}`, "DELETE")
-                          console.log(`[DELETE-CUSTOMER] Workspace deleted successfully`)
                         } catch (e) {
-                          console.error(`[DELETE-CUSTOMER] Failed to delete workspace:`, e)
-                          workspaceWarning = `Failed to delete AnythingLLM workspace: ${(e as Error).message}`
+                          workspaceWarning = `Failed to contact AnythingLLM: ${(e as Error).message}`
                         }
-                      }
-                    } else if (shouldDeleteWorkspace) {
-                      workspaceWarning = `No AnythingLLM workspace named '${folderName}' found`
-                    }
 
-                    // Remove AnythingLLM document folder for this customer
-                    console.log(`[DELETE-CUSTOMER] Removing AnythingLLM folder: ${folderName}`)
-                    try {
-                      const result = await anythingllmRequest<{ success: boolean; message: string }>(
-                        "/document/remove-folder",
-                        "DELETE",
-                        { name: folderName }
-                      )
-                      console.log(`[DELETE-CUSTOMER] Folder removal result:`, result)
-                    } catch (e) {
-                      console.error(`[DELETE-CUSTOMER] Failed to remove folder:`, e)
-                      anythingLLMFolderWarning = `Failed to remove AnythingLLM folder: ${(e as Error).message}`
-                    }
-                  } catch (e) {
-                    workspaceWarning = `Failed to contact AnythingLLM: ${(e as Error).message}`
-                  }
+                        // 5) Cleanup persisted generation cards for this customer and workspace
+                        try {
+                          const db2 = getDB()
+                          await new Promise<void>((resolve)=>{ db2.run('DELETE FROM gen_cards WHERE customerId = ?', [id], () => resolve()) })
+                          if (wsSlugToClean && shouldDeleteWorkspace) {
+                            await new Promise<void>((resolve)=>{ db2.run('DELETE FROM gen_cards WHERE workspaceSlug = ?', [wsSlugToClean], () => resolve()) })
+                          }
+                        } catch {}
 
-                  // 5) Cleanup persisted generation cards for this customer and workspace
-                  try {
-                    const db2 = getDB()
-                    await new Promise<void>((resolve)=>{ db2.run('DELETE FROM gen_cards WHERE customerId = ?', [id], () => resolve()) })
-                    if (wsSlugToClean && shouldDeleteWorkspace) {
-                      await new Promise<void>((resolve)=>{ db2.run('DELETE FROM gen_cards WHERE workspaceSlug = ?', [wsSlugToClean], () => resolve()) })
-                    }
-                  } catch {}
-
-                  return res.json({ 
-                    ok: true, 
-                    id, 
-                    ...(warning ? { warning } : {}), 
-                    ...(documentsWarning ? { documentsWarning } : {}), 
-                    ...(workspaceWarning ? { workspaceWarning } : {}),
-                    ...(anythingLLMFolderWarning ? { anythingLLMFolderWarning } : {})
+                        return res.json({
+                          ok: true, 
+                          id, 
+                          ...(warning ? { warning } : {}), 
+                          ...(documentsWarning ? { documentsWarning } : {}), 
+                          ...(workspaceWarning ? { workspaceWarning } : {}),
+                          ...(anythingLLMFolderWarning ? { anythingLLMFolderWarning } : {})
+                        })
+                      })
+                    })
                   })
                 })
               })
             })
           })
         })
-      })
-    }
-  )
-})
+      }
+    )
+  })
 })
 
 // GET /api/customers/:id/workspace - resolve AnythingLLM workspace for this customer by folder-based name

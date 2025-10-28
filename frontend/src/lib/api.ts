@@ -67,20 +67,28 @@ export const A = {
   updateThread: (slug: string, threadSlug: string, name: string) => jpost(`/api/anythingllm/workspace/${encodeURIComponent(slug)}/thread/${encodeURIComponent(threadSlug)}/update`, { name }),
   deleteThread: (slug: string, threadSlug: string) => jdel(`/api/anythingllm/workspace/${encodeURIComponent(slug)}/thread/${encodeURIComponent(threadSlug)}`),
 
-  workspaceChats: (slug: string, limit = 50, orderBy: "asc" | "desc" = "desc", apiSessionId?: string) => {
-    const params = new URLSearchParams({ limit: String(limit), orderBy });
-    if (apiSessionId) params.set('apiSessionId', apiSessionId);
-    return jget<any>(`/api/anythingllm/workspace/${encodeURIComponent(slug)}/chats?${params.toString()}`);
+  workspaceChats: (slug: string, limit = 100, orderBy: "asc" | "desc" = "desc", apiSessionId?: string, offset = 0) => {
+    const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+    if (apiSessionId) params.set('sessionId', apiSessionId); // Use sessionId for local endpoint
+    params.set('onlyVisible', 'true'); // Only get visible messages
+    return jget<any>(`/api/anythingllm/workspace/${encodeURIComponent(slug)}/chats/local?${params.toString()}`);
   },
-  threadChats: (slug: string, threadSlug: string) => jget<any>(`/api/anythingllm/workspace/${encodeURIComponent(slug)}/thread/${encodeURIComponent(threadSlug)}/chats`),
+  threadChats: (slug: string, threadSlug: string, limit = 100, offset = 0) => {
+    const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+    return jget<any>(`/api/anythingllm/workspace/${encodeURIComponent(slug)}/thread/${encodeURIComponent(threadSlug)}/chats?${params.toString()}`);
+  },
   chatWorkspace: (slug: string, body: any) => jpost(`/api/anythingllm/workspace/${encodeURIComponent(slug)}/chat`, body),
   chatThread: (slug: string, threadSlug: string, body: any) => jpost(`/api/anythingllm/workspace/${encodeURIComponent(slug)}/thread/${encodeURIComponent(threadSlug)}/chat`, body),
   streamWorkspace: (slug: string, body: any, signal?: AbortSignal) => {
     const baseUrl = getBaseUrl();
     return fetch(baseUrl + `/api/anythingllm/workspace/${encodeURIComponent(slug)}/stream-chat`, { 
       method: 'POST', 
-      headers: { 'Accept': 'text/event-stream', 'Content-Type': 'application/json' }, 
-      body: JSON.stringify(body), 
+      headers: { 
+        'Accept': 'text/event-stream', 
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(body),
+      cache: 'no-store',
       signal 
     });
   },

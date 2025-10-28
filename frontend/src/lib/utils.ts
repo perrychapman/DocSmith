@@ -56,33 +56,47 @@ export async function readSSEStream(resp: Response, onData: (data: string) => vo
   const reader = resp.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
-  while (true) {
-    const { value, done } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split(/\r?\n/);
-    buffer = lines.pop() || "";
-    for (const line of lines) {
-      if (!line) continue;
-      if (line.startsWith("data:")) {
-        const payload = line.slice(5).trimStart();
-        if (payload === "[DONE]") continue;
-        // If server emits a JSON array in one line, iterate
-        try {
-          const parsed = JSON.parse(payload);
-          if (Array.isArray(parsed)) {
-            for (const item of parsed) {
-              onData(JSON.stringify(item));
+  
+  // Use recursive function instead of while loop to avoid potential issues in Electron
+  const readNext = async (): Promise<void> => {
+    try {
+      const { value, done } = await reader.read();
+      if (done) return;
+      
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split(/\r?\n/);
+      buffer = lines.pop() || "";
+      
+      for (const line of lines) {
+        if (!line) continue;
+        if (line.startsWith("data:")) {
+          const payload = line.slice(5).trimStart();
+          if (payload === "[DONE]") continue;
+          // If server emits a JSON array in one line, iterate
+          try {
+            const parsed = JSON.parse(payload);
+            if (Array.isArray(parsed)) {
+              for (const item of parsed) {
+                onData(JSON.stringify(item));
+              }
+            } else {
+              onData(payload);
             }
-          } else {
+          } catch {
             onData(payload);
           }
-        } catch {
-          onData(payload);
         }
       }
+      
+      // Continue reading recursively
+      await readNext();
+    } catch (readErr) {
+      throw readErr;
     }
-  }
+  };
+  
+  // Start the recursive read
+  await readNext();
 }
 
 /**

@@ -119,6 +119,92 @@ const migrations: Migration[] = [
         })
       })
     }
+  },
+  {
+    version: 6,
+    name: "add-customer-sailpoint-config",
+    up: async (db: sqlite3.Database) => {
+      return new Promise((resolve, reject) => {
+        const sql = `
+          CREATE TABLE IF NOT EXISTS customer_sailpoint_config (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            customerId INTEGER NOT NULL,
+            sandboxTenantUrl TEXT DEFAULT '',
+            sandboxClientId TEXT DEFAULT '',
+            sandboxClientSecret TEXT DEFAULT '',
+            prodTenantUrl TEXT DEFAULT '',
+            prodClientId TEXT DEFAULT '',
+            prodClientSecret TEXT DEFAULT '',
+            createdAt TEXT NOT NULL,
+            updatedAt TEXT NOT NULL,
+            FOREIGN KEY (customerId) REFERENCES customers(id) ON DELETE CASCADE
+          )
+        `;
+        
+        db.run(sql, (err) => {
+          if (err && !err.message.includes("already exists")) {
+            return reject(err)
+          }
+          
+          // Create unique index
+          db.run(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_customer_sailpoint_config ON customer_sailpoint_config(customerId)",
+            (indexErr) => {
+              if (indexErr && !indexErr.message.includes("already exists")) {
+                return reject(indexErr)
+              }
+              resolve()
+            }
+          )
+        })
+      })
+    }
+  },
+  {
+    version: 7,
+    name: "add-chat-messages-table",
+    up: async (db: sqlite3.Database) => {
+      return new Promise((resolve, reject) => {
+        const sql = `
+          CREATE TABLE IF NOT EXISTS chat_messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            workspaceSlug TEXT NOT NULL,
+            customerId INTEGER,
+            role TEXT NOT NULL,
+            content TEXT NOT NULL,
+            conversationId TEXT,
+            messageIndex INTEGER DEFAULT 0,
+            sailpointContext TEXT,
+            sessionId TEXT DEFAULT 'user-interactive',
+            isVisible INTEGER DEFAULT 1,
+            sentAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            createdAt TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (customerId) REFERENCES customers(id)
+          )
+        `;
+        
+        db.run(sql, (err) => {
+          if (err && !err.message.includes("already exists")) {
+            return reject(err);
+          }
+          
+          // Create indexes
+          db.serialize(() => {
+            db.run("CREATE INDEX IF NOT EXISTS idx_chat_workspace ON chat_messages(workspaceSlug)");
+            db.run("CREATE INDEX IF NOT EXISTS idx_chat_customer ON chat_messages(customerId)");
+            db.run("CREATE INDEX IF NOT EXISTS idx_chat_session ON chat_messages(sessionId)");
+            db.run("CREATE INDEX IF NOT EXISTS idx_chat_visible ON chat_messages(isVisible)");
+            db.run("CREATE INDEX IF NOT EXISTS idx_chat_conversation ON chat_messages(conversationId)");
+            db.run("CREATE INDEX IF NOT EXISTS idx_chat_sent_at ON chat_messages(sentAt)", (indexErr) => {
+              if (indexErr && !indexErr.message.includes("already exists")) {
+                return reject(indexErr);
+              }
+              resolve();
+            });
+          });
+        });
+      });
+    }
   }
 ]
 

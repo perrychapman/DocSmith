@@ -21,6 +21,7 @@ import JobsPanel from "../components/JobsPanel";
 import { MetadataModal, type DocumentMetadata } from "../components/MetadataModal";
 import { useMetadata } from "../contexts/MetadataContext";
 import { useDebouncedState, useUserActivity } from "../lib/hooks";
+import { SailpointConfigModal } from "../components/SailpointConfigModal";
 import {
   DndContext,
   closestCenter,
@@ -50,6 +51,8 @@ export function CustomersPage() {
   const [loadingCustomers, setLoadingCustomers] = React.useState(true);
   const [name, setName] = React.useState("");
   const [selectedId, setSelectedId] = React.useState<number | null>(null);
+  const [configCustomerId, setConfigCustomerId] = React.useState<number | null>(null);
+  const [sailpointConfigOpen, setSailpointConfigOpen] = React.useState(false);
   
   // Favorites persist across app runs via localStorage
   const [favorites, setFavorites] = React.useState<Set<number>>(() => {
@@ -1922,16 +1925,25 @@ export function CustomersPage() {
                     onClick={(e) => {
                       e.stopPropagation();
                       e.preventDefault();
-                      // TODO: Navigate to CustomerConfig page
-                      console.log('Navigate to config for:', customer.name);
+                      setConfigCustomerId(customer.id);
+                      setSailpointConfigOpen(true);
                     }}
-                    aria-label={`Settings for ${customer.name}`}
-                    className="h-6 w-6 sm:h-7 sm:w-7 hover:bg-accent"
+                    aria-label={`SailPoint Settings for ${customer.name}`}
+                    className="h-6 w-6 sm:h-7 sm:w-7 hover:bg-accent p-1"
                   >
-                    <Settings className="h-3 w-3 sm:h-3.5 sm:w-3.5" />
+                    <img 
+                      src="/sailpoint-icon.svg" 
+                      alt="SailPoint ISC" 
+                      className="h-full w-full dark:hidden"
+                    />
+                    <img 
+                      src="/sailpoint-icon-dark.svg" 
+                      alt="SailPoint ISC" 
+                      className="h-full w-full hidden dark:block"
+                    />
                   </Button>
                 </TooltipTrigger>
-                <TooltipContent>Customer Settings</TooltipContent>
+                <TooltipContent>SailPoint Configuration</TooltipContent>
               </Tooltip>
               
               <Tooltip>
@@ -2021,6 +2033,19 @@ export function CustomersPage() {
           </BreadcrumbItem>
         </BreadcrumbList>
       </Breadcrumb>
+
+      {/* SailPoint Configuration Modal */}
+      <SailpointConfigModal
+        customerId={configCustomerId}
+        customerName={customers.find(c => c.id === configCustomerId)?.name}
+        open={sailpointConfigOpen}
+        onOpenChange={(open) => {
+          setSailpointConfigOpen(open);
+          if (!open) {
+            setConfigCustomerId(null);
+          }
+        }}
+      />
 
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 sm:gap-4">
         <div className="space-y-1 flex-1 min-w-0">
@@ -2139,6 +2164,8 @@ export function CustomersPage() {
                   onOpenLogs={openLogs}
                   onOpenGenerate={() => { if (selectedId) setGenerateOpen(true) }}
                   externalCards={chatCards}
+                  customerId={selectedId}
+                  customerName={customers.find(c => c.id === selectedId)?.name}
                   headerActions={(
                     <>
                       <Dialog>

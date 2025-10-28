@@ -9,7 +9,7 @@ import { Icon } from "./icons";
 import { toast } from "sonner";
 import { A, apiFetch } from "../lib/api";
 import { readSSEStream, formatTimeAgo } from "../lib/utils";
-import { Copy, Check } from "lucide-react";
+import { Copy, Check, Download } from "lucide-react";
 import { useUserActivity } from "../lib/hooks";
 
 type Thread = { id?: number; slug?: string; name?: string };
@@ -33,17 +33,32 @@ type Props = {
   externalCards?: ExternalCard[];
   onOpenLogs?: (jobId: string) => void;
   onOpenGenerate?: () => void;
+  customerId?: number; // For SailPoint integration
+  customerName?: string; // For displaying in SailPoint responses
 };
 
-export default function WorkspaceChat({ slug, title = "AI Chat", className, headerActions, externalCards, onOpenLogs, onOpenGenerate }: Props) {
+export default function WorkspaceChat({ slug, title = "AI Chat", className, headerActions, externalCards, onOpenLogs, onOpenGenerate, customerId, customerName }: Props) {
   const [threads, setThreads] = React.useState<Thread[]>([]);
   const [threadSlug, setThreadSlug] = React.useState<string | undefined>(undefined);
   const [history, setHistory] = React.useState<any[]>([]);
-  const [msg, setMsg] = React.useState("");
+  
+  // PERFORMANCE: Use uncontrolled input with ref for instant typing without re-renders
+  const messageInputRef = React.useRef<HTMLTextAreaElement>(null);
+  
   const [loading, setLoading] = React.useState(false);
   const [replying, setReplying] = React.useState(false);
   const [stream] = React.useState(true);
   const [exporting, setExporting] = React.useState(false);
+  const [streamingProgress, setStreamingProgress] = React.useState<string>(''); // Current progress status
+  
+  // Pagination state
+  const [hasMore, setHasMore] = React.useState(true);
+  const [loadingMore, setLoadingMore] = React.useState(false);
+  const [offset, setOffset] = React.useState(0);
+  const MESSAGES_PER_PAGE = 20;
+  // PERFORMANCE: Reduced from 100 to 50 to minimize DOM nodes and improve rendering
+  const MAX_MESSAGES_IN_VIEW = 50; // Limit displayed messages to prevent performance issues
+  
   // Jobs for this workspace (UI-only correlation to hide codey outputs)
   type Job = {
     id: string;
@@ -65,14 +80,31 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
 
   const listRef = React.useRef<HTMLDivElement | null>(null);
   const [atBottom, setAtBottom] = React.useState(true);
-  const scrollToBottom = React.useCallback(() => {
+  const scrollAnimationRef = React.useRef<number | null>(null);
+  const autoScrollTimeoutRef = React.useRef<number | null>(null);
+  const activeStreamRef = React.useRef<boolean>(false); // Track active stream to prevent aborts
+  const activeResponseRef = React.useRef<Response | null>(null); // Keep response alive during streaming
+  
+  const scrollToBottom = React.useCallback((smooth = true) => {
     const el = listRef.current; 
     if (!el) return;
     
+    // Cancel any ongoing scroll animation
+    if (scrollAnimationRef.current) {
+      cancelAnimationFrame(scrollAnimationRef.current);
+      scrollAnimationRef.current = null;
+    }
+    
+    const target = el.scrollHeight - el.clientHeight;
+    
+    if (!smooth) {
+      el.scrollTop = target;
+      return;
+    }
+    
     // Custom smooth scroll implementation for better cross-browser support
     const start = el.scrollTop;
-    const target = el.scrollHeight - el.clientHeight;
-    const duration = 300; // 300ms animation
+    const duration = 150; // Faster for streaming (150ms vs 300ms)
     const startTime = performance.now();
     
     const animateScroll = (currentTime: number) => {
@@ -85,20 +117,62 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
       el.scrollTop = start + (target - start) * easeOutCubic;
       
       if (progress < 1) {
-        requestAnimationFrame(animateScroll);
+        scrollAnimationRef.current = requestAnimationFrame(animateScroll);
+      } else {
+        scrollAnimationRef.current = null;
       }
     };
     
-    requestAnimationFrame(animateScroll);
+    scrollAnimationRef.current = requestAnimationFrame(animateScroll);
+  }, []);
+
+  // Debounced auto-scroll for streaming - only scrolls if user is at bottom
+  const scheduleAutoScroll = React.useCallback(() => {
+    if (!atBottom) return;
+    
+    // Clear any pending auto-scroll
+    if (autoScrollTimeoutRef.current) {
+      clearTimeout(autoScrollTimeoutRef.current);
+    }
+    
+    // Schedule a scroll after a short delay to batch rapid updates
+    autoScrollTimeoutRef.current = window.setTimeout(() => {
+      const el = listRef.current;
+      if (!el) return;
+      
+      // Check if user is still near bottom (within 100px)
+      const isNearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 100;
+      if (isNearBottom) {
+        // Just snap to bottom without animation during streaming
+        el.scrollTop = el.scrollHeight;
+      }
+      autoScrollTimeoutRef.current = null;
+    }, 50); // 50ms debounce
+  }, [atBottom]);
+
+  // Cleanup timeout on unmount
+  React.useEffect(() => {
+    return () => {
+      if (autoScrollTimeoutRef.current) {
+        clearTimeout(autoScrollTimeoutRef.current);
+      }
+    };
   }, []);
   const onListScroll = React.useCallback(() => {
     const el = listRef.current; if (!el) return;
     const near = el.scrollHeight - el.scrollTop - el.clientHeight < 16;
     setAtBottom(near);
-  }, []);
+    
+    // Load more messages when scrolling to top
+    if (el.scrollTop < 100 && hasMore && !loadingMore) {
+      loadMoreMessages();
+    }
+  }, [hasMore, loadingMore]);
 
   async function loadThreadsAndChats() {
     setLoading(true);
+    setOffset(0);
+    setHasMore(true);
     try {
       const thr = await A.workspaceThreads(slug);
       const list = Array.isArray(thr?.threads) ? thr.threads : [];
@@ -106,9 +180,12 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
       const tslug = (list[0]?.slug ? String(list[0].slug) : undefined);
       setThreadSlug(tslug);
       if (tslug) {
-        const data = await A.threadChats(slug, tslug);
+        const data = await A.threadChats(slug, tslug, MESSAGES_PER_PAGE, 0);
         const raw = Array.isArray(data?.history) ? data.history : (Array.isArray(data) ? data : []);
         let items = sortOldestFirst(raw);
+        setHasMore(items.length >= MESSAGES_PER_PAGE);
+        setOffset(items.length);
+        
         // Append persisted generation cards from backend
         try {
           const persisted = await A.genCardsByWorkspace(slug).catch(()=>({ cards: [] }));
@@ -117,16 +194,18 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
             const have = new Set(items.filter((m:any)=>m && m.card).map((m:any)=>String(m.card.id)));
             const mapped = cards.filter((c:any)=>!have.has(String(c.id))).map((c:any)=>({ role: (c.side || 'user'), content: '', sentAt: Number(c.timestamp||0)||Date.now(), card: { ...c } }));
             items = [...items, ...mapped];
-            // Sort all messages and cards by timestamp
             items = sortMessagesByTimestamp(items);
           }
         } catch {}
         setHistory(items);
       } else {
         // Fetch only user-interactive chats (not system metadata/generation operations)
-        const data = await A.workspaceChats(slug, 50, 'asc', 'user-interactive');
+        const data = await A.workspaceChats(slug, MESSAGES_PER_PAGE, 'desc', 'user-interactive', 0);
         const raw = Array.isArray(data?.history) ? data.history : (Array.isArray(data?.chats) ? data.chats : (Array.isArray(data) ? data : []));
         let items = sortOldestFirst(raw);
+        setHasMore(items.length >= MESSAGES_PER_PAGE);
+        setOffset(items.length);
+        
         try {
           const persisted = await A.genCardsByWorkspace(slug).catch(()=>({ cards: [] }));
           const cards: ExternalCard[] = Array.isArray((persisted as any)?.cards) ? (persisted as any).cards : [];
@@ -134,7 +213,6 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
             const have = new Set(items.filter((m:any)=>m && m.card).map((m:any)=>String(m.card.id)));
             const mapped = cards.filter((c:any)=>!have.has(String(c.id))).map((c:any)=>({ role: (c.side || 'user'), content: '', sentAt: Number(c.timestamp||0)||Date.now(), card: { ...c } }));
             items = [...items, ...mapped];
-            // Sort all messages and cards by timestamp
             items = sortMessagesByTimestamp(items);
           }
         } catch {}
@@ -145,16 +223,58 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
     } finally { setLoading(false); }
   }
 
+  async function loadMoreMessages() {
+    if (loadingMore || !hasMore) return;
+    
+    setLoadingMore(true);
+    try {
+      if (threadSlug) {
+        const data = await A.threadChats(slug, threadSlug, MESSAGES_PER_PAGE, offset);
+        const raw = Array.isArray(data?.history) ? data.history : (Array.isArray(data) ? data : []);
+        const items = sortOldestFirst(raw);
+        
+        if (items.length < MESSAGES_PER_PAGE) {
+          setHasMore(false);
+        }
+        
+        if (items.length > 0) {
+          setHistory(prev => {
+            const combined = [...items, ...prev];
+            return sortMessagesByTimestamp(combined);
+          });
+          setOffset(prev => prev + items.length);
+        }
+      } else {
+        const data = await A.workspaceChats(slug, MESSAGES_PER_PAGE, 'desc', 'user-interactive', offset);
+        const raw = Array.isArray(data?.history) ? data.history : (Array.isArray(data?.chats) ? data.chats : (Array.isArray(data) ? data : []));
+        const items = sortOldestFirst(raw);
+        
+        if (items.length < MESSAGES_PER_PAGE) {
+          setHasMore(false);
+        }
+        
+        if (items.length > 0) {
+          setHistory(prev => {
+            const combined = [...items, ...prev];
+            return sortMessagesByTimestamp(combined);
+          });
+          setOffset(prev => prev + items.length);
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load more messages:', err);
+    } finally {
+      setLoadingMore(false);
+    }
+  }
+
   React.useEffect(() => { loadThreadsAndChats(); }, [slug]);
   
-  // Enhanced auto-scroll with smooth animations
+  // Enhanced auto-scroll with smooth animations - triggers on history changes
   React.useEffect(() => { 
     if (atBottom && history.length > 0) {
-      // Small delay to let DOM update, then smooth scroll
-      const timeoutId = setTimeout(() => {
-        scrollToBottom();
-      }, 50);
-      return () => clearTimeout(timeoutId);
+      // Immediate scroll for streaming (no delay)
+      requestAnimationFrame(() => scrollToBottom(true));
     }
   }, [history, atBottom, scrollToBottom]);
   // Inject external cards as synthetic assistant messages
@@ -202,67 +322,26 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
     return () => { cancelled = true; clearInterval(t) };
   }, [slug, isUserActive]);
 
-  // Detect prompts/responses originating from DocSmith generation jobs
-  const isGenJobPrompt = React.useCallback((txt: string) => {
-    const s = String(txt || '').toLowerCase();
-    if (!s) return false;
-    return (
-      (s.includes('current generator code:') && s.includes('docsmith')) ||
-      (s.includes('you are a senior typescript engineer') && s.includes('docsmith'))
-    );
-  }, []);
-  const isGenJobResponse = React.useCallback((txt: string) => {
-    const s = String(txt || '');
-    if (!s) return false;
-    if (/export\s+async\s+function\s+generate\s*\(/i.test(s)) return true;
-    if (/```\s*ts[\s\S]*```/i.test(s)) return true;
-    return false;
-  }, []);
+  // NOTE: Filter detection functions kept as safety net but not actively used
+  // Messages are filtered server-side via apiSessionId='user-interactive' parameter
 
-  // NOTE: Metadata extraction detection kept as safety net, but system operations now use 
-  // separate sessionIds (system-metadata-extraction, system-doc-generation, system-template-compile)
-  // and are filtered at the API level via apiSessionId='user-interactive' parameter
-  // Detect prompts/responses from metadata extraction (hidden from UI)
-  const isMetadataPrompt = React.useCallback((txt: string) => {
-    const s = String(txt || '').toLowerCase();
-    if (!s) return false;
-    // Must have multiple specific metadata indicators to avoid false positives
-    const hasAnalyzeDocument = s.includes('please analyze the document named') || s.includes('please analyze all sheets from the excel file');
-    const hasMetadataInstruction = s.includes('critical instructions') || s.includes('critical requirements');
-    const hasDocumentType = (
-      s.includes('this is a spreadsheet file') ||
-      s.includes('this is a presentation file') ||
-      s.includes('this is a code/script file') ||
-      s.includes('this is an image file') ||
-      s.includes('this is a document file')
-    );
-    const hasReturnJSON = s.includes('return only a valid json object') || s.includes('return only a json object');
-    // Match actual backend patterns: analyze + critical instructions/requirements + return JSON
-    return (hasAnalyzeDocument && hasMetadataInstruction && hasReturnJSON) || (hasDocumentType && hasMetadataInstruction && hasReturnJSON);
-  }, []);
-  const isMetadataResponse = React.useCallback((txt: string) => {
-    const s = String(txt || '');
-    if (!s) return false;
-    // Must be valid JSON AND have ALL the metadata-specific fields
-    // AND have metadata structure indicators like arrays and specific field combinations
-    try {
-      const jsonMatch = s.match(/\{[\s\S]*\}/);
-      if (!jsonMatch) return false;
-      const parsed = JSON.parse(jsonMatch[0]);
-      // Must have documentType AND at least 3 other metadata-specific fields
-      const hasDocType = parsed.hasOwnProperty('documentType');
-      const hasPurpose = parsed.hasOwnProperty('purpose');
-      const hasKeyTopics = parsed.hasOwnProperty('keyTopics');
-      const hasDataCategories = parsed.hasOwnProperty('dataCategories');
-      const hasStakeholders = parsed.hasOwnProperty('stakeholders');
-      const hasMentionedSystems = parsed.hasOwnProperty('mentionedSystems');
-      
-      const metadataFieldCount = [hasPurpose, hasKeyTopics, hasDataCategories, hasStakeholders, hasMentionedSystems].filter(Boolean).length;
-      
-      return hasDocType && metadataFieldCount >= 3;
-    } catch {
-      return false;
-    }
+  // Generate stable keys for messages to optimize React rendering
+  const getMessageKey = React.useCallback((m: any, idx: number): string => {
+    // Try to use message ID if available
+    if (m?.id) return `msg-${m.id}`;
+    if (m?.uuid) return `msg-${m.uuid}`;
+    
+    // For cards, use card ID
+    if (m?.card?.id) return `card-${m.card.id}`;
+    
+    // Fallback: create a stable hash from message content + timestamp
+    const content = String(m?.content || m?.message || m?.text || '');
+    const timestamp = m?.sentAt ?? m?.createdAt ?? m?.created_at ?? m?.timestamp ?? m?.date ?? 0;
+    const role = m?.role || 'unknown';
+    
+    // Create a simple hash from content + timestamp + role
+    const hashStr = `${role}-${timestamp}-${content.substring(0, 50)}`;
+    return `msg-${idx}-${hashStr.split('').reduce((acc, char) => ((acc << 5) - acc) + char.charCodeAt(0), 0)}`;
   }, []);
 
   const looksLikeCode = React.useCallback((txt: string) => {
@@ -275,51 +354,253 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
     const keywordHits = lines.reduce((acc, l) => acc + (codeKeywords.test(l) ? 1 : 0), 0);
     return lines.length >= 6 && (keywordHits >= 3 || punctScore >= 6);
   }, []);
+
+  // Copy message handler
+  const handleCopyMessage = React.useCallback((message: any) => {
+    const content = String(message.content || message.message || message.text || '');
+    
+    navigator.clipboard.writeText(content).then(() => {
+      toast.success('Response copied to clipboard');
+    }).catch(() => {
+      toast.error('Failed to copy to clipboard');
+    });
+  }, []);
+
+  // Export message handler
+  const handleExportMessage = React.useCallback((message: any) => {
+    const content = String(message.content || message.message || message.text || '');
+    const timestamp = message.sentAt ?? message.createdAt ?? message.created_at ?? message.timestamp ?? message.date;
+    const sailpointMeta = (message as any).sailpointMetadata;
+    
+    // Create filename with timestamp
+    const date = timestamp ? new Date(timestamp) : new Date();
+    const dateStr = date.toISOString().replace(/[:.]/g, '-').split('T')[0];
+    const timeStr = date.toTimeString().split(' ')[0].replace(/:/g, '-');
+    const filename = `ai-response-${dateStr}-${timeStr}.md`;
+    
+    // Build export content
+    let exportContent = '# AI Response Export\n\n';
+    
+    // Add metadata
+    exportContent += `**Date:** ${date.toLocaleString()}\n\n`;
+    if (customerName) {
+      exportContent += `**Customer:** ${customerName}\n\n`;
+    }
+    if (sailpointMeta) {
+      exportContent += `**SailPoint Query Execution**\n\n`;
+      if (sailpointMeta.stepsExecuted) {
+        exportContent += `- Steps Executed: ${sailpointMeta.stepsExecuted}\n`;
+      }
+      if (sailpointMeta.totalItemsFetched) {
+        exportContent += `- Total Items Fetched: ${sailpointMeta.totalItemsFetched}\n`;
+      }
+      exportContent += '\n';
+    }
+    
+    exportContent += '---\n\n';
+    exportContent += content;
+    
+    // Create blob and download
+    const blob = new Blob([exportContent], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    
+    toast.success('Response exported successfully');
+  }, [customerName]);
+
   const latestRelevantJob = React.useCallback(() => wsJobs[0], [wsJobs]);
 
-  // Memoize ReactMarkdown components to avoid recreating on every render
-  // Memoize individual chat message to prevent unnecessary re-renders
-  const ChatMessage = React.memo(({ 
-    message, 
-    index, 
-    isMetadataPrompt, 
-    isMetadataResponse, 
-    isGenJobPrompt, 
-    isGenJobResponse, 
-    latestRelevantJob,
-    onOpenLogs,
-    markdownComponents 
-  }: { 
-    message: any; 
-    index: number; 
-    isMetadataPrompt: (txt: string) => boolean;
-    isMetadataResponse: (txt: string) => boolean;
-    isGenJobPrompt: (txt: string) => boolean;
-    isGenJobResponse: (txt: string) => boolean;
+  // PERFORMANCE: Memoize the displayed messages to prevent unnecessary re-computations
+  const displayedMessages = React.useMemo(() => {
+    return history.slice(-MAX_MESSAGES_IN_VIEW);
+  }, [history, MAX_MESSAGES_IN_VIEW]);
+
+  // PERFORMANCE: Extract message list into memoized component to prevent re-renders during typing
+  const MessageList = React.memo(({ 
+    messages, 
+    latestRelevantJob, 
+    onOpenLogs, 
+    markdownComponents,
+    getMessageKey,
+    onCopyMessage,
+    onExportMessage
+  }: {
+    messages: any[];
     latestRelevantJob: () => Job | undefined;
     onOpenLogs?: (jobId: string) => void;
     markdownComponents: any;
+    getMessageKey: (m: any, idx: number) => string;
+    onCopyMessage: (message: any) => void;
+    onExportMessage: (message: any) => void;
+  }) => {
+    return (
+      <>
+        {messages.map((m, idx) => (
+          <ChatMessage 
+            key={getMessageKey(m, idx)}
+            message={m}
+            index={idx}
+            latestRelevantJob={latestRelevantJob}
+            onOpenLogs={onOpenLogs}
+            markdownComponents={markdownComponents}
+            onCopyMessage={onCopyMessage}
+            onExportMessage={onExportMessage}
+          />
+        ))}
+      </>
+    );
+  });
+
+  // Memoize ReactMarkdown components to avoid recreating on every render
+  // Memoize individual chat message to prevent unnecessary re-renders
+  // PERFORMANCE: Removed inline filter checks - messages are pre-filtered before rendering
+  const ChatMessage = React.memo(({ 
+    message, 
+    index, 
+    latestRelevantJob,
+    onOpenLogs,
+    markdownComponents,
+    onCopyMessage,
+    onExportMessage
+  }: { 
+    message: any; 
+    index: number; 
+    latestRelevantJob: () => Job | undefined;
+    onOpenLogs?: (jobId: string) => void;
+    markdownComponents: any;
+    onCopyMessage: (message: any) => void;
+    onExportMessage: (message: any) => void;
   }) => {
     const m = message;
     const isUser = (String(m.role || '')).toLowerCase() === 'user';
-    const text = String(m.content || m.message || m.text || '');
+    const fullText = String(m.content || m.message || m.text || '');
     const card = (m as any).card as ExternalCard | undefined;
-    const shouldHideAsCode = (isGenJobPrompt(text) || isGenJobResponse(text));
-    const isMetadata = (isMetadataPrompt(text) || isMetadataResponse(text));
-    const job = shouldHideAsCode ? latestRelevantJob() : null;
     const timestamp = m.sentAt ?? m.createdAt ?? m.created_at ?? m.timestamp ?? m.date;
     const timeAgo = formatTimeAgo(timestamp);
+    const isSailPoint = !!(m as any).sailpointMetadata;
     
-    // Hide metadata extraction prompts and responses completely
-    if (isMetadata) return null;
+    // Extract planning/progress steps from content (lines starting with [ANALYSIS], [PLAN], [STEP], etc.)
+    const progressPrefixes = ['[ANALYSIS]', '[PLAN]', '[STEP]', '[COMPLETE]', '[SUCCESS]', '[AGGREGATE]', '[SYNTHESIS]', '[ERROR]', '[WARNING]'];
+    const lines = fullText.split('\n');
+    const progressLines: string[] = [];
+    const contentLines: string[] = [];
     
-    // Hide all generation job messages (prompts and responses)
-    if (shouldHideAsCode) return null;
+    for (const line of lines) {
+      const hasProgressPrefix = progressPrefixes.some(prefix => line.trim().startsWith(prefix));
+      if (hasProgressPrefix) {
+        progressLines.push(line);
+      } else {
+        contentLines.push(line);
+      }
+    }
+    
+    const hasProgress = progressLines.length > 0 && isSailPoint;
+    const mainContent = contentLines.join('\n').trim();
+    const [showProgress, setShowProgress] = React.useState(false);
     
     return (
       <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
         <div className="group flex flex-col gap-1 max-w-[75%]">
-          <div className={`whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 ${isUser ? 'bg-primary text-primary-foreground rounded-br-md' : 'bg-card border rounded-bl-md'}`}>
+          {/* SailPoint query progress (collapsible, like ChatGPT thinking) */}
+          {hasProgress && !isUser && (
+            <div className="bg-muted/50 border border-border/50 rounded-lg overflow-hidden text-xs">
+              <button
+                onClick={() => setShowProgress(!showProgress)}
+                className="w-full px-3 py-2 flex items-center justify-between hover:bg-muted/70 transition-colors"
+              >
+                <div className="flex items-center gap-2">
+                  <svg className="h-3.5 w-3.5 text-blue-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+                    <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
+                    <line x1="12" y1="22.08" x2="12" y2="12"/>
+                  </svg>
+                  <span className="text-blue-600 dark:text-blue-400 font-medium">SailPoint Query Execution</span>
+                  {(m as any).sailpointMetadata?.stepsExecuted && (
+                    <span className="text-muted-foreground">
+                      · {(m as any).sailpointMetadata.stepsExecuted} step{(m as any).sailpointMetadata.stepsExecuted > 1 ? 's' : ''}
+                      {(m as any).sailpointMetadata?.totalItemsFetched > 0 && ` · ${(m as any).sailpointMetadata.totalItemsFetched} items`}
+                    </span>
+                  )}
+                </div>
+                <svg 
+                  className={`h-4 w-4 text-muted-foreground transition-transform ${showProgress ? 'rotate-180' : ''}`}
+                  viewBox="0 0 24 24" 
+                  fill="none" 
+                  stroke="currentColor" 
+                  strokeWidth="2" 
+                  strokeLinecap="round" 
+                  strokeLinejoin="round"
+                >
+                  <polyline points="6 9 12 15 18 9"/>
+                </svg>
+              </button>
+              {showProgress && (
+                <div className="px-3 py-2 border-t border-border/50 space-y-1 text-muted-foreground max-h-64 overflow-y-auto font-mono">
+                  {progressLines.map((line, idx) => {
+                    // Strip the [PREFIX] tag and format nicely
+                    const cleaned = line.replace(/^\[([A-Z]+)\]\s*/, (match, prefix) => {
+                      const icons: Record<string, string> = {
+                        'ANALYSIS': '⚡',
+                        'PLAN': '📋',
+                        'STEP': '⏳',
+                        'COMPLETE': '✓',
+                        'SUCCESS': '✓',
+                        'AGGREGATE': '📊',
+                        'SYNTHESIS': '💭',
+                        'ERROR': '✗',
+                        'WARNING': '⚠'
+                      };
+                      const icon = icons[prefix] || '•';
+                      return `${icon} `;
+                    });
+                    return (
+                      <div key={idx} className="text-xs leading-relaxed">{cleaned}</div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          )}
+          <div className={`relative whitespace-pre-wrap rounded-2xl px-3.5 py-2.5 ${isUser ? 'bg-primary text-primary-foreground rounded-br-md' : 'bg-card border rounded-bl-md'}`}>
+            {/* Copy and Export buttons for assistant messages */}
+            {!isUser && !card && (
+              <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center gap-1">
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-7 w-7"
+                      onClick={() => onCopyMessage(m)}
+                      aria-label="Copy response"
+                    >
+                      <Copy className="h-3.5 w-3.5" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Copy response</TooltipContent>
+                </Tooltip>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      className="h-7 w-7"
+                      onClick={() => onExportMessage(m)}
+                      aria-label="Export response"
+                    >
+                      <Download className="h-3.5 w-3.5" />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent>Export response</TooltipContent>
+                </Tooltip>
+              </div>
+            )}
             {card ? (
               <div className="space-y-1">
                 <div className="flex items-center gap-2">
@@ -429,15 +710,13 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
                   )}
                 </div>
               </div>
-            ) : shouldHideAsCode ? (
-              null
             ) : (
               <div className="text-sm [&>*]:my-0 [&>ul]:mt-1 [&>ol]:mt-1 [&>h1]:mt-2 [&>h2]:mt-2 [&>h3]:mt-1.5" style={{ lineHeight: '1.6' }}>
                 <ReactMarkdown 
                   remarkPlugins={[remarkGfm]}
                   components={markdownComponents}
                 >
-                  {text}
+                  {mainContent || fullText}
                 </ReactMarkdown>
               </div>
             )}
@@ -448,6 +727,75 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
             </div>
           )}
         </div>
+      </div>
+    );
+  }, (prevProps, nextProps) => {
+    // Custom comparison function for React.memo to prevent unnecessary re-renders
+    // Only re-render if the message content, role, or timestamp changes
+    const prevMsg = prevProps.message;
+    const nextMsg = nextProps.message;
+    
+    // Compare message identity
+    if (prevMsg?.id !== nextMsg?.id) return false;
+    if (prevMsg?.uuid !== nextMsg?.uuid) return false;
+    
+    // Compare message content
+    const prevContent = String(prevMsg?.content || prevMsg?.message || prevMsg?.text || '');
+    const nextContent = String(nextMsg?.content || nextMsg?.message || nextMsg?.text || '');
+    if (prevContent !== nextContent) return false;
+    
+    // Compare role
+    if (prevMsg?.role !== nextMsg?.role) return false;
+    
+    // Compare timestamp
+    const prevTime = prevMsg?.sentAt ?? prevMsg?.createdAt ?? prevMsg?.created_at ?? prevMsg?.timestamp ?? 0;
+    const nextTime = nextMsg?.sentAt ?? nextMsg?.createdAt ?? nextMsg?.created_at ?? nextMsg?.timestamp ?? 0;
+    if (prevTime !== nextTime) return false;
+    
+    // Compare card status (for generation cards)
+    if (prevMsg?.card?.jobStatus !== nextMsg?.card?.jobStatus) return false;
+    
+    // Compare SailPoint metadata
+    if (prevMsg?.sailpointMetadata?.stepsExecuted !== nextMsg?.sailpointMetadata?.stepsExecuted) return false;
+    
+    // All relevant props are the same, skip re-render
+    return true;
+  });
+
+  // Separate CodeBlock component to avoid useState inside useMemo
+  const CodeBlock = React.memo(({ children, className, ...props }: any) => {
+    const [copied, setCopied] = React.useState(false);
+    const codeString = String(children).replace(/\n$/, '');
+    const isInline = !className;
+    
+    const handleCopy = async () => {
+      await navigator.clipboard.writeText(codeString);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    };
+    
+    return isInline ? (
+      <code className="bg-muted text-foreground px-1.5 py-0.5 rounded text-xs font-mono" {...props}>
+        {children}
+      </code>
+    ) : (
+      <div className="relative group my-3">
+        <button
+          onClick={handleCopy}
+          className="absolute right-2 top-2 p-1.5 rounded bg-background hover:bg-muted border border-border opacity-0 group-hover:opacity-100 transition-opacity z-10"
+          aria-label="Copy code"
+        >
+          {copied ? (
+            <Check className="h-3.5 w-3.5 text-green-500" />
+          ) : (
+            <Copy className="h-3.5 w-3.5 text-muted-foreground" />
+          )}
+        </button>
+        <pre className="bg-muted border border-border rounded p-3 overflow-x-auto">
+          <code className="text-xs font-mono text-foreground" {...props}>
+            {children}
+          </code>
+        </pre>
       </div>
     );
   });
@@ -508,43 +856,29 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
     strong: ({node, children, ...props}: any) => (
       <strong className="font-semibold" {...props}>{children}</strong>
     ),
-    // Code
-    code: ({node, children, ...props}: any) => {
-      const [copied, setCopied] = React.useState(false);
-      const codeString = String(children).replace(/\n$/, '');
-      const isInline = !props.className;
-      
-      const handleCopy = async () => {
-        await navigator.clipboard.writeText(codeString);
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      };
-      
-      return isInline ? (
-        <code className="bg-muted text-foreground px-1.5 py-0.5 rounded text-xs font-mono" {...props}>
-          {children}
-        </code>
-      ) : (
-        <div className="relative group my-3">
-          <button
-            onClick={handleCopy}
-            className="absolute right-2 top-2 p-1.5 rounded bg-background hover:bg-muted border border-border opacity-0 group-hover:opacity-100 transition-opacity z-10"
-            aria-label="Copy code"
-          >
-            {copied ? (
-              <Check className="h-3.5 w-3.5 text-green-500" />
-            ) : (
-              <Copy className="h-3.5 w-3.5 text-muted-foreground" />
-            )}
-          </button>
-          <pre className="bg-muted border border-border rounded p-3 overflow-x-auto">
-            <code className="text-xs font-mono text-foreground" {...props}>
-              {children}
-            </code>
-          </pre>
-        </div>
-      );
-    },
+    // Tables - with max height for performance
+    table: ({node, children, ...props}: any) => (
+      <div className="my-3 overflow-auto max-h-96 border border-border rounded">
+        <table className="w-full text-xs" {...props}>{children}</table>
+      </div>
+    ),
+    thead: ({node, children, ...props}: any) => (
+      <thead className="bg-muted sticky top-0" {...props}>{children}</thead>
+    ),
+    tbody: ({node, children, ...props}: any) => (
+      <tbody {...props}>{children}</tbody>
+    ),
+    tr: ({node, children, ...props}: any) => (
+      <tr className="border-b border-border" {...props}>{children}</tr>
+    ),
+    th: ({node, children, ...props}: any) => (
+      <th className="px-3 py-2 text-left font-semibold" {...props}>{children}</th>
+    ),
+    td: ({node, children, ...props}: any) => (
+      <td className="px-3 py-2" {...props}>{children}</td>
+    ),
+    // Code - use extracted CodeBlock component
+    code: CodeBlock,
   }), []);
 
   function sortOldestFirst(arr: any[]): any[] {
@@ -576,60 +910,148 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
   }
 
   async function send() {
-    const t = msg.trim(); if (!t) return;
-    setMsg("");
-    setHistory((h) => [...h, { role: 'user', content: t, sentAt: Date.now() }]);
-    setReplying(true);
-    // Tag user-interactive chats with a specific sessionId so they can be filtered from system operations
-    const body = { message: t, mode: 'chat', sessionId: 'user-interactive' } as any;
+    const inputEl = messageInputRef.current;
+    if (!inputEl) return;
+    
+    const t = inputEl.value.trim();
+    if (!t) return;
+    
+    // Prevent multiple simultaneous streams
+    if (activeStreamRef.current) {
+      console.warn('[WorkspaceChat] Stream already active, ignoring send request');
+      return;
+    }
+    
+    inputEl.value = ""; // Clear the input
+    
+    // Check if this is a SailPoint query (starts with @sailpoint)
+    const isSailPointQuery = t.toLowerCase().startsWith('@sailpoint');
+    const actualMessage = isSailPointQuery ? t.substring(10).trim() : t; // Remove @sailpoint prefix
+    
+    // Add user message immediately
+    setHistory((h) => [
+      ...h, 
+      { role: 'user', content: t, sentAt: Date.now() }
+    ]);
+    
+    // Build request body
+    const body = { 
+      message: actualMessage, 
+      mode: 'chat', 
+      sessionId: 'user-interactive',
+      // Only enable SailPoint orchestration if @sailpoint is present
+      useSailPoint: isSailPointQuery,
+      customerId: isSailPointQuery ? customerId : undefined,
+      customerName: isSailPointQuery ? customerName : undefined
+    } as any;
+    
     const effectiveThread = threadSlug || (threads && threads[0]?.slug ? String(threads[0].slug) : undefined);
     if (!threadSlug && effectiveThread) setThreadSlug(effectiveThread);
 
     // Try streaming first (works for both thread and workspace)
     if (stream) {
+      activeStreamRef.current = true; // Mark stream as active
       try {
         const resp = effectiveThread 
           ? await A.streamThread(slug, effectiveThread, body)
           : await A.streamWorkspace(slug, body);
         
-        if (!resp.ok || !resp.body) throw new Error(String(resp.status));
+        // Store response in ref to prevent garbage collection
+        activeResponseRef.current = resp;
+        
+        if (!resp.ok || !resp.body) {
+          activeResponseRef.current = null;
+          throw new Error(String(resp.status));
+        }
+        
+        // Initialize assistant message when stream starts
+        let assistantMessageAdded = false;
         let acc = "";
-        let firstChunk = true;
+        
+        // Start reading immediately to keep connection alive
         await readSSEStream(resp, (payload) => {
-          if (firstChunk) {
-            setReplying(false); // Hide dots as soon as first chunk arrives
-            firstChunk = false;
+          if (!assistantMessageAdded) {
+            setHistory((h) => [...h, { role: 'assistant', content: '', sentAt: Date.now() }]);
+            assistantMessageAdded = true;
           }
+          
+          let shouldUpdate = false;
           try {
             const j = JSON.parse(payload);
             const piece = j?.textResponse ?? j?.text ?? j?.delta ?? j?.content ?? '';
-            acc += String(piece);
-          } catch { acc += payload; }
-          setHistory((h) => {
-            const base = h.slice();
-            const last = base[base.length - 1];
-            if (last && last.role === 'assistant') last.content = acc; else base.push({ role: 'assistant', content: acc, sentAt: Date.now() });
-            return base;
-          });
+            const pieceStr = String(piece);
+            
+            // Skip empty status messages (keepalives)
+            if (!pieceStr) return;
+            
+            // Check if this is a progress/status message
+            const progressPrefixes = [
+              '[ANALYSIS]', '[PLAN]', '[STEP]', '[COMPLETE]', '[SUCCESS]', 
+              '[AGGREGATE]', '[SYNTHESIS]', '[ERROR]', '[WARNING]',
+              '[REFINING', '[ITERATION', '[INFO]', '[STOPPING]', '[NOTE]',
+              '[EXPANSION]', '[DISCOVERING]', // Reference expansion and schema discovery
+              '🔄', '💭', '🔍', '✓'  // Emoji indicators
+            ];
+            const isProgressMessage = progressPrefixes.some(prefix => pieceStr.trim().startsWith(prefix));
+            
+            if (isProgressMessage) {
+              // Extract just the progress text, clean it up
+              // Remove prefixes like [STEP], [REFINING X], emojis, etc.
+              let cleaned = pieceStr
+                .replace(/^\[([A-Z]+)\s*\d*\/?\d*\]\s*/g, '') // Remove [WORD X/Y] or [WORD]
+                .replace(/^[🔄💭🔍✓]\s*/g, '') // Remove leading emojis
+                .trim();
+              
+              setStreamingProgress(cleaned);
+              // Don't accumulate progress in the message content
+            } else {
+              // Regular content - accumulate it
+              acc += pieceStr;
+              setStreamingProgress(''); // Clear progress when actual content starts
+              shouldUpdate = true;
+            }
+          } catch { 
+            acc += payload;
+            shouldUpdate = true;
+          }
+          
+          if (shouldUpdate) {
+            setHistory((h) => {
+              const base = h.slice();
+              const last = base[base.length - 1];
+              if (last && last.role === 'assistant') {
+                last.content = acc;
+              } else {
+                base.push({ role: 'assistant', content: acc, sentAt: Date.now() });
+              }
+              return base;
+            });
+          }
+          
+          // Debounced scroll to bottom as content streams in (only if user is at bottom)
+          scheduleAutoScroll();
         });
-        setReplying(false); // Ensure dots are hidden after stream completes
+        setStreamingProgress(''); // Clear progress when done
+        activeStreamRef.current = false; // Stream complete
+        activeResponseRef.current = null; // Clear response reference
       } catch (err) {
-        console.error('[WorkspaceChat] Streaming failed, falling back to non-streaming:', err);
-        // Fallback to non-streaming chat
-        try {
-          const r = effectiveThread ? await A.chatThread(slug, effectiveThread, body) : await A.chatWorkspace(slug, body);
-          const text = r?.textResponse || r?.response || JSON.stringify(r);
-          setHistory((h) => [...h, { role: 'assistant', content: text, sentAt: Date.now() }]);
-        } catch (err2) {
-          console.error('[WorkspaceChat] Non-streaming also failed:', err2);
-        }
-      } finally {
-        setReplying(false);
+        console.error('[WorkspaceChat] Streaming error:', err);
+        activeStreamRef.current = false; // Clear active flag on error
+        activeResponseRef.current = null; // Clear response reference
+        // Update last assistant message with error
+        setHistory((h) => {
+          const base = h.slice();
+          const last = base[base.length - 1];
+          if (last && last.role === 'assistant' && !last.content) {
+            last.content = 'Sorry, there was an error processing your message. Please try again.';
+          }
+          return base;
+        });
       }
       return;
     }
 
-    // Non-streaming fallback
+    // Non-streaming fallback (shouldn't normally be used)
     try {
       const r = effectiveThread ? await A.chatThread(slug, effectiveThread, body) : await A.chatWorkspace(slug, body);
       const text = r?.textResponse || r?.response || JSON.stringify(r);
@@ -818,20 +1240,46 @@ return (
       <div className="relative flex-1 min-h-0 flex">
         <div className="text-sm text-muted-foreground sr-only">{loading ? 'Loading chats.' : `${history.length} message${history.length === 1 ? '' : 's'}`}</div>
         <div ref={listRef} onScroll={onListScroll} className="flex-1 min-h-0 overflow-y-auto px-3 py-0 space-y-2">
-            {history.map((m, idx) => (
-              <ChatMessage 
-                key={idx}
-                message={m}
-                index={idx}
-                isMetadataPrompt={isMetadataPrompt}
-                isMetadataResponse={isMetadataResponse}
-                isGenJobPrompt={isGenJobPrompt}
-                isGenJobResponse={isGenJobResponse}
-                latestRelevantJob={latestRelevantJob}
-                onOpenLogs={onOpenLogs}
-                markdownComponents={markdownComponents}
-              />
-            ))}
+            {hasMore && !loading && (
+              <div className="flex justify-center py-2">
+                {loadingMore ? (
+                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <span className="h-1.5 w-1.5 rounded-full bg-muted-foreground/60 animate-pulse"></span>
+                    <span>Loading older messages...</span>
+                  </div>
+                ) : (
+                  <Button 
+                    size="sm" 
+                    variant="ghost" 
+                    onClick={loadMoreMessages}
+                    className="text-xs text-muted-foreground hover:text-foreground"
+                  >
+                    Load older messages
+                  </Button>
+                )}
+              </div>
+            )}
+            {/* PERFORMANCE: Render only MAX_MESSAGES_IN_VIEW most recent messages (memoized) */}
+            <MessageList 
+              messages={displayedMessages}
+              latestRelevantJob={latestRelevantJob}
+              onOpenLogs={onOpenLogs}
+              markdownComponents={markdownComponents}
+              getMessageKey={getMessageKey}
+              onCopyMessage={handleCopyMessage}
+              onExportMessage={handleExportMessage}
+            />
+            {/* Show streaming progress above the bubble */}
+            {streamingProgress && (
+              <div className="flex justify-start">
+                <div className="max-w-[75%] px-2 py-1.5 text-xs text-muted-foreground flex items-center gap-2 animate-in fade-in duration-200">
+                  <svg className="h-3.5 w-3.5 animate-spin text-blue-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M21 12a9 9 0 1 1-6.219-8.56"/>
+                  </svg>
+                  <span>{streamingProgress}</span>
+                </div>
+              </div>
+            )}
             {replying && (
               <div className="flex justify-start">
                 <div className="max-w-[75%] rounded-2xl px-3.5 py-2.5 bg-card border rounded-bl-md">
@@ -847,7 +1295,7 @@ return (
         {!atBottom && (
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button size="sm" variant="secondary" className="absolute right-4 bottom-4 rounded-full shadow" onClick={scrollToBottom}>
+              <Button size="sm" variant="secondary" className="absolute right-4 bottom-4 rounded-full shadow" onClick={() => scrollToBottom(true)}>
                 <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M6 9l6 6 6-6" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
               </Button>
             </TooltipTrigger>
@@ -858,9 +1306,10 @@ return (
       <div className="px-2.5 border-t h-24 flex items-center">
         <div className="relative w-full">
           <Textarea
-            placeholder="Type a message"
-            value={msg}
-            onChange={(e) => { signalActivity(); setMsg(e.target.value); }}
+            ref={messageInputRef}
+            placeholder={customerId ? "Type a message (use @sailpoint for SailPoint queries)..." : "Type a message"}
+            defaultValue=""
+            onChange={() => signalActivity()}
             onKeyDown={(e) => { if ((e.key === 'Enter' && (e.ctrlKey || e.metaKey))) { e.preventDefault(); send(); } }}
             className="flex-1 w-full pr-12 resize-none h-14 max-h-40"
           />

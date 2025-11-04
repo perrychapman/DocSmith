@@ -573,46 +573,107 @@ router.post("/upload", (req, res) => {
 
       // Ensure AnythingLLM workspace and upload template file to it
       let wsSlug: string | undefined = meta?.workspaceSlug
+      let uploadError: Error | null = null
+      
       try {
         const wsName = getWorkspaceName(`Template_${name}` || `Template_${providedSlug}`)
+        console.log(`[TEMPLATE-UPLOAD] Looking for workspace: ${wsName}`)
+        
         const list = await anythingllmRequest<any>("/workspaces", "GET")
         const arr: Array<{ name?: string; slug?: string }> = Array.isArray((list as any)?.workspaces) ? (list as any).workspaces : (Array.isArray(list) ? (list as any) : [])
         wsSlug = wsSlug || arr.find((w) => (w.name || "") === wsName)?.slug
+        
         if (!wsSlug) {
+          console.log(`[TEMPLATE-UPLOAD] Workspace not found, creating new workspace: ${wsName}`)
           const created = await anythingllmRequest<any>("/workspace/new", "POST", { name: wsName })
           wsSlug = created?.workspace?.slug
+          if (!wsSlug) {
+            throw new Error(`Failed to create workspace - no slug returned`)
+          }
+          console.log(`[TEMPLATE-UPLOAD] Created workspace with slug: ${wsSlug}`)
+        } else {
+          console.log(`[TEMPLATE-UPLOAD] Using existing workspace: ${wsSlug}`)
         }
+        
         if (wsSlug) {
           let uploadedDocNames: string[] = []
           try {
+            // Verify file exists before attempting upload
+            if (!fs.existsSync(target)) {
+              throw new Error(`Template file not found: ${target}`)
+            }
+            
+            const fileStats = fs.statSync(target)
+            console.log(`[TEMPLATE-UPLOAD] File size: ${fileStats.size} bytes`)
+            
             const fd = new FormData()
             const buf = fs.readFileSync(target)
             const uint = new Uint8Array(buf)
-            // @ts-ignore
-            const theFile = new File([uint], path.basename(target))
-            fd.append("file", theFile)
-            fd.append("addToWorkspaces", wsSlug)
             
-            console.log(`[TEMPLATE-UPLOAD] Uploading ${path.basename(target)} to AnythingLLM...`)
+            // Create File object with explicit type
+            const fileName = path.basename(target)
+            const fileExt = path.extname(fileName).toLowerCase()
+            const mimeTypes: { [key: string]: string } = {
+              '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+              '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+              '.pdf': 'application/pdf',
+              '.txt': 'text/plain',
+              '.md': 'text/markdown'
+            }
+            const mimeType = mimeTypes[fileExt] || 'application/octet-stream'
+            
+            // @ts-ignore - File constructor works in Node.js with proper polyfill
+            const theFile = new File([uint], fileName, { type: mimeType })
+            fd.append("file", theFile)
+            // NOTE: Don't use addToWorkspaces parameter - it's unreliable
+            // We'll explicitly embed the documents after upload
+            
+            console.log(`[TEMPLATE-UPLOAD] Uploading ${fileName} (${mimeType})...`)
             const resp = await anythingllmRequest<any>("/document/upload", "POST", fd)
             
-            console.log(`[TEMPLATE-UPLOAD] Full upload response:`, JSON.stringify(resp, null, 2))
+            console.log(`[TEMPLATE-UPLOAD] Upload response received`)
+            console.log(`[TEMPLATE-UPLOAD] Response type:`, typeof resp)
+            console.log(`[TEMPLATE-UPLOAD] Response keys:`, Object.keys(resp || {}))
+            
+            // Check for error in response
+            if (resp?.error || resp?.message?.toLowerCase().includes('error')) {
+              throw new Error(`Upload failed: ${resp.error || resp.message}`)
+            }
             
             // Extract ALL documents from response (important for Excel files with multiple sheets)
+            // Handle multiple possible response formats
+            let foundDocs = false
+            
             if (resp?.documents && Array.isArray(resp.documents)) {
-              uploadedDocNames = resp.documents.map((doc: any) => doc.location || '').filter(Boolean)
-              console.log(`[TEMPLATE-UPLOAD] Upload created ${uploadedDocNames.length} document(s):`, uploadedDocNames)
-            } else if (resp?.document) {
-              // Single document response format
+              // Format 1: Array of documents
+              for (const doc of resp.documents) {
+                if (doc?.location) {
+                  uploadedDocNames.push(doc.location)
+                  foundDocs = true
+                }
+              }
+              if (foundDocs) {
+                console.log(`[TEMPLATE-UPLOAD] Found ${uploadedDocNames.length} document(s) in 'documents' array`)
+              }
+            }
+            
+            if (!foundDocs && resp?.document) {
+              // Format 2: Single document object
               const docLocation = resp.document.location || resp.document.docpath || ''
               if (docLocation) {
                 uploadedDocNames = [docLocation]
-                console.log(`[TEMPLATE-UPLOAD] Upload created 1 document: ${docLocation}`)
+                console.log(`[TEMPLATE-UPLOAD] Found 1 document in 'document' object: ${docLocation}`)
+                foundDocs = true
               }
-            } else {
-              console.error(`[TEMPLATE-UPLOAD] Unexpected response structure - no documents found`)
-              console.error(`[TEMPLATE-UPLOAD] Response keys:`, Object.keys(resp || {}))
             }
+            
+            if (!foundDocs) {
+              console.error(`[TEMPLATE-UPLOAD] Could not find documents in response`)
+              console.error(`[TEMPLATE-UPLOAD] Full response:`, JSON.stringify(resp, null, 2))
+              throw new Error(`Upload response did not contain document locations`)
+            }
+            
+            console.log(`[TEMPLATE-UPLOAD] Successfully extracted ${uploadedDocNames.length} document path(s):`, uploadedDocNames)
             
             // DON'T move documents to a Template_ folder - just embed them directly
             // The documents will be in custom-documents/ folder with their original structure
@@ -664,24 +725,49 @@ router.post("/upload", (req, res) => {
               }
             }
           } catch (uploadErr) {
-            console.error(`[TEMPLATE-UPLOAD] Upload/move/embed failed:`, uploadErr)
+            console.error(`[TEMPLATE-UPLOAD] Upload/embed failed:`, uploadErr)
+            uploadError = uploadErr instanceof Error ? uploadErr : new Error(String(uploadErr))
+            // Don't throw - let it continue to save workspace slug
           }
-          // Persist workspace slug
-          try { const cur = JSON.parse(fs.readFileSync(metaPath,'utf-8')); cur.workspaceSlug = wsSlug; fs.writeFileSync(metaPath, JSON.stringify(cur, null, 2), 'utf-8') } catch {}
+          
+          // Persist workspace slug even if upload failed (can retry later)
+          try { 
+            const cur = JSON.parse(fs.readFileSync(metaPath,'utf-8'))
+            cur.workspaceSlug = wsSlug
+            fs.writeFileSync(metaPath, JSON.stringify(cur, null, 2), 'utf-8')
+            console.log(`[TEMPLATE-UPLOAD] Saved workspace slug to metadata`)
+          } catch (metaErr) {
+            console.error(`[TEMPLATE-UPLOAD] Failed to save workspace slug:`, metaErr)
+          }
         }
-      } catch {}
+      } catch (workspaceErr) {
+        console.error(`[TEMPLATE-UPLOAD] Workspace creation/lookup failed:`, workspaceErr)
+        uploadError = workspaceErr instanceof Error ? workspaceErr : new Error(String(workspaceErr))
+      }
 
       // Trigger background metadata extraction (don't block response)
-      if (wsSlug) {
+      if (wsSlug && !uploadError) {
         setImmediate(() => {
           extractTemplateMetadataInBackground(providedSlug, name, target, wsSlug!)
             .catch(err => console.error('[TEMPLATE-METADATA-BG] Failed:', err))
         })
       }
 
+      // Return response with upload status
       // Do not compile here; user triggers compile explicitly later
+      if (uploadError) {
+        console.error(`[TEMPLATE-UPLOAD] Upload completed with errors`)
+        return res.status(201).json({ 
+          ok: true, 
+          slug: providedSlug, 
+          workspaceSlug: wsSlug,
+          warning: `Template saved but upload failed: ${uploadError.message}. You may need to re-upload.`
+        })
+      }
+      
       return res.status(201).json({ ok: true, slug: providedSlug, workspaceSlug: wsSlug })
     } catch (e) {
+      console.error(`[TEMPLATE-UPLOAD] Fatal error:`, e)
       return res.status(500).json({ error: (e as Error).message })
     }
   })
@@ -857,8 +943,41 @@ ${skeleton}`
     const chat = await anythingllmRequest<any>(`/workspace/${encodeURIComponent(String(wsSlug))}/chat`, 'POST', { message: prompt, mode: 'query', sessionId: 'system-template-compile' })
     const text = String(chat?.textResponse || chat?.message || chat || '')
     let code = text
-    const m = text.match(/```[a-z]*\s*([\s\S]*?)```/i)
-    if (m && m[1]) code = m[1]
+    
+    // Robust extraction of code from markdown fence blocks
+    // Try multiple patterns to handle different AI response formats
+    const patterns = [
+      // Standard: ```typescript or ```ts
+      /```(?:typescript|ts)\s*\n([\s\S]*?)\n```/i,
+      // Generic: ```javascript or ```js  
+      /```(?:javascript|js)\s*\n([\s\S]*?)\n```/i,
+      // Any language identifier
+      /```[a-z]+\s*\n([\s\S]*?)\n```/i,
+      // No language identifier (just ```)
+      /```\s*\n([\s\S]*?)\n```/,
+      // Greedy fallback - get everything between first and LAST backticks
+      /```[a-z]*\s*([\s\S]*)```/i
+    ]
+    
+    let extracted = false
+    for (const pattern of patterns) {
+      const m = text.match(pattern)
+      if (m && m[1]) {
+        const candidate = m[1].trim()
+        // Verify it looks like TypeScript code (has export function generate)
+        if (candidate.includes('export') && candidate.includes('function') && candidate.includes('generate')) {
+          code = candidate
+          extracted = true
+          break
+        }
+      }
+    }
+    
+    if (!extracted && text.includes('```')) {
+      // Try to strip just the backticks if present
+      code = text.replace(/^```[a-z]*\s*\n?/i, '').replace(/\n?```\s*$/i, '')
+    }
+    
     code = code.trim()
     if (!code) return res.status(502).json({ error: 'No code returned' })
     fs.writeFileSync(path.join(dir,'generator.full.ts'), code, 'utf-8')
@@ -1472,11 +1591,43 @@ ${skeleton}`
       }
       
       let code = text
-      const m = text.match(/```[a-z]*\s*([\s\S]*?)```/i)
-      if (m && m[1]) {
-        code = m[1]
-        logPush('Extracted code from markdown fence blocks')
+      
+      // Robust extraction of code from markdown fence blocks
+      // Try multiple patterns to handle different AI response formats
+      const patterns = [
+        // Standard: ```typescript or ```ts
+        /```(?:typescript|ts)\s*\n([\s\S]*?)\n```/i,
+        // Generic: ```javascript or ```js  
+        /```(?:javascript|js)\s*\n([\s\S]*?)\n```/i,
+        // Any language identifier
+        /```[a-z]+\s*\n([\s\S]*?)\n```/i,
+        // No language identifier (just ```)
+        /```\s*\n([\s\S]*?)\n```/,
+        // Greedy fallback - get everything between first and LAST backticks
+        /```[a-z]*\s*([\s\S]*)```/i
+      ]
+      
+      let extracted = false
+      for (const pattern of patterns) {
+        const m = text.match(pattern)
+        if (m && m[1]) {
+          const candidate = m[1].trim()
+          // Verify it looks like TypeScript code (has export function generate)
+          if (candidate.includes('export') && candidate.includes('function') && candidate.includes('generate')) {
+            code = candidate
+            logPush(`Extracted code from markdown fence blocks (pattern: ${pattern.source.substring(0, 30)}...)`)
+            extracted = true
+            break
+          }
+        }
       }
+      
+      if (!extracted && text.includes('```')) {
+        logPush('WARNING: Found backticks but could not extract clean code - using raw response')
+        // Try to strip just the backticks if present
+        code = text.replace(/^```[a-z]*\s*\n?/i, '').replace(/\n?```\s*$/i, '')
+      }
+      
       code = code.trim()
       logPush(`Generator code ready (${code.length} chars)`)
       stepOk('aiRequest')

@@ -5,7 +5,6 @@ import { sailpointRequest, getSailpointConfig } from './sailpoint';
 import { SAILPOINT_API_MAP } from './sailpoint-api-map';
 import { getDB } from './storage';
 import { logInfo, logError } from '../utils/logger';
-import { correctFilter, validateFilter, getFilterDocumentation } from './sailpoint-api-filters';
 
 interface SailPointContext {
   customerId: number;
@@ -102,22 +101,21 @@ The TRANSFORMS endpoint has LIMITED filter support:
 - ONLY supports: "name eq \"exact\"" OR "name sw \"prefix\""  
 - NEVER use: "name co \"text\"" - this will cause API errors
 - For partial matching on transforms: ALWAYS use 'sw' (starts with) NOT 'co' (contains)
-Example: "name sw \"Cornerstone\"" | "name co \"Cornerstone\"" (do not use 'co' for transforms)
+Example: "name sw \"Cornerstone\"" (correct) | "name co \"Cornerstone\"" (WRONG - will fail)
 
-**AUTOMATIC FILTER CORRECTION & RETRY**:
-If you accidentally use an unsupported filter operator:
-1. The system will AUTO-CORRECT it and retry (e.g., 'co' → 'sw' for transforms)
-2. You'll receive the corrected results with metadata about what was changed
-3. The response will include: filterCorrected: true, filterCorrections: ["details"]
-4. When you see this, INFORM the user about the correction made
-5. If a query returns 0 results with a filter, the system may auto-retry with corrections
+**FILTER REQUIREMENTS**:
+- Different resources support different filter fields and operators
+- Always use the correct field names for each resource type
+- Use 'sourceId' for accounts, 'source.id' for entitlements/access-profiles
+- If a query returns an error, check the filter syntax carefully
 
-Example response with correction:
-{
-  "data": [...results...],
-  "filterCorrected": true,
-  "originalFilter": "name co \"Cornerstone\"",
-  "correctedFilter": "name sw \"Cornerstone\"",
+**RESOURCES THAT DO NOT SUPPORT FILTERING**:
+The following resources do NOT support the 'filters' parameter and will return a 400 error if you try to use filters:
+- workflows (fetch all workflows, then filter client-side by name if needed)
+- triggers (fetch all, then filter client-side)
+- transforms (ONLY supports: "name eq \"exact\"" OR "name sw \"prefix\"" - see note above)
+
+For these resources, omit the 'filters' parameter entirely and retrieve all records.
   "filterCorrections": ["Changed 'name co' to 'name sw' (contains not supported, using starts-with)"]
 }
 
@@ -629,16 +627,17 @@ export async function executeSailPointQuery(
         let basePath = `/${resource}`;
         
         // CRITICAL: Apply filters to count queries (e.g., count accounts by source)
-        let filters = null;
-        if (rawFilters) {
-          const { corrected, wasModified, changes } = correctFilter(resource, rawFilters);
-          filters = wasModified ? corrected : rawFilters;
-          
-          if (wasModified) {
-            logInfo(`[SAILPOINT_CHAT] Filter auto-corrected for count query:`);
-            changes.forEach(change => logInfo(`  - ${change}`));
-          }
-          
+        // Resources that do NOT support filtering - strip filters to prevent 400 errors
+        const noFilterResources = ['workflows', 'triggers'];
+        let filters = rawFilters;
+        
+        if (filters && noFilterResources.includes(resource)) {
+          logInfo(`[SAILPOINT_CHAT] WARNING: ${resource} does not support filtering. Ignoring filters for count query.`);
+          logInfo(`[SAILPOINT_CHAT] Original filter was: ${filters}`);
+          filters = undefined; // Strip the filter
+        }
+        
+        if (filters) {
           logInfo(`[SAILPOINT_CHAT] Count query with filter: ${filters}`);
         }
         
@@ -689,22 +688,17 @@ export async function executeSailPointQuery(
       let path = `/${resource}?limit=${limit}`;
       if (offset > 0) path += `&offset=${offset}`;
       
-      // Auto-correct filters if needed
+      // Resources that do NOT support filtering - strip filters to prevent 400 errors
+      const noFilterResources = ['workflows', 'triggers'];
       let filters = rawFilters;
-      let filterCorrectionApplied = false;
-      let filterCorrectionDetails: string[] = [];
+      
+      if (filters && noFilterResources.includes(resource)) {
+        logInfo(`[SAILPOINT_CHAT] WARNING: ${resource} does not support filtering. Ignoring filters and fetching all records.`);
+        logInfo(`[SAILPOINT_CHAT] Original filter was: ${filters}`);
+        filters = undefined; // Strip the filter
+      }
       
       if (filters) {
-        const { corrected, wasModified, changes } = correctFilter(resource, filters);
-        
-        if (wasModified) {
-          logInfo(`[SAILPOINT_CHAT] Filter auto-corrected for ${resource}:`);
-          changes.forEach(change => logInfo(`  - ${change}`));
-          filters = corrected;
-          filterCorrectionApplied = true;
-          filterCorrectionDetails = changes;
-        }
-        
         path += `&filters=${encodeURIComponent(filters)}`;
       }
       
@@ -754,14 +748,6 @@ export async function executeSailPointQuery(
         limit,
         hasMore: (offset + returnedCount) < totalCount
       };
-      
-      // Include filter correction info if applied
-      if (filterCorrectionApplied) {
-        response.filterCorrected = true;
-        response.filterCorrections = filterCorrectionDetails;
-        response.originalFilter = rawFilters;
-        response.correctedFilter = filters;
-      }
       
       return response;
     }

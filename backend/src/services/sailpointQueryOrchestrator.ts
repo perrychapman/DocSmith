@@ -775,11 +775,17 @@ export async function executeQueryPlan(
           // Add filter based on item (e.g., filter by sourceId or source.id)
           // Note: Use 'sourceId' not 'source.id' for accounts - v2025 API requires camelCase
           // For entitlements and access-profiles, use 'source.id' (dot notation) - this is what the v2025 API requires
+          
+          logInfo(`[ORCHESTRATOR] Determining filter field for action: ${step.query.action}`);
+          
           if (item.id && step.query.action?.includes('account')) {
+            logInfo(`[ORCHESTRATOR] Using sourceId for accounts`);
             modifiedQuery.filters = `sourceId eq "${item.id}"`;
           } else if (item.id && (step.query.action?.includes('entitlement') || step.query.action?.includes('access'))) {
+            logInfo(`[ORCHESTRATOR] Using source.id for entitlements/access-profiles`);
             modifiedQuery.filters = `source.id eq "${item.id}"`;
           } else if (item.id) {
+            logInfo(`[ORCHESTRATOR] Using sourceId as default fallback`);
             modifiedQuery.filters = `sourceId eq "${item.id}"`;
           }
           

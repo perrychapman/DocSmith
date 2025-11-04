@@ -112,7 +112,6 @@ export function CustomersPage() {
   const [showNoDocsWarning, setShowNoDocsWarning] = React.useState(false);
   // External chat cards to display generation metadata in chat
   const [chatCards, setChatCards] = React.useState<Array<{ id: string; template?: string; jobId?: string; jobStatus?: 'running' | 'done' | 'error' | 'cancelled'; filename?: string; aiContext?: string; timestamp?: number; side?: 'user' | 'assistant' }>>([]);
-  const pollingIntervalRef = React.useRef<NodeJS.Timeout | null>(null);
 
   // Metadata modal state
   const [metadataModal, setMetadataModal] = React.useState<DocumentMetadata | null>(null);
@@ -431,38 +430,6 @@ export function CustomersPage() {
     });
   }, [generatedDocs, selectedId]);
 
-  // Live refresh chat count only for selected customer's workspace
-  // Pauses during active user input to prevent interruptions
-  React.useEffect(() => {
-    if (!selectedId || !wsSlug) return;
-    let ignore = false;
-    let timer: any;
-    async function refreshChats() {
-      // Skip refresh if user is actively typing
-      if (isUserActive) {
-        if (!ignore) timer = setTimeout(refreshChats, 15000);
-        return;
-      }
-      try {
-        const data = await A.workspaceChats(wsSlug!, 200, 'desc').catch(() => null);
-        const arr = Array.isArray((data as any)?.history) ? (data as any).history : (Array.isArray((data as any)?.chats) ? (data as any).chats : (Array.isArray(data) ? (data as any) : []));
-        const count = Array.isArray(arr) ? arr.length : 0;
-        
-        // Only update state if count actually changed (prevent unnecessary re-renders)
-        if (!ignore) {
-          setCounts((prev) => {
-            const prevCount = prev[selectedId!]?.chats;
-            if (prevCount === count) return prev;
-            return { ...prev, [selectedId!]: { ...(prev[selectedId!] || {}), chats: count } };
-          });
-        }
-      } catch { }
-      if (!ignore) timer = setTimeout(refreshChats, 15000);
-    }
-    refreshChats();
-    return () => { ignore = true; if (timer) clearTimeout(timer); };
-  }, [selectedId, wsSlug, isUserActive]);
-
   // Resolve AnythingLLM workspace for selected customer
   React.useEffect(() => {
     let ignore = false;
@@ -603,76 +570,6 @@ export function CustomersPage() {
     loadGenCards();
     return () => { ignore = true };
   }, [wsSlug]);
-
-  // Poll for gen_card updates when there are running jobs
-  // Pauses during active user input to prevent interruptions
-  React.useEffect(() => {
-    if (!wsSlug) {
-      // Clear any existing polling when workspace changes
-      if (pollingIntervalRef.current) {
-        clearInterval(pollingIntervalRef.current);
-        pollingIntervalRef.current = null;
-      }
-      return;
-    }
-    
-    // Function to poll for updates
-    const pollForUpdates = async () => {
-      // Skip polling if user is actively typing
-      if (isUserActive) {
-        return;
-      }
-      try {
-        const response = await A.genCardsByWorkspace(wsSlug);
-        if (response?.cards) {
-          const validCards = Array.isArray(response.cards) ? response.cards.filter((c: any) => c.id) : [];
-          const sorted = validCards.sort((a: any, b: any) => (a.timestamp || 0) - (b.timestamp || 0));
-          
-          // Only update state if cards actually changed (prevent unnecessary re-renders)
-          setChatCards(prev => {
-            if (prev.length !== sorted.length) return sorted;
-            const changed = sorted.some((card: any, idx: number) => {
-              const prevCard = prev[idx];
-              return !prevCard || 
-                     prevCard.id !== card.id || 
-                     prevCard.jobStatus !== card.jobStatus ||
-                     prevCard.timestamp !== card.timestamp;
-            });
-            return changed ? sorted : prev;
-          });
-          
-          // Check if we should stop polling
-          const hasRunningJobs = validCards.some((c: any) => c.jobStatus === 'running');
-          if (!hasRunningJobs && !generating && pollingIntervalRef.current) {
-            clearInterval(pollingIntervalRef.current);
-            pollingIntervalRef.current = null;
-          }
-        }
-      } catch (err) {
-        console.error('Failed to poll gen cards:', err);
-      }
-    };
-    
-    // Start polling if there are running jobs or generation is active
-    const hasRunningJobs = chatCards.some(card => card.jobStatus === 'running');
-    const shouldPoll = hasRunningJobs || generating;
-    
-    if (shouldPoll && !pollingIntervalRef.current) {
-      // Start new polling interval
-      pollingIntervalRef.current = setInterval(pollForUpdates, 3000);
-    } else if (!shouldPoll && pollingIntervalRef.current) {
-      // Stop polling if no longer needed
-      clearInterval(pollingIntervalRef.current);
-      pollingIntervalRef.current = null;
-    }
-    
-    return () => {
-      if (pollingIntervalRef.current) {
-        clearInterval(pollingIntervalRef.current);
-        pollingIntervalRef.current = null;
-      }
-    };
-  }, [wsSlug, chatCards.some(c => c.jobStatus === 'running'), generating, isUserActive]);
 
   // Load templates once when opening generate modal
   React.useEffect(() => {
@@ -1152,45 +1049,57 @@ export function CustomersPage() {
     }
   }
 
-  // Live refresh uploads list for the selected customer
-  // Pause polling during user input to improve responsiveness
-  React.useEffect(() => {
+  // Manual refresh functions for on-demand updates
+  const refreshUploads = React.useCallback(async () => {
     if (!selectedId) return;
-    let ignore = false;
-    let timer: any;
-    async function refresh() {
-      // Skip polling if user is actively typing
-      if (isUserActive) {
-        if (!ignore) timer = setTimeout(refresh, 15000);
-        return;
-      }
-      
-      try {
-        const r = await apiFetch(`/api/uploads/${selectedId}`);
-        if (!r.ok) throw new Error(String(r.status));
-        const data: UploadItem[] = await r.json();
-        
-        // Only update state if uploads actually changed (prevent unnecessary re-renders)
-        if (!ignore) {
-          setUploads(prev => {
-            const newData = Array.isArray(data) ? data : [];
-            if (prev.length !== newData.length) return newData;
-            const changed = newData.some((item, idx) => {
-              const prevItem = prev[idx];
-              return !prevItem || 
-                     prevItem.name !== item.name || 
-                     prevItem.size !== item.size ||
-                     prevItem.modifiedAt !== item.modifiedAt;
-            });
-            return changed ? newData : prev;
-          });
-        }
-      } catch { }
-      if (!ignore) timer = setTimeout(refresh, 15000);
+    try {
+      const r = await apiFetch(`/api/uploads/${selectedId}`);
+      if (!r.ok) throw new Error(String(r.status));
+      const data: UploadItem[] = await r.json();
+      const sorted = Array.isArray(data) ? data.sort((a, b) => 
+        new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime()
+      ) : [];
+      setUploads(sorted);
+    } catch (err) {
+      console.error('Failed to refresh uploads:', err);
     }
-    refresh();
-    return () => { ignore = true; if (timer) clearTimeout(timer); };
-  }, [selectedId, isUserActive]);
+  }, [selectedId]);
+
+  const refreshGeneratedDocs = React.useCallback(async () => {
+    if (!selectedId) return;
+    try {
+      const r = await apiFetch(`/api/documents/${selectedId}/files`);
+      if (!r.ok) throw new Error(String(r.status));
+      const data: UploadItem[] = await r.json();
+      const sorted = Array.isArray(data) ? data.sort((a, b) => 
+        new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime()
+      ) : [];
+      setGeneratedDocs(sorted);
+    } catch (err) {
+      console.error('Failed to refresh generated docs:', err);
+    }
+  }, [selectedId]);
+
+  const refreshGenCards = React.useCallback(async () => {
+    if (!wsSlug) return;
+    try {
+      const response = await A.genCardsByWorkspace(wsSlug);
+      if (response?.cards) {
+        const validCards = Array.isArray(response.cards) ? response.cards.filter((c: any) => c.id) : [];
+        setChatCards(validCards.sort((a: any, b: any) => (a.timestamp || 0) - (b.timestamp || 0)));
+      }
+    } catch (err) {
+      console.error('Failed to refresh gen cards:', err);
+    }
+  }, [wsSlug]);
+
+  const refreshAll = React.useCallback(async () => {
+    await Promise.all([
+      refreshUploads(),
+      refreshGeneratedDocs(),
+      refreshGenCards()
+    ]);
+  }, [refreshUploads, refreshGeneratedDocs, refreshGenCards]);
 
   async function add() {
     const n = name.trim();
@@ -3378,29 +3287,17 @@ function RecentJobs({ selectedId }: { selectedId: number | null }) {
     }
   }
 
-  // Pause polling during user input to improve text input responsiveness
+  // Load jobs on mount and when selectedId changes
   React.useEffect(() => {
     let ignore = false
     const load = async () => {
-      // Skip polling if user is actively typing
-      if (isUserActive) return;
-      
       try {
         setLoading(true)
         const r = await apiFetch('/api/generate/jobs')
         const j = await r.json().catch(() => ({}))
         if (!ignore) {
           const arr = Array.isArray(j?.jobs) ? j.jobs : []
-          
-          // Only update state if jobs actually changed (prevent unnecessary re-renders)
-          setJobs(prev => {
-            if (prev.length !== arr.length) return arr;
-            const changed = arr.some((job: any, idx: number) => {
-              const prevJob = prev[idx];
-              return !prevJob || prevJob.id !== job.id || prevJob.status !== job.status;
-            });
-            return changed ? arr : prev;
-          });
+          setJobs(arr);
           
           const filtered = selectedId ? arr.filter((x: any) => x.customerId === selectedId) : arr
           if (!active && filtered.length) { try { await openJob(filtered[0].id) } catch { } }
@@ -3408,9 +3305,8 @@ function RecentJobs({ selectedId }: { selectedId: number | null }) {
       } catch { if (!ignore) setJobs([]) } finally { if (!ignore) setLoading(false) }
     }
     load()
-    const t = setInterval(load, 5000)
-    return () => { ignore = true; clearInterval(t) }
-  }, [selectedId, isUserActive])
+    return () => { ignore = true }
+  }, [selectedId])
 
   async function openJob(id: string) {
     try { const r = await apiFetch(`/api/generate/jobs/${encodeURIComponent(id)}`); const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(String(r.status)); setActive(j) } catch { setActive(null) }

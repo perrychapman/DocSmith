@@ -1,14 +1,15 @@
 /**
- * SailPoint V3 Search API Integration
+ * SailPoint V2025 Search API Integration
  * 
- * This module provides fallback search functionality using the V3 Search API
+ * This module provides fallback search functionality using the V2025 Search API
  * when standard list endpoints fail due to non-queryable fields.
  * 
- * The V3 Search API supports:
+ * The V2025 Search API supports:
  * - Searching across multiple indices (identities, accounts, entitlements, etc.)
  * - Filtering on ANY field including custom attributes
  * - Pagination beyond 10,000 records using searchAfter
  * - Accurate counts via X-Total-Count header
+ * - Dedicated /search/count endpoint for efficient counting
  */
 
 import { sailpointRequest } from './sailpoint';
@@ -194,7 +195,7 @@ function getSearchIndex(resourceType: string): string {
 }
 
 /**
- * Execute a search query using the V3 Search API
+ * Execute a search query using the V2025 Search API
  */
 export async function executeSearchQuery(
   config: any,
@@ -227,10 +228,11 @@ export async function executeSearchQuery(
     logInfo(`[SEARCH API] Offset ${offset} requested, will fetch and skip`);
   }
 
-  const endpoint = `/v3/search?limit=${effectiveLimit}&offset=${offset}&count=${count}`;
+  // V2025 uses /search endpoint instead of /v3/search
+  const endpoint = `/search?limit=${effectiveLimit}&offset=${offset}&count=${count}`;
 
   try {
-    // V3 Search API uses POST but is a read-only operation (searching)
+    // V2025 Search API uses POST but is a read-only operation (searching)
     // We need to explicitly allow this POST operation
     const result = await sailpointRequest(
       config, 
@@ -257,7 +259,8 @@ export async function executeSearchQuery(
 }
 
 /**
- * Execute a count query using the V3 Search API
+ * Execute a count query using the V2025 Search API
+ * Uses the dedicated /search/count endpoint for efficient counting
  */
 export async function executeSearchCount(
   config: any,
@@ -274,13 +277,20 @@ export async function executeSearchCount(
     queryType: 'SAILPOINT',
     queryVersion: '5.2',
     includeNested: false, // Don't need nested for counts
-    filters: Object.keys(filters).length > 0 ? filters : undefined
+    filters: Object.keys(filters).length > 0 ? filters : undefined,
+    // API requires at least one of 'query' or 'aggregations' to be specified
+    // Use a wildcard query to match all documents (filters will still apply)
+    query: {
+      query: '*',
+      fields: ['id']
+    }
   };
 
-  const endpoint = `/v3/search?limit=1&count=true`;
+  // V2025 has a dedicated /search/count endpoint that returns 204 with X-Total-Count header
+  const endpoint = `/search/count`;
 
   try {
-    // V3 Search API uses POST but is a read-only operation (searching)
+    // V2025 Search Count API uses POST and returns 204 No Content with X-Total-Count header
     // We need to explicitly allow this POST operation and request headers for count
     const result = await sailpointRequest(
       config, 

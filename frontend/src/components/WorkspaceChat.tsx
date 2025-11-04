@@ -10,7 +10,6 @@ import { toast } from "sonner";
 import { A, apiFetch } from "../lib/api";
 import { readSSEStream, formatTimeAgo } from "../lib/utils";
 import { Copy, Check, Download, FileText } from "lucide-react";
-import { useUserActivity } from "../lib/hooks";
 
 type Thread = { id?: number; slug?: string; name?: string };
 
@@ -59,24 +58,7 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
   // PERFORMANCE: Reduced from 100 to 50 to minimize DOM nodes and improve rendering
   const MAX_MESSAGES_IN_VIEW = 50; // Limit displayed messages to prevent performance issues
   
-  // Jobs for this workspace (UI-only correlation to hide codey outputs)
-  type Job = {
-    id: string;
-    customerId: number;
-    customerName?: string;
-    template: string;
-    filename?: string;
-    usedWorkspace?: string;
-    startedAt: string;
-    updatedAt: string;
-    completedAt?: string;
-    status: 'running'|'done'|'error'|'cancelled';
-    file?: { path: string; name: string };
-    error?: string;
-  };
-  const [wsJobs, setWsJobs] = React.useState<Job[]>([]);
   const injectedRef = React.useRef<Record<string, number>>({});
-  const [isUserActive, signalActivity] = useUserActivity(1000);
 
   const listRef = React.useRef<HTMLDivElement | null>(null);
   const [atBottom, setAtBottom] = React.useState(true);
@@ -300,27 +282,6 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
       return sortMessagesByTimestamp(next);
     });
   }, [externalCards]);
-  // Poll jobs and keep only those for this workspace
-  // Pause polling during user typing to improve input responsiveness
-  React.useEffect(() => {
-    let cancelled = false;
-    async function loadJobsOnce() {
-      // Skip polling if user is actively typing
-      if (isUserActive) return;
-      
-      try {
-        const r = await apiFetch('/api/generate/jobs');
-        const j = await r.json().catch(()=>({}));
-        const list: Job[] = Array.isArray(j?.jobs) ? j.jobs : [];
-        const filtered = list.filter((x) => String(x?.usedWorkspace || '') === String(slug));
-        filtered.sort((a,b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
-        if (!cancelled) setWsJobs(filtered);
-      } catch { if (!cancelled) setWsJobs([]); }
-    }
-    loadJobsOnce();
-    const t = setInterval(loadJobsOnce, 5000);
-    return () => { cancelled = true; clearInterval(t) };
-  }, [slug, isUserActive]);
 
   // NOTE: Filter detection functions kept as safety net but not actively used
   // Messages are filtered server-side via apiSessionId='user-interactive' parameter
@@ -581,8 +542,6 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
     }
   }, [history, slug]);
 
-  const latestRelevantJob = React.useCallback(() => wsJobs[0], [wsJobs]);
-
   // PERFORMANCE: Memoize the displayed messages to prevent unnecessary re-computations
   const displayedMessages = React.useMemo(() => {
     return history.slice(-MAX_MESSAGES_IN_VIEW);
@@ -591,7 +550,6 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
   // PERFORMANCE: Extract message list into memoized component to prevent re-renders during typing
   const MessageList = React.memo(({ 
     messages, 
-    latestRelevantJob, 
     onOpenLogs, 
     markdownComponents,
     getMessageKey,
@@ -600,7 +558,6 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
     onExportMessageToWord
   }: {
     messages: any[];
-    latestRelevantJob: () => Job | undefined;
     onOpenLogs?: (jobId: string) => void;
     markdownComponents: any;
     getMessageKey: (m: any, idx: number) => string;
@@ -615,7 +572,6 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
             key={getMessageKey(m, idx)}
             message={m}
             index={idx}
-            latestRelevantJob={latestRelevantJob}
             onOpenLogs={onOpenLogs}
             markdownComponents={markdownComponents}
             onCopyMessage={onCopyMessage}
@@ -633,7 +589,6 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
   const ChatMessage = React.memo(({ 
     message, 
     index, 
-    latestRelevantJob,
     onOpenLogs,
     markdownComponents,
     onCopyMessage,
@@ -642,7 +597,6 @@ export default function WorkspaceChat({ slug, title = "AI Chat", className, head
   }: { 
     message: any; 
     index: number; 
-    latestRelevantJob: () => Job | undefined;
     onOpenLogs?: (jobId: string) => void;
     markdownComponents: any;
     onCopyMessage: (message: any) => void;
@@ -1529,7 +1483,6 @@ return (
             {/* PERFORMANCE: Render only MAX_MESSAGES_IN_VIEW most recent messages (memoized) */}
             <MessageList 
               messages={displayedMessages}
-              latestRelevantJob={latestRelevantJob}
               onOpenLogs={onOpenLogs}
               markdownComponents={markdownComponents}
               getMessageKey={getMessageKey}
@@ -1577,7 +1530,6 @@ return (
             ref={messageInputRef}
             placeholder={customerId ? "Type a message (use @sailpoint for SailPoint queries)..." : "Type a message"}
             defaultValue=""
-            onChange={() => signalActivity()}
             onKeyDown={(e) => { if ((e.key === 'Enter' && (e.ctrlKey || e.metaKey))) { e.preventDefault(); send(); } }}
             className="flex-1 w-full pr-12 resize-none h-14 max-h-40"
           />

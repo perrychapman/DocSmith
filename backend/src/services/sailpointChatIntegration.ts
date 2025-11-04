@@ -642,51 +642,43 @@ export async function executeSailPointQuery(
           logInfo(`[SAILPOINT_CHAT] Count query with filter: ${filters}`);
         }
         
-        // For filtered counts, we need to fetch all matching items and count them
-        // because X-Total-Count header may not respect filters on some endpoints
-        if (filters) {
-          logInfo(`[SAILPOINT_CHAT] Fetching all filtered ${resource} to get accurate count`);
+        // For filtered counts on accounts/entitlements/access-profiles, use direct endpoint with filters
+        // The Search API doesn't have an 'accounts' index (only 'accountactivities' which is for audit logs)
+        // The /v2025/accounts, /v2025/entitlements, and /v2025/access-profiles endpoints DO support filtering
+        if (filters && (resource === 'accounts' || resource === 'entitlements' || resource === 'access-profiles')) {
+          // Use direct endpoint - v2025 supports filtering on these resources
+          let path = `${basePath}?count=true&limit=1&filters=${encodeURIComponent(filters)}`;
           
-          let allItems: any[] = [];
-          let offset = 0;
-          const pageSize = 250; // Reasonable page size
-          let hasMore = true;
-          
-          while (hasMore) {
-            const path = `${basePath}?limit=${pageSize}&offset=${offset}&filters=${encodeURIComponent(filters)}&count=true`;
-            logInfo(`[SAILPOINT_CHAT] API call: GET ${path}`);
-            
-            const result: any = await sailpointRequest(config, path, 'GET', undefined, {}, false, true);
-            const pageItems = result.data || [];
-            allItems.push(...pageItems);
-            
-            const totalCount = parseInt(result.headers?.['x-total-count'] || '0', 10);
-            offset += pageItems.length;
-            
-            // Stop if we got fewer items than requested or reached total
-            hasMore = pageItems.length === pageSize && offset < totalCount;
-            
-            logInfo(`[SAILPOINT_CHAT] Fetched ${pageItems.length} items (${offset}/${totalCount} total)`);
-            
-            // Safety limit to prevent infinite loops
-            if (allItems.length >= 10000) {
-              logInfo(`[SAILPOINT_CHAT] Hit safety limit of 10,000 items for count query`);
-              break;
-            }
-          }
-          
-          const count = allItems.length;
-          logInfo(`[SAILPOINT_CHAT] Final filtered count for ${resource}: ${count}`);
-          return { count, type: 'count', resource };
-        } else {
-          // No filter - can trust X-Total-Count header
-          const path = `${basePath}?count=true&limit=1`;
           logInfo(`[SAILPOINT_CHAT] API call: GET ${path}`);
           const result: any = await sailpointRequest(config, path, 'GET', undefined, {}, false, true);
           const count = parseInt(result.headers?.['x-total-count'] || '0', 10);
-          logInfo(`[SAILPOINT_CHAT] ${resource} count from header: ${count}`);
+          logInfo(`[SAILPOINT_CHAT] ${resource} count from header (filtered): ${count}`);
           return { count, type: 'count', resource };
         }
+        
+        // For other resources with filters, try Search API
+        if (filters) {
+          logInfo(`[SAILPOINT_CHAT] Using Search API for filtered count of ${resource}`);
+          const { executeSearchCount } = await import('./sailpoint-search');
+          try {
+            const count = await executeSearchCount(config, resource, filters);
+            logInfo(`[SAILPOINT_CHAT] ${resource} count from Search API (filtered): ${count}`);
+            return { count, type: 'count', resource };
+          } catch (error: any) {
+            logError(`[SAILPOINT_CHAT] Search API count failed, will try direct endpoint:`, error);
+            // Fall through to try direct endpoint as fallback
+          }
+        }
+        
+        // For unfiltered counts, use the fast header-only approach
+        let path = `${basePath}?count=true&limit=1`;
+        
+        logInfo(`[SAILPOINT_CHAT] API call: GET ${path}`);
+        const result: any = await sailpointRequest(config, path, 'GET', undefined, {}, false, true);
+        const count = parseInt(result.headers?.['x-total-count'] || '0', 10);
+        logInfo(`[SAILPOINT_CHAT] ${resource} count from header: ${count}`);
+        
+        return { count, type: 'count', resource };
       }
     }
     

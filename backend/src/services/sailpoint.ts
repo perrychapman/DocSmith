@@ -145,7 +145,8 @@ export async function sailpointRequest<T = any>(
   
   // Ensure endpoint starts with /
   const path = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
-  const url = `${config.tenantUrl}/beta${path}`;
+  // Use v2025 API (latest stable) instead of beta
+  const url = `${config.tenantUrl}/v2025${path}`;
   
   const retryInfo = retryCount > 0 ? ` (retry ${retryCount}/${maxRetries})` : '';
   logInfo(`[SAILPOINT] ${method} ${path}${isRetry ? ' (auth retry)' : ''}${retryInfo}`);
@@ -218,20 +219,28 @@ export async function sailpointRequest<T = any>(
       throw new Error(`SailPoint API error: ${response.status} ${response.statusText} for ${method} ${path}${errorText ? ` - ${errorText}` : ''}`);
     }
     
+    // If headers requested, collect them first (needed for 204 responses)
+    let responseHeaders: Record<string, string> | undefined;
+    if (returnHeaders) {
+      responseHeaders = {};
+      response.headers.forEach((value, key) => {
+        responseHeaders![key.toLowerCase()] = value;
+      });
+    }
+    
     // Handle empty responses (e.g., 204 No Content)
     const contentType = response.headers.get('content-type');
     if (!contentType?.includes('application/json')) {
+      if (returnHeaders && responseHeaders) {
+        return { data: {}, headers: responseHeaders } as T;
+      }
       return {} as T;
     }
     
     const jsonData = await response.json();
     
     // If headers requested, return both data and headers
-    if (returnHeaders) {
-      const responseHeaders: Record<string, string> = {};
-      response.headers.forEach((value, key) => {
-        responseHeaders[key.toLowerCase()] = value;
-      });
+    if (returnHeaders && responseHeaders) {
       return { data: jsonData, headers: responseHeaders } as T;
     }
     

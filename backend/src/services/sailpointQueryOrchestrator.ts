@@ -772,13 +772,15 @@ export async function executeQueryPlan(
           // Create a modified query with filter for this specific item
           const modifiedQuery = { ...step.query };
           
-          // Add filter based on item (e.g., filter by source.id or source.name)
+          // Add filter based on item (e.g., filter by sourceId or source.id)
+          // Note: Use 'sourceId' not 'source.id' for accounts - v2025 API requires camelCase
+          // For entitlements and access-profiles, use 'source.id' (dot notation) - this is what the v2025 API requires
           if (item.id && step.query.action?.includes('account')) {
+            modifiedQuery.filters = `sourceId eq "${item.id}"`;
+          } else if (item.id && (step.query.action?.includes('entitlement') || step.query.action?.includes('access'))) {
             modifiedQuery.filters = `source.id eq "${item.id}"`;
-          } else if (item.name && step.query.action?.includes('entitlement')) {
-            modifiedQuery.filters = `source.name eq "${item.name}"`;
           } else if (item.id) {
-            modifiedQuery.filters = `source.id eq "${item.id}"`;
+            modifiedQuery.filters = `sourceId eq "${item.id}"`;
           }
           
           logInfo(`[ORCHESTRATOR] Sub-query ${itemIndex}/${previousResults.length} for ${item.name || item.id}`);

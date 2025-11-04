@@ -596,12 +596,22 @@ router.post("/upload", (req, res) => {
             console.log(`[TEMPLATE-UPLOAD] Uploading ${path.basename(target)} to AnythingLLM...`)
             const resp = await anythingllmRequest<any>("/document/upload", "POST", fd)
             
+            console.log(`[TEMPLATE-UPLOAD] Full upload response:`, JSON.stringify(resp, null, 2))
+            
             // Extract ALL documents from response (important for Excel files with multiple sheets)
             if (resp?.documents && Array.isArray(resp.documents)) {
               uploadedDocNames = resp.documents.map((doc: any) => doc.location || '').filter(Boolean)
               console.log(`[TEMPLATE-UPLOAD] Upload created ${uploadedDocNames.length} document(s):`, uploadedDocNames)
+            } else if (resp?.document) {
+              // Single document response format
+              const docLocation = resp.document.location || resp.document.docpath || ''
+              if (docLocation) {
+                uploadedDocNames = [docLocation]
+                console.log(`[TEMPLATE-UPLOAD] Upload created 1 document: ${docLocation}`)
+              }
             } else {
-              console.log(`[TEMPLATE-UPLOAD] Upload response:`, resp)
+              console.error(`[TEMPLATE-UPLOAD] Unexpected response structure - no documents found`)
+              console.error(`[TEMPLATE-UPLOAD] Response keys:`, Object.keys(resp || {}))
             }
             
             // DON'T move documents to a Template_ folder - just embed them directly
@@ -626,23 +636,30 @@ router.post("/upload", (req, res) => {
                 console.log(`[TEMPLATE-UPLOAD] Created sidecar file with ${uploadedDocNames.length} document path(s)`)
               } catch (embedErr) {
                 console.error(`[TEMPLATE-UPLOAD] Failed to embed documents:`, embedErr)
+                throw embedErr // Re-throw to prevent silent failures
               }
-              
-              // For Excel files, store the original folder name in template.json for later cleanup
-              if (isExcel && uploadedDocNames.length > 0) {
-                // Extract folder name from original upload path
-                // Format: "custom-documents/filename.xlsx-XXXX/sheet-Name.json"
-                const folderMatch = uploadedDocNames[0].match(/([^\/]+\.xlsx?-[a-f0-9]+)\//i)
-                if (folderMatch) {
-                  const excelFolder = folderMatch[1]
-                  console.log(`[TEMPLATE-UPLOAD] Storing Excel folder name in metadata: "${excelFolder}"`)
-                  try {
-                    const cur = JSON.parse(fs.readFileSync(metaPath, 'utf-8'))
-                    cur.excelFolder = excelFolder
-                    fs.writeFileSync(metaPath, JSON.stringify(cur, null, 2), 'utf-8')
-                  } catch (err) {
-                    console.error(`[TEMPLATE-UPLOAD] Failed to save Excel folder to metadata:`, err)
-                  }
+            } else {
+              console.error(`[TEMPLATE-UPLOAD] WARNING: No documents were uploaded! Template may not work during compilation.`)
+              console.error(`[TEMPLATE-UPLOAD] This could mean:`)
+              console.error(`[TEMPLATE-UPLOAD]   1. Upload failed silently`)
+              console.error(`[TEMPLATE-UPLOAD]   2. Response format changed`)
+              console.error(`[TEMPLATE-UPLOAD]   3. AnythingLLM API issue`)
+            }
+            
+            // For Excel files, store the original folder name in template.json for later cleanup
+            if (isExcel && uploadedDocNames.length > 0) {
+              // Extract folder name from original upload path
+              // Format: "custom-documents/filename.xlsx-XXXX/sheet-Name.json"
+              const folderMatch = uploadedDocNames[0].match(/([^\/]+\.xlsx?-[a-f0-9]+)\//i)
+              if (folderMatch) {
+                const excelFolder = folderMatch[1]
+                console.log(`[TEMPLATE-UPLOAD] Storing Excel folder name in metadata: "${excelFolder}"`)
+                try {
+                  const cur = JSON.parse(fs.readFileSync(metaPath, 'utf-8'))
+                  cur.excelFolder = excelFolder
+                  fs.writeFileSync(metaPath, JSON.stringify(cur, null, 2), 'utf-8')
+                } catch (err) {
+                  console.error(`[TEMPLATE-UPLOAD] Failed to save Excel folder to metadata:`, err)
                 }
               }
             }

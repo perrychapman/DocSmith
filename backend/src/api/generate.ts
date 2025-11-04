@@ -268,32 +268,41 @@ ${tsCode}
               
               stepStartRec('execute')
               logAndPush('[EXECUTE] Loading generator module into sandbox...')
-              const sandbox: any = { module: { exports: {} }, console }
-              ;(sandbox as any).exports = (sandbox as any).module.exports
-              vm.createContext(sandbox)
-              const wrapped = `(function (module, exports) { ${jsOut.outputText}\n;return module.exports; })`
-              const fn = vm.runInContext(wrapped, sandbox)
-              const mod = fn(sandbox.module, (sandbox as any).module.exports)
-              let generateFull = mod?.generate
-              if (typeof mod === 'function') {
-                generateFull = mod as any
-              }
-              if (typeof generateFull !== 'function' && typeof (mod as any)?.default === 'function') {
-                generateFull = (mod as any).default
-              }
-              if (typeof generateFull !== 'function' && (mod as any)?.default && typeof (mod as any).default.generate === 'function') {
-                generateFull = (mod as any).default.generate
-              }
-              if (typeof generateFull !== 'function') {
-                try { logs.push(`exportsKeys:${Object.keys(mod||{}).join(',')}`) } catch {}
-                logAndPush('[EXECUTE] Error: generate function not found in module')
-                markJobError(job.id, 'generate function missing')
-                return res.status(502).json({ error: 'generate function missing', jobId: job.id })
-              }
-              logAndPush('[EXECUTE] Generator module loaded successfully')
+              try {
+                const sandbox: any = { module: { exports: {} }, console }
+                ;(sandbox as any).exports = (sandbox as any).module.exports
+                vm.createContext(sandbox)
+                
+                // Wrap the code in a function module pattern
+                // Use semicolon before return to prevent issues with code that doesn't end with semicolon
+                const wrapped = `(function (module, exports) { 
+${jsOut.outputText}
+return module.exports;
+})`
+                
+                logAndPush('[EXECUTE] Running transpiled code in VM context...')
+                const fn = vm.runInContext(wrapped, sandbox)
+                const mod = fn(sandbox.module, (sandbox as any).module.exports)
+                let generateFull = mod?.generate
+                if (typeof mod === 'function') {
+                  generateFull = mod as any
+                }
+                if (typeof generateFull !== 'function' && typeof (mod as any)?.default === 'function') {
+                  generateFull = (mod as any).default
+                }
+                if (typeof generateFull !== 'function' && (mod as any)?.default && typeof (mod as any).default.generate === 'function') {
+                  generateFull = (mod as any).default.generate
+                }
+                if (typeof generateFull !== 'function') {
+                  try { logs.push(`exportsKeys:${Object.keys(mod||{}).join(',')}`) } catch {}
+                  logAndPush('[EXECUTE] Error: generate function not found in module')
+                  markJobError(job.id, 'generate function missing')
+                  return res.status(502).json({ error: 'generate function missing', jobId: job.id })
+                }
+                logAndPush('[EXECUTE] Generator module loaded successfully')
               
-              if (typeof generateFull === 'function') {
-                if (isCancelled(job.id)) { logAndPush('cancelled'); return res.status(499).json({ error: 'cancelled', jobId: job.id }) }
+                if (typeof generateFull === 'function') {
+                  if (isCancelled(job.id)) { logAndPush('cancelled'); return res.status(499).json({ error: 'cancelled', jobId: job.id }) }
                 
                 const docxLib = require('docx')
                 const {
@@ -695,6 +704,16 @@ ${tsCode}
                   markJobError(job.id, 'Unsupported template kind for generation')
                   return res.status(400).json({ error: 'Unsupported template kind for generation', jobId: job.id })
                 }
+              }
+              } catch (vmErr: any) {
+                const errMsg = `Generator execution failed: ${vmErr?.message || vmErr}`
+                logAndPush(`[EXECUTE] Error: ${errMsg}`)
+                logAndPush(`[EXECUTE] This usually means syntax error in transpiled code or VM context issue`)
+                if (vmErr.stack) {
+                  logAndPush(`[EXECUTE] Stack: ${vmErr.stack}`)
+                }
+                markJobError(job.id, errMsg)
+                return res.status(502).json({ error: errMsg, jobId: job.id })
               }
             } catch (e:any) {
               

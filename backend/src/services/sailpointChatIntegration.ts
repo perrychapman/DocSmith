@@ -761,8 +761,8 @@ export async function executeSailPointQuery(
     if (singularForms.includes(action)) {
       const pluralForm = `${action}s`;
       throw new Error(
-        `❌ INVALID ACTION: "${action}" is using SINGULAR form.\n` +
-        `✅ CORRECT ACTION: "${pluralForm}" (use PLURAL form)\n\n` +
+        `INVALID ACTION: "${action}" is using SINGULAR form.\n` +
+        `CORRECT ACTION: "${pluralForm}" (use PLURAL form)\n\n` +
         `REMINDER: ALL resource names MUST be plural:\n` +
         `- sources (not source)\n` +
         `- schemas (not schema) - NOTE: schemas are nested in sources, use get_sources with source ID\n` +

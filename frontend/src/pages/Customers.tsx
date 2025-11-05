@@ -45,6 +45,20 @@ type UploadItem = { name: string; path: string; size: number; modifiedAt: string
 
 const INLINE_PREVIEW_EXTENSIONS = new Set<string>(['.pdf'])
 
+// PERFORMANCE: Memoized textarea component to prevent re-renders during typing
+// Uses uncontrolled component pattern (ref + defaultValue) for maximum performance
+const AdditionalInstructionsInput = React.memo(React.forwardRef<HTMLTextAreaElement, { 
+  disabled: boolean;
+}>(({ disabled }, ref) => (
+  <Textarea
+    ref={ref}
+    className="w-full min-h-[400px]"
+    placeholder="e.g., focus on Q3 data, keep it concise, etc."
+    defaultValue=""
+    disabled={disabled}
+  />
+)));
+AdditionalInstructionsInput.displayName = 'AdditionalInstructionsInput';
 
 export function CustomersPage() {
   const [customers, setCustomers] = React.useState<Customer[]>([]);
@@ -90,6 +104,7 @@ export function CustomersPage() {
   const [alsoDeleteWorkspace, setAlsoDeleteWorkspace] = React.useState<boolean>(false);
   const [uploadOpen, setUploadOpen] = React.useState(false);
   const fileInputRef = React.useRef<HTMLInputElement | null>(null);
+  const genInstructionsRef = React.useRef<HTMLTextAreaElement | null>(null);
   const [counts, setCounts] = React.useState<Record<number, { embedded?: number; generated?: number; chats?: number }>>({});
   const [pinningTest, setPinningTest] = React.useState<string | null>(null);
   const [pinnedDocs, setPinnedDocs] = React.useState<Set<string>>(new Set());
@@ -98,7 +113,6 @@ export function CustomersPage() {
   const [templates, setTemplates] = React.useState<Array<{ slug: string; name: string; hasFullGen?: boolean; avgGenerationTimeFormatted?: string }>>([]);
   const [loadingTemplates, setLoadingTemplates] = React.useState(false);
   const [selectedTemplate, setSelectedTemplate] = React.useState<string>("");
-  const [genInstructions, setGenInstructions] = React.useState<string>("");
   const [generating, setGenerating] = React.useState(false);
   const [genLogs, setGenLogs] = React.useState<string[] | null>(null);
   const genEventRef = React.useRef<EventSource | null>(null);
@@ -757,6 +771,7 @@ export function CustomersPage() {
       
       // Step 3: Start generation with pinned document paths
       setGenSteps({}); setGenProgress(0); setGenError(null);
+      const genInstructions = genInstructionsRef.current?.value || '';
       const extra = genInstructions && genInstructions.trim().length ? `&instructions=${encodeURIComponent(genInstructions)}` : '';
       const pinnedDocsParam = pinnedDocPaths.length > 0 ? `&pinnedDocuments=${encodeURIComponent(JSON.stringify(pinnedDocPaths))}` : '';
       const url = `/api/generate/stream?customerId=${encodeURIComponent(String(selectedId))}&template=${encodeURIComponent(String(selectedTemplate))}${extra}${pinnedDocsParam}`;
@@ -2817,11 +2832,8 @@ export function CustomersPage() {
               {/* Additional Instructions */}
               <div>
                 <label className="text-sm font-medium mb-1 block">Additional Instructions (optional)</label>
-                <Textarea
-                  className="w-full min-h-[400px]"
-                  placeholder="e.g., focus on Q3 data, keep it concise, etc."
-                  value={genInstructions}
-                  onChange={(e) => setGenInstructions(e.target.value)}
+                <AdditionalInstructionsInput
+                  ref={genInstructionsRef}
                   disabled={generating}
                 />
               </div>

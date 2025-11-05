@@ -809,6 +809,7 @@ router.get("/stream", async (req, res) => {
       if (instructions) logAndPush(`[CONFIG] User instructions provided (${String(instructions).length} chars)`)
       if (pinnedDocuments?.length) logAndPush(`[CONFIG] ${pinnedDocuments.length} document(s) pinned for this generation`)
 
+      stepStartRec('readGenerator')
       let tsCode = fs.readFileSync(fullGenPath, 'utf-8')
       logAndPush(`[INIT] Generator loaded: generator.full.ts (${tsCode.length} chars)`)
       stepOkRec('readGenerator')
@@ -822,6 +823,8 @@ router.get("/stream", async (req, res) => {
       const cacheFresh = !!(cacheStat && (Date.now() - cacheStat.mtimeMs) < CACHE_TTL_MS)
       const cacheUpToDate = !!(cacheStat && genStat && cacheStat.mtimeMs >= genStat.mtimeMs)
       if (isCancelled(job.id)) { jobLog(job.id, 'cancelled'); send({ type: 'error', error: 'cancelled' }); return res.end() }
+      
+      stepStartRec('aiUpdate')
       if (!refresh && cacheFresh && cacheUpToDate) {
         try { 
           tsCode = fs.readFileSync(cacheFile, 'utf-8'); 
@@ -831,7 +834,6 @@ router.get("/stream", async (req, res) => {
         stepOkRec('aiUpdate')
       } else {
         logAndPush('[AI] Starting AI enhancement process (cache miss or force refresh)')
-        stepStartRec('aiUpdate')
         try {
           logAndPush('[ANALYSIS] Analyzing template structure and workspace data...')
           let documentAnalysis = ''
